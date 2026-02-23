@@ -48,7 +48,7 @@ rules:
     verbs: ["update"]
   # Core resources for agent pods
   - apiGroups: [""]
-    resources: ["pods", "pods/log", "services", "configmaps", "secrets"]
+    resources: ["pods", "pods/log", "services", "configmaps", "secrets", "serviceaccounts"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   - apiGroups: [""]
     resources: ["events"]
@@ -99,3 +99,15 @@ subjects:
   - kind: ServiceAccount
     name: k8sclaw-apiserver
     namespace: k8sclaw-system
+---
+# ServiceAccount for agent pods (created in the workload namespace).
+# The controller creates Jobs that reference this SA. It needs minimal
+# permissions — just enough to read its own ConfigMap input and update
+# status via the IPC bridge (which talks to NATS, not the API server).
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: k8sclaw-agent
+  labels:
+    app.kubernetes.io/name: k8sclaw
+    app.kubernetes.io/component: agent

@@ -37,6 +37,7 @@ spec:
       containers:
         - name: manager
           image: ghcr.io/alexsjones/k8sclaw/controller:latest
+          imagePullPolicy: Always
           args:
             - --leader-elect
           ports:
@@ -96,6 +97,7 @@ spec:
       containers:
         - name: apiserver
           image: ghcr.io/alexsjones/k8sclaw/apiserver:latest
+          imagePullPolicy: Always
           args:
             - --event-bus-url=nats://nats.k8sclaw-system.svc:4222
           ports:

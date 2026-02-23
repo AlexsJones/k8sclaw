@@ -1347,7 +1347,7 @@ type tuiModel struct {
 	deleteFunc        func() (string, error) // the actual delete function
 }
 
-const maxLogLines = 50
+const maxLogLines = 200
 
 func newTUIModel(ns string) tuiModel {
 	ti := textinput.New()
@@ -2565,16 +2565,24 @@ func (m tuiModel) View() string {
 	//  8. Input + suggestions (1-N lines)
 	//  9. Status bar          (1 line)
 
-	logH := 5
+	// Dynamically split available space: ~half for table, ~half for log pane.
 	inputH := 1
 	suggestH := 0
 	if len(m.suggestions) > 0 {
 		suggestH = min(len(m.suggestions), 6) + 1
 	}
-	fixedH := 1 + 1 + 1 + 1 + logH + 1 + inputH + suggestH + 1 // header+tabs+colhdr+sep+log+sep+input+suggest+statusbar
-	tableH := m.height - fixedH
-	if tableH < 1 {
-		tableH = 1
+	chrome := 1 + 1 + 1 + 1 + 1 + inputH + suggestH + 1 // header+tabs+colhdr+sep(above log)+sep(below log)+input+suggest+statusbar
+	available := m.height - chrome
+	if available < 4 {
+		available = 4
+	}
+	tableH := available / 2
+	logH := available - tableH
+	if tableH < 2 {
+		tableH = 2
+	}
+	if logH < 3 {
+		logH = 3
 	}
 
 	var view strings.Builder

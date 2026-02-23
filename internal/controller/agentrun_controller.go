@@ -37,6 +37,7 @@ type AgentRunReconciler struct {
 // +kubebuilder:rbac:groups=batch,resources=jobs,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups="",resources=serviceaccounts,verbs=get;list;watch;create
 
 // Reconcile handles AgentRun create/update/delete events.
 func (r *AgentRunReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -85,6 +86,11 @@ func (r *AgentRunReconciler) reconcilePending(ctx context.Context, log logr.Logg
 	// Validate against policy
 	if err := r.validatePolicy(ctx, agentRun); err != nil {
 		return ctrl.Result{}, r.failRun(ctx, agentRun, fmt.Sprintf("policy validation failed: %v", err))
+	}
+
+	// Ensure the k8sclaw-agent ServiceAccount exists in the target namespace.
+	if err := r.ensureAgentServiceAccount(ctx, agentRun.Namespace); err != nil {
+		return ctrl.Result{}, fmt.Errorf("ensuring agent service account: %w", err)
 	}
 
 	// Create the input ConfigMap with the task
@@ -255,6 +261,36 @@ func (r *AgentRunReconciler) validatePolicy(ctx context.Context, agentRun *k8scl
 	return nil
 }
 
+// ensureAgentServiceAccount creates the k8sclaw-agent ServiceAccount in the
+// given namespace if it does not already exist. This is needed because agent
+// Jobs reference this SA and run in the user's namespace, not k8sclaw-system.
+func (r *AgentRunReconciler) ensureAgentServiceAccount(ctx context.Context, namespace string) error {
+	sa := &corev1.ServiceAccount{}
+	err := r.Get(ctx, client.ObjectKey{Name: "k8sclaw-agent", Namespace: namespace}, sa)
+	if err == nil {
+		return nil // already exists
+	}
+	if !errors.IsNotFound(err) {
+		return fmt.Errorf("checking for agent service account: %w", err)
+	}
+	sa = &corev1.ServiceAccount{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "k8sclaw-agent",
+			Namespace: namespace,
+			Labels: map[string]string{
+				"app.kubernetes.io/managed-by": "k8sclaw",
+			},
+		},
+	}
+	if err := r.Create(ctx, sa); err != nil {
+		if errors.IsAlreadyExists(err) {
+			return nil
+		}
+		return fmt.Errorf("creating agent service account: %w", err)
+	}
+	return nil
+}
+
 // buildJob constructs the Kubernetes Job for an AgentRun.
 func (r *AgentRunReconciler) buildJob(agentRun *k8sclawv1alpha1.AgentRun) *batchv1.Job {
 	labels := map[string]string{
@@ -316,8 +352,9 @@ func (r *AgentRunReconciler) buildContainers(agentRun *k8sclawv1alpha1.AgentRun)
 	containers := []corev1.Container{
 		// Main agent container
 		{
-			Name:  "agent",
-			Image: "ghcr.io/alexsjones/k8sclaw/agent-runner:latest",
+			Name:            "agent",
+			Image:           "ghcr.io/alexsjones/k8sclaw/agent-runner:latest",
+			ImagePullPolicy: corev1.PullAlways,
 			SecurityContext: &corev1.SecurityContext{
 				ReadOnlyRootFilesystem:   &readOnly,
 				AllowPrivilegeEscalation: &noPrivEsc,
@@ -352,8 +389,9 @@ func (r *AgentRunReconciler) buildContainers(agentRun *k8sclawv1alpha1.AgentRun)
 		},
 		// IPC bridge sidecar
 		{
-			Name:  "ipc-bridge",
-			Image: "ghcr.io/alexsjones/k8sclaw/ipc-bridge:latest",
+			Name:            "ipc-bridge",
+			Image:           "ghcr.io/alexsjones/k8sclaw/ipc-bridge:latest",
+			ImagePullPolicy: corev1.PullAlways,
 			Env: []corev1.EnvVar{
 				{Name: "AGENT_RUN_ID", Value: agentRun.Name},
 				{Name: "INSTANCE_NAME", Value: agentRun.Spec.InstanceRef},
@@ -396,8 +434,9 @@ func (r *AgentRunReconciler) buildContainers(agentRun *k8sclawv1alpha1.AgentRun)
 		}
 
 		containers = append(containers, corev1.Container{
-			Name:  "sandbox",
-			Image: sandboxImage,
+			Name:            "sandbox",
+			Image:           sandboxImage,
+			ImagePullPolicy: corev1.PullAlways,
 			SecurityContext: &corev1.SecurityContext{
 				ReadOnlyRootFilesystem: &readOnly,
 				Capabilities: &corev1.Capabilities{

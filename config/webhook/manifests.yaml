@@ -26,6 +26,7 @@ spec:
       containers:
         - name: webhook
           image: ghcr.io/alexsjones/k8sclaw/webhook:latest
+          imagePullPolicy: Always
           ports:
             - containerPort: 9443
               name: webhook

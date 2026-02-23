@@ -62,8 +62,9 @@ func (pb *PodBuilder) BuildAgentContainer(config AgentPodConfig) corev1.Containe
 	noPrivEsc := false
 
 	return corev1.Container{
-		Name:  "agent",
-		Image: pb.DefaultAgentImage,
+		Name:            "agent",
+		Image:           pb.DefaultAgentImage,
+		ImagePullPolicy: corev1.PullAlways,
 		SecurityContext: &corev1.SecurityContext{
 			ReadOnlyRootFilesystem:   &readOnly,
 			AllowPrivilegeEscalation: &noPrivEsc,
@@ -112,8 +113,9 @@ func (pb *PodBuilder) BuildAgentContainer(config AgentPodConfig) corev1.Containe
 // BuildIPCBridgeContainer creates the IPC bridge sidecar container spec.
 func (pb *PodBuilder) BuildIPCBridgeContainer(config AgentPodConfig) corev1.Container {
 	return corev1.Container{
-		Name:  "ipc-bridge",
-		Image: pb.DefaultIPCBridgeImage,
+		Name:            "ipc-bridge",
+		Image:           pb.DefaultIPCBridgeImage,
+		ImagePullPolicy: corev1.PullAlways,
 		Env: []corev1.EnvVar{
 			{Name: "AGENT_RUN_ID", Value: config.RunID},
 			{Name: "INSTANCE_NAME", Value: config.InstanceName},
@@ -144,8 +146,9 @@ func (pb *PodBuilder) BuildSandboxContainer(config AgentPodConfig) corev1.Contai
 	}
 
 	return corev1.Container{
-		Name:  "sandbox",
-		Image: image,
+		Name:            "sandbox",
+		Image:           image,
+		ImagePullPolicy: corev1.PullAlways,
 		SecurityContext: &corev1.SecurityContext{
 			ReadOnlyRootFilesystem: &readOnly,
 			Capabilities: &corev1.Capabilities{

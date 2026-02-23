@@ -178,8 +178,9 @@ func (r *ClawInstanceReconciler) buildChannelDeployment(
 				Spec: corev1.PodSpec{
 					Containers: []corev1.Container{
 						{
-							Name:  "channel",
-							Image: image,
+							Name:            "channel",
+							Image:           image,
+							ImagePullPolicy: corev1.PullAlways,
 							EnvFrom: []corev1.EnvFromSource{
 								{
 									SecretRef: &corev1.SecretEnvSource{
