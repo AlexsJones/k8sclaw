@@ -8,6 +8,7 @@ import (
 
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+	"k8s.io/client-go/kubernetes"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
@@ -60,6 +61,13 @@ func main() {
 	// Set up the PodBuilder used by AgentRunReconciler
 	podBuilder := orchestrator.NewPodBuilder()
 
+	// Create a kubernetes.Clientset for pod log access.
+	clientset, err := kubernetes.NewForConfig(mgr.GetConfig())
+	if err != nil {
+		setupLog.Error(err, "unable to create kubernetes clientset")
+		os.Exit(1)
+	}
+
 	// Register controllers
 	if err := (&controller.ClawInstanceReconciler{
 		Client: mgr.GetClient(),
@@ -75,6 +83,7 @@ func main() {
 		Scheme:     mgr.GetScheme(),
 		Log:        ctrl.Log.WithName("controllers").WithName("AgentRun"),
 		PodBuilder: podBuilder,
+		Clientset:  clientset,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "AgentRun")
 		os.Exit(1)

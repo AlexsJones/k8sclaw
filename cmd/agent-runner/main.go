@@ -1,18 +1,21 @@
 package main
 
 import (
-	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"io"
 	"log"
-	"math"
-	"net/http"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
+
+	"github.com/anthropics/anthropic-sdk-go"
+	anthropicoption "github.com/anthropics/anthropic-sdk-go/option"
+	"github.com/openai/openai-go/v3"
+	"github.com/openai/openai-go/v3/azure"
+	openaioption "github.com/openai/openai-go/v3/option"
 )
 
 type agentResult struct {
@@ -30,27 +33,6 @@ type streamChunk struct {
 	Type    string `json:"type"`
 	Content string `json:"content"`
 	Index   int    `json:"index"`
-}
-
-type chatRequest struct {
-	Model    string        `json:"model"`
-	Messages []chatMessage `json:"messages"`
-	Stream   bool          `json:"stream"`
-}
-
-type chatMessage struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
-}
-
-type chatResponse struct {
-	Choices []struct {
-		Message chatMessage `json:"message"`
-	} `json:"choices"`
-	Usage struct {
-		PromptTokens     int `json:"prompt_tokens"`
-		CompletionTokens int `json:"completion_tokens"`
-	} `json:"usage"`
 }
 
 func main() {
@@ -75,36 +57,39 @@ func main() {
 	systemPrompt := getEnv("SYSTEM_PROMPT", "You are a helpful AI assistant.")
 	provider := strings.ToLower(getEnv("MODEL_PROVIDER", "openai"))
 	modelName := getEnv("MODEL_NAME", "gpt-4o-mini")
-	baseURL := getEnv("MODEL_BASE_URL", "")
-
-	if baseURL == "" {
-		switch provider {
-		case "openai":
-			baseURL = "https://api.openai.com/v1"
-		case "anthropic":
-			baseURL = "https://api.anthropic.com/v1"
-		case "ollama":
-			baseURL = "http://ollama.default.svc:11434/v1"
-		default:
-			baseURL = "https://api.openai.com/v1"
-		}
-	}
-	baseURL = strings.TrimRight(baseURL, "/")
+	baseURL := strings.TrimRight(getEnv("MODEL_BASE_URL", ""), "/")
 
 	apiKey := firstNonEmpty(
 		os.Getenv("API_KEY"),
 		os.Getenv("OPENAI_API_KEY"),
 		os.Getenv("ANTHROPIC_API_KEY"),
 		os.Getenv("AZURE_OPENAI_API_KEY"),
-		os.Getenv("GITHUB_TOKEN"),
 	)
 
 	log.Printf("provider=%s model=%s baseURL=%s task=%q", provider, modelName, baseURL, truncate(task, 80))
 
 	_ = os.MkdirAll("/ipc/output", 0o755)
 
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+
 	start := time.Now()
-	result, err := callLLM(baseURL, apiKey, modelName, systemPrompt, task)
+
+	var (
+		responseText string
+		inputTokens  int
+		outputTokens int
+		err          error
+	)
+
+	switch provider {
+	case "anthropic":
+		responseText, inputTokens, outputTokens, err = callAnthropic(ctx, apiKey, baseURL, modelName, systemPrompt, task)
+	default:
+		// OpenAI, Azure OpenAI, Ollama, and any OpenAI-compatible provider
+		responseText, inputTokens, outputTokens, err = callOpenAI(ctx, provider, apiKey, baseURL, modelName, systemPrompt, task)
+	}
+
 	elapsed := time.Since(start)
 
 	var res agentResult
@@ -115,14 +100,11 @@ func main() {
 		res.Status = "error"
 		res.Error = err.Error()
 	} else {
-		log.Printf("LLM call succeeded (tokens: in=%d out=%d)",
-			result.Usage.PromptTokens, result.Usage.CompletionTokens)
+		log.Printf("LLM call succeeded (tokens: in=%d out=%d)", inputTokens, outputTokens)
 		res.Status = "success"
-		if len(result.Choices) > 0 {
-			res.Response = result.Choices[0].Message.Content
-		}
-		res.Metrics.InputTokens = result.Usage.PromptTokens
-		res.Metrics.OutputTokens = result.Usage.CompletionTokens
+		res.Response = responseText
+		res.Metrics.InputTokens = inputTokens
+		res.Metrics.OutputTokens = outputTokens
 	}
 
 	if res.Response != "" {
@@ -135,6 +117,12 @@ func main() {
 
 	writeJSON("/ipc/output/result.json", res)
 
+	// Print a structured marker to stdout so the controller can extract
+	// the result from pod logs even after the IPC volume is gone.
+	if markerBytes, err := json.Marshal(res); err == nil {
+		fmt.Fprintf(os.Stdout, "\n__K8SCLAW_RESULT__%s__K8SCLAW_END__\n", string(markerBytes))
+	}
+
 	if res.Status == "error" {
 		log.Printf("agent-runner finished with error: %s", res.Error)
 		os.Exit(1)
@@ -142,146 +130,98 @@ func main() {
 	log.Println("agent-runner finished successfully")
 }
 
-func callLLM(baseURL, apiKey, model, systemPrompt, task string) (*chatResponse, error) {
-	url := baseURL + "/chat/completions"
+// callAnthropic uses the official Anthropic Go SDK.
+func callAnthropic(ctx context.Context, apiKey, baseURL, model, systemPrompt, task string) (string, int, int, error) {
+	opts := []anthropicoption.RequestOption{
+		anthropicoption.WithMaxRetries(5),
+	}
+	if apiKey != "" {
+		opts = append(opts, anthropicoption.WithAPIKey(apiKey))
+	}
+	if baseURL != "" {
+		opts = append(opts, anthropicoption.WithBaseURL(baseURL))
+	}
 
-	body, _ := json.Marshal(chatRequest{
-		Model: model,
-		Messages: []chatMessage{
-			{Role: "system", Content: systemPrompt},
-			{Role: "user", Content: task},
+	client := anthropic.NewClient(opts...)
+
+	message, err := client.Messages.New(ctx, anthropic.MessageNewParams{
+		Model:     anthropic.Model(model),
+		MaxTokens: int64(8192),
+		System: []anthropic.TextBlockParam{
+			{Text: systemPrompt},
 		},
-		Stream: false,
+		Messages: []anthropic.MessageParam{
+			anthropic.NewUserMessage(anthropic.NewTextBlock(task)),
+		},
 	})
-
-	const maxRetries = 5
-
-	for attempt := 0; attempt <= maxRetries; attempt++ {
-		req, err := http.NewRequest("POST", url, bytes.NewReader(body))
-		if err != nil {
-			return nil, fmt.Errorf("creating request: %w", err)
+	if err != nil {
+		var apiErr *anthropic.Error
+		if errors.As(err, &apiErr) {
+			return "", 0, 0, fmt.Errorf("Anthropic API error (HTTP %d): %s", apiErr.StatusCode, truncate(apiErr.Error(), 500))
 		}
-		req.Header.Set("Content-Type", "application/json")
-		if apiKey != "" {
-			req.Header.Set("Authorization", "Bearer "+apiKey)
-		}
-
-		client := &http.Client{Timeout: 5 * time.Minute}
-		resp, err := client.Do(req)
-		if err != nil {
-			if attempt < maxRetries {
-				wait := backoff(attempt)
-				log.Printf("HTTP error (attempt %d/%d), retrying in %s: %v", attempt+1, maxRetries+1, wait, err)
-				time.Sleep(wait)
-				continue
-			}
-			return nil, fmt.Errorf("HTTP request failed after %d attempts: %w", maxRetries+1, err)
-		}
-
-		respBody, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
-
-		if resp.StatusCode == http.StatusOK {
-			var chatResp chatResponse
-			if err := json.Unmarshal(respBody, &chatResp); err != nil {
-				return nil, fmt.Errorf("parsing response: %w (body: %s)", err, truncate(string(respBody), 300))
-			}
-			return &chatResp, nil
-		}
-
-		// Parse the error body for classification.
-		apiErr := parseAPIError(respBody)
-
-		// Permanent errors — don't retry.
-		if isPermanentError(resp.StatusCode, apiErr) {
-			return nil, fmt.Errorf("%s (HTTP %d): %s", apiErr.friendlyMessage(), resp.StatusCode, truncate(string(respBody), 500))
-		}
-
-		// Retryable errors (429 rate limit, 5xx server errors).
-		if attempt < maxRetries && isRetryable(resp.StatusCode) {
-			wait := retryAfter(resp, attempt)
-			log.Printf("HTTP %d (attempt %d/%d), retrying in %s: %s",
-				resp.StatusCode, attempt+1, maxRetries+1, wait, apiErr.friendlyMessage())
-			time.Sleep(wait)
-			continue
-		}
-
-		return nil, fmt.Errorf("LLM returned HTTP %d after %d attempts: %s",
-			resp.StatusCode, attempt+1, truncate(string(respBody), 500))
+		return "", 0, 0, fmt.Errorf("Anthropic API error: %w", err)
 	}
 
-	return nil, fmt.Errorf("LLM request failed after %d attempts", maxRetries+1)
+	var text strings.Builder
+	for _, block := range message.Content {
+		if tb, ok := block.AsAny().(anthropic.TextBlock); ok {
+			text.WriteString(tb.Text)
+		}
+	}
+
+	return text.String(), int(message.Usage.InputTokens), int(message.Usage.OutputTokens), nil
 }
 
-// apiError represents a parsed error from an OpenAI-compatible API.
-type apiError struct {
-	Error struct {
-		Message string `json:"message"`
-		Type    string `json:"type"`
-		Code    string `json:"code"`
-	} `json:"error"`
-}
+// callOpenAI uses the official OpenAI Go SDK for OpenAI, Azure OpenAI, Ollama, and other compatible providers.
+func callOpenAI(ctx context.Context, provider, apiKey, baseURL, model, systemPrompt, task string) (string, int, int, error) {
+	opts := []openaioption.RequestOption{
+		openaioption.WithMaxRetries(5),
+	}
 
-func (e apiError) friendlyMessage() string {
-	switch e.Error.Code {
-	case "insufficient_quota":
-		return "API quota exceeded — check your plan and billing"
-	case "invalid_api_key":
-		return "invalid API key"
-	case "model_not_found":
-		return "model not found"
-	case "rate_limit_exceeded":
-		return "rate limited"
+	switch provider {
+	case "azure-openai":
+		if baseURL == "" {
+			return "", 0, 0, fmt.Errorf("Azure OpenAI requires MODEL_BASE_URL to be set")
+		}
+		apiVersion := getEnv("AZURE_OPENAI_API_VERSION", "2024-06-01")
+		opts = append(opts,
+			azure.WithEndpoint(baseURL, apiVersion),
+			azure.WithAPIKey(apiKey),
+		)
 	default:
-		if e.Error.Message != "" {
-			return e.Error.Message
+		if apiKey != "" {
+			opts = append(opts, openaioption.WithAPIKey(apiKey))
 		}
-		if e.Error.Type != "" {
-			return e.Error.Type
-		}
-		return "unknown API error"
-	}
-}
-
-func parseAPIError(body []byte) apiError {
-	var ae apiError
-	_ = json.Unmarshal(body, &ae)
-	return ae
-}
-
-// isPermanentError returns true for errors that should not be retried.
-func isPermanentError(status int, ae apiError) bool {
-	// Quota exhaustion is permanent until the user upgrades.
-	if ae.Error.Code == "insufficient_quota" || ae.Error.Type == "insufficient_quota" {
-		return true
-	}
-	// Auth / model errors are permanent.
-	if status == 401 || status == 403 || status == 404 {
-		return true
-	}
-	if ae.Error.Code == "invalid_api_key" || ae.Error.Code == "model_not_found" {
-		return true
-	}
-	return false
-}
-
-func isRetryable(status int) bool {
-	return status == 429 || status >= 500
-}
-
-// retryAfter computes the wait duration, respecting Retry-After header if present.
-func retryAfter(resp *http.Response, attempt int) time.Duration {
-	if ra := resp.Header.Get("Retry-After"); ra != "" {
-		if secs, err := strconv.Atoi(ra); err == nil {
-			return time.Duration(secs) * time.Second
+		if baseURL != "" {
+			opts = append(opts, openaioption.WithBaseURL(baseURL))
+		} else if provider == "ollama" {
+			opts = append(opts, openaioption.WithBaseURL("http://ollama.default.svc:11434/v1"))
 		}
 	}
-	return backoff(attempt)
-}
 
-func backoff(attempt int) time.Duration {
-	secs := math.Min(float64(int(1)<<uint(attempt)), 30) // 1, 2, 4, 8, 16, 30
-	return time.Duration(secs) * time.Second
+	client := openai.NewClient(opts...)
+
+	completion, err := client.Chat.Completions.New(ctx, openai.ChatCompletionNewParams{
+		Model: openai.ChatModel(model),
+		Messages: []openai.ChatCompletionMessageParamUnion{
+			openai.SystemMessage(systemPrompt),
+			openai.UserMessage(task),
+		},
+	})
+	if err != nil {
+		var apiErr *openai.Error
+		if errors.As(err, &apiErr) {
+			return "", 0, 0, fmt.Errorf("OpenAI API error (HTTP %d): %s", apiErr.StatusCode, truncate(apiErr.Error(), 500))
+		}
+		return "", 0, 0, fmt.Errorf("OpenAI API error: %w", err)
+	}
+
+	var text string
+	if len(completion.Choices) > 0 {
+		text = completion.Choices[0].Message.Content
+	}
+
+	return text, int(completion.Usage.PromptTokens), int(completion.Usage.CompletionTokens), nil
 }
 
 func writeJSON(path string, v any) {

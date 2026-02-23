@@ -2,7 +2,10 @@ package controller
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
+	"strings"
 	"time"
 
 	"github.com/go-logr/logr"
@@ -12,6 +15,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/kubernetes"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -29,6 +33,7 @@ type AgentRunReconciler struct {
 	Scheme     *runtime.Scheme
 	Log        logr.Logger
 	PodBuilder *orchestrator.PodBuilder
+	Clientset  kubernetes.Interface
 }
 
 // +kubebuilder:rbac:groups=k8sclaw.io,resources=agentruns,verbs=get;list;watch;create;update;patch;delete
@@ -36,6 +41,7 @@ type AgentRunReconciler struct {
 // +kubebuilder:rbac:groups=k8sclaw.io,resources=agentruns/finalizers,verbs=update
 // +kubebuilder:rbac:groups=batch,resources=jobs,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch
+// +kubebuilder:rbac:groups="",resources=pods/log,verbs=get
 // +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=serviceaccounts,verbs=get;list;watch;create
 
@@ -155,7 +161,9 @@ func (r *AgentRunReconciler) reconcileRunning(ctx context.Context, log logr.Logg
 
 	// Check Job completion
 	if job.Status.Succeeded > 0 {
-		return r.succeedRun(ctx, agentRun)
+		// Extract the LLM response from pod logs before the pod is gone.
+		result := r.extractResultFromPod(ctx, log, agentRun)
+		return r.succeedRun(ctx, agentRun, result)
 	}
 	if job.Status.Failed > 0 {
 		return ctrl.Result{}, r.failRun(ctx, agentRun, "Job failed")
@@ -578,12 +586,71 @@ func (r *AgentRunReconciler) createInputConfigMap(ctx context.Context, agentRun 
 	return nil
 }
 
-// succeedRun marks an AgentRun as succeeded.
-func (r *AgentRunReconciler) succeedRun(ctx context.Context, agentRun *k8sclawv1alpha1.AgentRun) (ctrl.Result, error) {
+// succeedRun marks an AgentRun as succeeded and stores the result.
+func (r *AgentRunReconciler) succeedRun(ctx context.Context, agentRun *k8sclawv1alpha1.AgentRun, result string) (ctrl.Result, error) {
 	now := metav1.Now()
 	agentRun.Status.Phase = k8sclawv1alpha1.AgentRunPhaseSucceeded
 	agentRun.Status.CompletedAt = &now
+	agentRun.Status.Result = result
 	return ctrl.Result{}, r.Status().Update(ctx, agentRun)
+}
+
+const (
+	resultMarkerStart = "__K8SCLAW_RESULT__"
+	resultMarkerEnd   = "__K8SCLAW_END__"
+)
+
+// extractResultFromPod reads the agent container logs and looks for the
+// structured result marker written by agent-runner.
+func (r *AgentRunReconciler) extractResultFromPod(ctx context.Context, log logr.Logger, agentRun *k8sclawv1alpha1.AgentRun) string {
+	if r.Clientset == nil || agentRun.Status.PodName == "" {
+		return ""
+	}
+
+	tailLines := int64(20)
+	opts := &corev1.PodLogOptions{
+		Container: "agent",
+		TailLines: &tailLines,
+	}
+	req := r.Clientset.CoreV1().Pods(agentRun.Namespace).GetLogs(agentRun.Status.PodName, opts)
+	stream, err := req.Stream(ctx)
+	if err != nil {
+		log.V(1).Info("could not read pod logs for result", "err", err)
+		return ""
+	}
+	defer stream.Close()
+
+	raw, err := io.ReadAll(stream)
+	if err != nil {
+		log.V(1).Info("error reading pod logs", "err", err)
+		return ""
+	}
+
+	logs := string(raw)
+	startIdx := strings.LastIndex(logs, resultMarkerStart)
+	if startIdx < 0 {
+		return ""
+	}
+	payload := logs[startIdx+len(resultMarkerStart):]
+	endIdx := strings.Index(payload, resultMarkerEnd)
+	if endIdx < 0 {
+		return ""
+	}
+	jsonStr := strings.TrimSpace(payload[:endIdx])
+
+	// Parse and return just the response text.
+	var parsed struct {
+		Status   string `json:"status"`
+		Response string `json:"response"`
+	}
+	if err := json.Unmarshal([]byte(jsonStr), &parsed); err != nil {
+		log.V(1).Info("could not parse result JSON", "err", err)
+		return jsonStr // Return raw JSON as fallback.
+	}
+	if parsed.Status == "error" {
+		return ""
+	}
+	return parsed.Response
 }
 
 // failRun marks an AgentRun as failed.

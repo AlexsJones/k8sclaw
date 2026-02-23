@@ -620,8 +620,13 @@ func runOnboard() error {
 
 	// 4. Create ClawInstance.
 	fmt.Printf("  Creating ClawInstance %s...\n", instanceName)
+	// Only pass the secret name if an API key was provided.
+	instanceSecret := providerSecretName
+	if apiKey == "" {
+		instanceSecret = ""
+	}
 	instanceYAML := buildClawInstanceYAML(instanceName, namespace, modelName, baseURL,
-		providerName, providerSecretName, channelType, channelSecretName,
+		providerName, instanceSecret, channelType, channelSecretName,
 		policyName, applyPolicy)
 	if err := kubectlApplyStdin(instanceYAML); err != nil {
 		return fmt.Errorf("apply instance: %w", err)
@@ -740,6 +745,14 @@ func buildClawInstanceYAML(name, ns, model, baseURL, provider, providerSecret,
 		baseURLLine = fmt.Sprintf("      baseURL: %s\n", baseURL)
 	}
 
+	var authRefsBlock string
+	if providerSecret != "" {
+		authRefsBlock = fmt.Sprintf(`  authRefs:
+    - provider: %s
+      secret: %s
+`, provider, providerSecret)
+	}
+
 	return fmt.Sprintf(`apiVersion: k8sclaw.io/v1alpha1
 kind: ClawInstance
 metadata:
@@ -749,10 +762,7 @@ spec:
 %s  agents:
     default:
       model: %s
-%s  authRefs:
-    - provider: %s
-      secret: %s
-%s`, name, ns, channelsBlock, model, baseURLLine, provider, providerSecret, policyBlock)
+%s%s%s`, name, ns, channelsBlock, model, baseURLLine, authRefsBlock, policyBlock)
 }
 
 func kubectlApplyStdin(yaml string) error {
@@ -1177,12 +1187,13 @@ type suggestionsMsg struct {
 	items []suggestion
 }
 type dataRefreshMsg struct {
-	instances []k8sclawv1alpha1.ClawInstance
-	runs      []k8sclawv1alpha1.AgentRun
-	policies  []k8sclawv1alpha1.ClawPolicy
-	skills    []k8sclawv1alpha1.SkillPack
-	channels  []channelRow
-	pods      []podRow
+	instances *[]k8sclawv1alpha1.ClawInstance
+	runs      *[]k8sclawv1alpha1.AgentRun
+	policies  *[]k8sclawv1alpha1.ClawPolicy
+	skills    *[]k8sclawv1alpha1.SkillPack
+	channels  *[]channelRow
+	pods      *[]podRow
+	fetchErr  string
 }
 
 // ── Suggestion ───────────────────────────────────────────────────────────────
@@ -1197,6 +1208,7 @@ var slashCommandSuggestions = []suggestion{
 	{"/runs", "List AgentRuns"},
 	{"/run", "Create AgentRun: /run <inst> <task>"},
 	{"/abort", "Abort run: /abort <run>"},
+	{"/result", "Show run result: /result <run>"},
 	{"/status", "Cluster or run status"},
 	{"/channels", "View channels for instance"},
 	{"/channel", "Add channel: /channel <inst> <type> <secret>"},
@@ -1239,6 +1251,7 @@ var tuiCommands = []struct{ cmd, desc string }{
 	{"/runs", "List AgentRuns"},
 	{"/run <inst> <task>", "Create a new AgentRun"},
 	{"/abort <run>", "Abort a running AgentRun"},
+	{"/result <run>", "Show the LLM response"},
 	{"/status [run]", "Cluster / run status"},
 	{"/channels [inst]", "View channels (tab 5)"},
 	{"/channel <i> <type> <sec>", "Add channel to instance"},
@@ -1424,16 +1437,36 @@ func refreshDataCmd() tea.Cmd {
 		var pols k8sclawv1alpha1.ClawPolicyList
 		var skls k8sclawv1alpha1.SkillPackList
 
-		// Best-effort fetch all.
-		_ = k8sClient.List(ctx, &inst)
-		_ = k8sClient.List(ctx, &runs)
-		_ = k8sClient.List(ctx, &pols)
-		_ = k8sClient.List(ctx, &skls)
+		// Fetch resources — track errors so the TUI can surface them.
+		var errs []string
+		var msg dataRefreshMsg
 
-		// Sort runs newest first.
-		sort.Slice(runs.Items, func(i, j int) bool {
-			return runs.Items[i].CreationTimestamp.After(runs.Items[j].CreationTimestamp.Time)
-		})
+		if err := k8sClient.List(ctx, &inst); err != nil {
+			errs = append(errs, fmt.Sprintf("instances: %v", err))
+		} else {
+			msg.instances = &inst.Items
+		}
+		if err := k8sClient.List(ctx, &runs); err != nil {
+			errs = append(errs, fmt.Sprintf("runs: %v", err))
+		} else {
+			sort.Slice(runs.Items, func(i, j int) bool {
+				return runs.Items[i].CreationTimestamp.After(runs.Items[j].CreationTimestamp.Time)
+			})
+			msg.runs = &runs.Items
+		}
+		if err := k8sClient.List(ctx, &pols); err != nil {
+			errs = append(errs, fmt.Sprintf("policies: %v", err))
+		} else {
+			msg.policies = &pols.Items
+		}
+		if err := k8sClient.List(ctx, &skls); err != nil {
+			errs = append(errs, fmt.Sprintf("skills: %v", err))
+		} else {
+			msg.skills = &skls.Items
+		}
+		if len(errs) > 0 {
+			msg.fetchErr = strings.Join(errs, "; ")
+		}
 
 		// Build channel rows from instances.
 		var chRows []channelRow
@@ -1463,7 +1496,9 @@ func refreshDataCmd() tea.Cmd {
 		// Build pod rows from actual pods labelled for k8sclaw.
 		var podRows []podRow
 		var podList corev1.PodList
-		if err := k8sClient.List(ctx, &podList, client.MatchingLabels{"app.kubernetes.io/managed-by": "k8sclaw"}); err == nil {
+		if err := k8sClient.List(ctx, &podList, client.MatchingLabels{"app.kubernetes.io/managed-by": "k8sclaw"}); err != nil {
+			errs = append(errs, fmt.Sprintf("pods: %v", err))
+		} else {
 			for _, p := range podList.Items {
 				instName := p.Labels["k8sclaw.io/instance"]
 				var restarts int32
@@ -1514,14 +1549,12 @@ func refreshDataCmd() tea.Cmd {
 			}
 		}
 
-		return dataRefreshMsg{
-			instances: inst.Items,
-			runs:      runs.Items,
-			policies:  pols.Items,
-			skills:    skls.Items,
-			channels:  chRows,
-			pods:      podRows,
+		msg.channels = &chRows
+		msg.pods = &podRows
+		if len(errs) > 0 {
+			msg.fetchErr = strings.Join(errs, "; ")
 		}
+		return msg
 	}
 }
 
@@ -1709,6 +1742,32 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.tableScroll = 0
 			m.drillInstance = ""
 			return m, nil
+		case "tab":
+			// Cycle forward through views.
+			next := int(m.activeView) + 1
+			if next >= len(viewNames) {
+				next = 0
+			}
+			m.activeView = tuiViewKind(next)
+			m.selectedRow = 0
+			m.tableScroll = 0
+			if m.activeView != viewChannels && m.activeView != viewPods {
+				m.drillInstance = ""
+			}
+			return m, nil
+		case "shift+tab":
+			// Cycle backward through views.
+			prev := int(m.activeView) - 1
+			if prev < 0 {
+				prev = len(viewNames) - 1
+			}
+			m.activeView = tuiViewKind(prev)
+			m.selectedRow = 0
+			m.tableScroll = 0
+			if m.activeView != viewChannels && m.activeView != viewPods {
+				m.drillInstance = ""
+			}
+			return m, nil
 		case "j", "down":
 			maxRow := m.activeViewCount() - 1
 			if maxRow < 0 {
@@ -1753,12 +1812,31 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case dataRefreshMsg:
-		m.instances = msg.instances
-		m.runs = msg.runs
-		m.policies = msg.policies
-		m.skills = msg.skills
-		m.channels = msg.channels
-		m.pods = msg.pods
+		// Only overwrite data that was successfully fetched.
+		if msg.instances != nil {
+			m.instances = *msg.instances
+		}
+		if msg.runs != nil {
+			m.runs = *msg.runs
+		}
+		if msg.policies != nil {
+			m.policies = *msg.policies
+		}
+		if msg.skills != nil {
+			m.skills = *msg.skills
+		}
+		if msg.channels != nil {
+			m.channels = *msg.channels
+		}
+		if msg.pods != nil {
+			m.pods = *msg.pods
+		}
+		if msg.fetchErr != "" {
+			m.addLog(tuiErrorStyle.Render("✗ Fetch error: " + msg.fetchErr))
+			m.connected = false
+		} else {
+			m.connected = true
+		}
 		// Clamp selection.
 		maxRow := m.activeViewCount() - 1
 		if maxRow < 0 {
@@ -2190,6 +2268,10 @@ func (m *tuiModel) updateSuggestions(input string) tea.Cmd {
 		if argIdx == 1 {
 			return m.fetchSuggestionsAsync(func() []suggestion { return fetchRunSuggestions(ns, prefix, true) })
 		}
+	case "/result":
+		if argIdx == 1 {
+			return m.fetchSuggestionsAsync(func() []suggestion { return fetchRunSuggestions(ns, prefix, false) })
+		}
 	case "/status":
 		if argIdx == 1 {
 			return m.fetchSuggestionsAsync(func() []suggestion { return fetchRunSuggestions(ns, prefix, false) })
@@ -2491,6 +2573,13 @@ func (m tuiModel) handleCommand(input string) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		return m, m.asyncCmd(func() (string, error) { return tuiAbortRun(m.namespace, args[0]) })
+
+	case "/result":
+		if len(args) < 1 {
+			m.addLog(tuiErrorStyle.Render("Usage: /result <run-name>  (or press Enter on a run)"))
+			return m, nil
+		}
+		return m, m.asyncCmd(func() (string, error) { return tuiRunStatus(m.namespace, args[0]) })
 
 	case "/status":
 		if len(args) < 1 {
@@ -3123,6 +3212,7 @@ func (m tuiModel) renderStatusBar() string {
 		keys = []string{"y", "confirm delete", "any", "cancel"}
 	} else {
 		keys = []string{
+			"Tab", "next view",
 			"1-6", "views",
 			"j/k", "navigate",
 			"Enter", "detail",
@@ -3300,8 +3390,22 @@ func tuiRunStatus(ns, name string) (string, error) {
 	if pod == "" {
 		pod = "-"
 	}
-	return fmt.Sprintf("%s │ phase:%s pod:%s task:%s",
-		run.Name, phase, pod, truncate(run.Spec.Task, 40)), nil
+
+	var b strings.Builder
+	b.WriteString(fmt.Sprintf("%s │ phase:%s pod:%s task:%s",
+		run.Name, phase, pod, truncate(run.Spec.Task, 40)))
+
+	if run.Status.Result != "" {
+		b.WriteString("\n" + tuiSuccessStyle.Render("╭─ Result ─────────────────────────────────╮"))
+		for _, line := range strings.Split(run.Status.Result, "\n") {
+			b.WriteString("\n│ " + line)
+		}
+		b.WriteString("\n" + tuiSuccessStyle.Render("╰──────────────────────────────────────────╯"))
+	}
+	if run.Status.Error != "" {
+		b.WriteString("\n" + tuiErrorStyle.Render("Error: "+run.Status.Error))
+	}
+	return b.String(), nil
 }
 
 func tuiClusterStatus(ns string) (string, error) {
@@ -4018,12 +4122,16 @@ func tuiOnboardApply(ns string, w *wizardState) (string, error) {
 					BaseURL: w.baseURL,
 				},
 			},
-			AuthRefs: []k8sclawv1alpha1.SecretRef{
-				{
-					Secret: providerSecretName,
-				},
-			},
 		},
+	}
+
+	// Only add AuthRefs when an API key was provided.
+	if w.apiKey != "" {
+		inst.Spec.AuthRefs = []k8sclawv1alpha1.SecretRef{
+			{
+				Secret: providerSecretName,
+			},
+		}
 	}
 
 	if w.channelType != "" {
