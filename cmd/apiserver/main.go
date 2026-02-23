@@ -13,6 +13,7 @@ import (
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
+	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
 	k8sclawv1alpha1 "github.com/k8sclaw/k8sclaw/api/v1alpha1"
 	"github.com/k8sclaw/k8sclaw/internal/apiserver"
@@ -41,7 +42,10 @@ func main() {
 
 	// Build Kubernetes client
 	cfg := ctrl.GetConfigOrDie()
-	k8sClient, err := ctrl.NewManager(cfg, ctrl.Options{Scheme: scheme})
+	k8sClient, err := ctrl.NewManager(cfg, ctrl.Options{
+		Scheme: scheme,
+		Metrics: metricsserver.Options{BindAddress: "0"}, // disable metrics; apiserver is not a controller
+	})
 	if err != nil {
 		log.Error(err, "unable to create manager")
 		os.Exit(1)
