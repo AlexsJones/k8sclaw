@@ -30,7 +30,7 @@ func NewPodBuilder() *PodBuilder {
 		DefaultAgentImage:     "ghcr.io/alexsjones/k8sclaw/agent-runner:latest",
 		DefaultIPCBridgeImage: "ghcr.io/alexsjones/k8sclaw/ipc-bridge:latest",
 		DefaultSandboxImage:   "ghcr.io/alexsjones/k8sclaw/sandbox:latest",
-		EventBusURL:           "nats://nats.k8sclaw:4222",
+		EventBusURL:           "nats://nats.k8sclaw-system.svc:4222",
 	}
 }
 

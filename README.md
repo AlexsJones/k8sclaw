@@ -6,7 +6,8 @@
 
 <p align="center">
   <strong>Kubernetes-native AI Agent Management Platform</strong><br>
-  <em>Decompose monolithic AI agent gateways into multi-tenant, horizontally scalable systems where every sub-agent runs as an ephemeral Kubernetes pod.</em>
+  <em>Decompose monolithic AI agent gateways into multi-tenant, horizontally scalable systems where every sub-agent runs as an ephemeral Kubernetes pod.</em><br><br>
+  From the creator of <a href="https://github.com/k8sgpt-ai/k8sgpt">k8sgpt</a> and <a href="https://github.com/AlexsJones/llmfit">llmfit</a>
 </p>
 
 <p align="center">

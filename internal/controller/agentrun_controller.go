@@ -366,7 +366,7 @@ func (r *AgentRunReconciler) buildContainers(agentRun *k8sclawv1alpha1.AgentRun)
 			Env: []corev1.EnvVar{
 				{Name: "AGENT_RUN_ID", Value: agentRun.Name},
 				{Name: "INSTANCE_NAME", Value: agentRun.Spec.InstanceRef},
-				{Name: "EVENT_BUS_URL", Value: "nats://nats.k8sclaw:4222"},
+				{Name: "EVENT_BUS_URL", Value: "nats://nats.k8sclaw-system.svc:4222"},
 			},
 			VolumeMounts: []corev1.VolumeMount{
 				{Name: "ipc", MountPath: "/ipc"},

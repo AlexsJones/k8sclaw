@@ -39,18 +39,27 @@ func NewNATSEventBus(url string) (*NATSEventBus, error) {
 		return nil, fmt.Errorf("creating JetStream context: %w", err)
 	}
 
-	// Create or update the stream
-	stream, err := js.CreateOrUpdateStream(context.Background(), jetstream.StreamConfig{
-		Name:      streamName,
-		Subjects:  []string{"k8sclaw.>"},
-		Retention: jetstream.LimitsPolicy,
-		MaxAge:    24 * time.Hour,
-		Storage:   jetstream.FileStorage,
-		Replicas:  1,
-	})
+	// Retry stream creation — NATS may not be fully ready yet.
+	var stream jetstream.Stream
+	for attempt := 0; attempt < 10; attempt++ {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		stream, err = js.CreateOrUpdateStream(ctx, jetstream.StreamConfig{
+			Name:      streamName,
+			Subjects:  []string{"k8sclaw.>"},
+			Retention: jetstream.LimitsPolicy,
+			MaxAge:    24 * time.Hour,
+			Storage:   jetstream.FileStorage,
+			Replicas:  1,
+		})
+		cancel()
+		if err == nil {
+			break
+		}
+		time.Sleep(2 * time.Second)
+	}
 	if err != nil {
 		nc.Close()
-		return nil, fmt.Errorf("creating JetStream stream: %w", err)
+		return nil, fmt.Errorf("creating JetStream stream after retries: %w", err)
 	}
 
 	return &NATSEventBus{

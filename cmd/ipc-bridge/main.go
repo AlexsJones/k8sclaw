@@ -32,7 +32,7 @@ func main() {
 		panic("AGENT_RUN_ID is required")
 	}
 	if eventBusURL == "" {
-		eventBusURL = "nats://nats.k8sclaw:4222"
+		eventBusURL = "nats://nats.k8sclaw-system.svc:4222"
 	}
 
 	log := zap.New(zap.UseDevMode(false)).WithName("ipc-bridge")

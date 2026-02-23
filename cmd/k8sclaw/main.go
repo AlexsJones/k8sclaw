@@ -11,12 +11,17 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"text/tabwriter"
 	"time"
 
+	"github.com/charmbracelet/bubbles/textinput"
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/spf13/cobra"
 
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -74,6 +79,7 @@ SkillPacks, and feature gates in your Kubernetes cluster.`,
 
 func initClient() error {
 	scheme := runtime.NewScheme()
+	_ = corev1.AddToScheme(scheme)
 	if err := k8sclawv1alpha1.AddToScheme(scheme); err != nil {
 		return fmt.Errorf("failed to register scheme: %w", err)
 	}
@@ -971,4 +977,3066 @@ func resolveConfigPath(bundleDir, relPath string) string {
 	}
 	// Return the bundled path anyway; kubectl will report the error.
 	return bundled
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  TUI — Interactive Terminal UI (k9s-style)
+// ═══════════════════════════════════════════════════════════════════════════
+
+// ── Views ────────────────────────────────────────────────────────────────────
+
+type tuiViewKind int
+
+const (
+	viewInstances tuiViewKind = iota
+	viewRuns
+	viewPolicies
+	viewSkills
+	viewChannels
+	viewPods
+)
+
+var viewNames = []string{"Instances", "Runs", "Policies", "Skills", "Channels", "Pods"}
+
+// ── Styles ───────────────────────────────────────────────────────────────────
+
+var (
+	tuiBannerStyle = lipgloss.NewStyle().
+			Bold(true).
+			Foreground(lipgloss.Color("#E94560")).
+			Background(lipgloss.Color("#0F0F23"))
+
+	tuiTabStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#585B70")).
+			Background(lipgloss.Color("#0F0F23")).
+			Padding(0, 1)
+
+	tuiTabActiveStyle = lipgloss.NewStyle().
+				Bold(true).
+				Foreground(lipgloss.Color("#E94560")).
+				Background(lipgloss.Color("#1E1E2E")).
+				Padding(0, 1)
+
+	tuiColHeaderStyle = lipgloss.NewStyle().
+				Bold(true).
+				Foreground(lipgloss.Color("#74C7EC")).
+				Background(lipgloss.Color("#11111B"))
+
+	tuiRowStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#CDD6F4"))
+
+	tuiRowAltStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#A6ADC8")).
+			Background(lipgloss.Color("#11111B"))
+
+	tuiRowSelectedStyle = lipgloss.NewStyle().
+				Bold(true).
+				Foreground(lipgloss.Color("#1E1E2E")).
+				Background(lipgloss.Color("#74C7EC"))
+
+	tuiDimStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#585B70"))
+
+	tuiErrorStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#F38BA8")).
+			Bold(true)
+
+	tuiSuccessStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#A6E3A1")).
+			Bold(true)
+
+	tuiRunningStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#A6E22E"))
+
+	tuiPromptStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#E94560")).
+			Bold(true)
+
+	tuiHeaderStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#74C7EC")).
+			Bold(true)
+
+	tuiStatusBarStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("#BAC2DE")).
+				Background(lipgloss.Color("#181825"))
+
+	tuiStatusKeyStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("#E94560")).
+				Background(lipgloss.Color("#181825")).
+				Bold(true)
+
+	tuiLogBorderStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("#45475A"))
+
+	tuiSepStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#313244"))
+
+	tuiCountStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#F5C2E7")).
+			Bold(true)
+
+	tuiModalBorderStyle = lipgloss.NewStyle().
+				Border(lipgloss.RoundedBorder()).
+				BorderForeground(lipgloss.Color("#E94560")).
+				Padding(1, 2).
+				Background(lipgloss.Color("#16213E"))
+
+	tuiModalTitleStyle = lipgloss.NewStyle().
+				Bold(true).
+				Foreground(lipgloss.Color("#E94560")).
+				Background(lipgloss.Color("#16213E"))
+
+	tuiModalCmdStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("#E94560"))
+
+	tuiModalDescStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("#A0A0A0"))
+
+	tuiSuggestStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#CDD6F4")).
+			Background(lipgloss.Color("#1E1E2E")).
+			Padding(0, 1)
+
+	tuiSuggestSelectedStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("#1A1A2E")).
+				Background(lipgloss.Color("#E94560")).
+				Bold(true).
+				Padding(0, 1)
+
+	tuiSuggestDescStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("#666666")).
+				Background(lipgloss.Color("#1E1E2E"))
+
+	tuiSuggestDescSelectedStyle = lipgloss.NewStyle().
+					Foreground(lipgloss.Color("#1A1A2E")).
+					Background(lipgloss.Color("#E94560"))
+)
+
+func newTUICmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "tui",
+		Short: "Interactive terminal UI for managing K8sClaw",
+		Long:  `Launch an interactive terminal interface with slash commands for managing ClawInstances, AgentRuns, policies, and more.`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := initClient(); err != nil {
+				fmt.Fprintf(os.Stderr, "Warning: could not connect to cluster: %v\n", err)
+				fmt.Fprintln(os.Stderr, "TUI will start in disconnected mode.")
+			}
+
+			m := newTUIModel(namespace)
+			p := tea.NewProgram(m, tea.WithAltScreen())
+			_, err := p.Run()
+			return err
+		},
+	}
+}
+
+// ── Messages ─────────────────────────────────────────────────────────────────
+
+type tickMsg time.Time
+type cmdResultMsg struct {
+	output string
+	err    error
+}
+type suggestionsMsg struct {
+	items []suggestion
+}
+type dataRefreshMsg struct {
+	instances []k8sclawv1alpha1.ClawInstance
+	runs      []k8sclawv1alpha1.AgentRun
+	policies  []k8sclawv1alpha1.ClawPolicy
+	skills    []k8sclawv1alpha1.SkillPack
+	channels  []channelRow
+	pods      []podRow
+}
+
+// ── Suggestion ───────────────────────────────────────────────────────────────
+
+type suggestion struct {
+	text string
+	desc string
+}
+
+var slashCommandSuggestions = []suggestion{
+	{"/instances", "List ClawInstances"},
+	{"/runs", "List AgentRuns"},
+	{"/run", "Create AgentRun: /run <inst> <task>"},
+	{"/abort", "Abort run: /abort <run>"},
+	{"/status", "Cluster or run status"},
+	{"/channels", "View channels for instance"},
+	{"/channel", "Add channel: /channel <inst> <type> <secret>"},
+	{"/pods", "View agent pods: /pods <inst>"},
+	{"/provider", "Set provider: /provider <inst> <provider> <model>"},
+	{"/policies", "List ClawPolicies"},
+	{"/skills", "List SkillPacks"},
+	{"/features", "Feature gates: /features <policy>"},
+	{"/delete", "Delete: /delete <type> <name>"},
+	{"/ns", "Switch namespace: /ns <name>"},
+	{"/onboard", "Interactive setup wizard"},
+	{"/help", "Show help modal"},
+	{"/quit", "Exit the TUI"},
+}
+
+var deleteTypeSuggestions = []suggestion{
+	{"instance", "Delete a ClawInstance"},
+	{"run", "Delete an AgentRun"},
+	{"policy", "Delete a ClawPolicy"},
+	{"channel", "Remove a channel from instance"},
+}
+
+var channelTypeSuggestions = []suggestion{
+	{"telegram", "Telegram bot channel"},
+	{"slack", "Slack integration"},
+	{"discord", "Discord bot channel"},
+	{"whatsapp", "WhatsApp channel"},
+}
+
+var providerSuggestions = []suggestion{
+	{"openai", "OpenAI (GPT-4o, etc.)"},
+	{"anthropic", "Anthropic (Claude)"},
+	{"azure-openai", "Azure OpenAI Service"},
+	{"github-copilot", "GitHub Copilot"},
+	{"ollama", "Ollama (local)"},
+	{"openai-compatible", "OpenAI-compatible endpoint"},
+}
+
+var tuiCommands = []struct{ cmd, desc string }{
+	{"/instances", "List ClawInstances"},
+	{"/runs", "List AgentRuns"},
+	{"/run <inst> <task>", "Create a new AgentRun"},
+	{"/abort <run>", "Abort a running AgentRun"},
+	{"/status [run]", "Cluster / run status"},
+	{"/channels [inst]", "View channels (tab 5)"},
+	{"/channel <i> <type> <sec>", "Add channel to instance"},
+	{"/rmchannel <inst> <type>", "Remove channel"},
+	{"/pods [inst]", "Agent pods (tab 6)"},
+	{"/provider <i> <prov> <mod>", "Set provider/model"},
+	{"/baseurl <inst> <url>", "Set custom base URL"},
+	{"/policies", "List ClawPolicies"},
+	{"/skills", "List SkillPacks"},
+	{"/features <pol>", "Feature gates on a policy"},
+	{"/delete <type> <name>", "Delete resource"},
+	{"/ns <namespace>", "Switch namespace"},
+	{"/onboard", "Interactive setup wizard"},
+	{"/help  or  ?", "Show this help"},
+	{"/quit", "Exit the TUI"},
+	{"", ""},
+	{"── Keys ──", ""},
+	{"l", "Logs (pods) / events (resources)"},
+	{"d", "Describe selected resource"},
+	{"Esc", "Go back / return to Instances"},
+	{"R", "Run task on selected instance"},
+	{"O", "Launch onboard wizard"},
+	{"x", "Delete selected resource"},
+	{"Enter", "Show detail / drill in"},
+	{"r", "Refresh data"},
+}
+
+// ── Model ────────────────────────────────────────────────────────────────────
+
+// channelRow is a flattened view of channel config + status across instances.
+type channelRow struct {
+	InstanceName string
+	Type         string
+	SecretRef    string
+	Status       string
+	LastCheck    string
+	Message      string
+}
+
+// podRow is a flattened view of agent pods across instances.
+type podRow struct {
+	Name      string
+	Instance  string
+	Phase     string
+	Node      string
+	IP        string
+	Age       string
+	Restarts  int32
+}
+
+// ── Onboard Wizard ───────────────────────────────────────────────────────────
+
+type wizardStep int
+
+const (
+	wizStepNone         wizardStep = iota
+	wizStepCheckCluster            // auto — verify CRDs
+	wizStepInstanceName            // text: instance name
+	wizStepProvider                // menu 1-6: provider
+	wizStepModel                   // text: model name
+	wizStepBaseURL                 // text: base URL (some providers)
+	wizStepAPIKey                  // text: API key (non-ollama)
+	wizStepChannel                 // menu 1-5: channel type
+	wizStepChannelToken            // text: channel bot token
+	wizStepPolicy                  // y/n: apply default policy
+	wizStepConfirm                 // y/n: confirm summary
+	wizStepApplying                // auto — create resources
+	wizStepDone                    // auto — show result
+)
+
+type wizardState struct {
+	active     bool
+	step       wizardStep
+	err        string // error from last step
+	resultMsgs []string
+
+	// Collected values
+	instanceName     string
+	providerChoice   string // "1"–"6"
+	providerName     string
+	modelName        string
+	baseURL          string
+	secretEnvKey     string
+	apiKey           string
+	channelChoice    string // "1"–"5"
+	channelType      string
+	channelTokenKey  string
+	channelToken     string
+	applyPolicy      bool
+}
+
+func (w *wizardState) reset() {
+	*w = wizardState{}
+}
+
+type tuiModel struct {
+	width     int
+	height    int
+	ready     bool
+	quitting  bool
+	showModal bool
+
+	// View state
+	activeView    tuiViewKind
+	selectedRow   int
+	tableScroll   int
+	drillInstance string // filtered instance for channels/pods views
+
+	// Wizard
+	wizard wizardState
+
+	// Cached K8s data
+	instances []k8sclawv1alpha1.ClawInstance
+	runs      []k8sclawv1alpha1.AgentRun
+	policies  []k8sclawv1alpha1.ClawPolicy
+	skills    []k8sclawv1alpha1.SkillPack
+	channels  []channelRow
+	pods      []podRow
+
+	// Input
+	input        textinput.Model
+	inputFocused bool
+
+	// Log
+	logLines []string
+
+	// Cluster
+	namespace string
+	connected bool
+
+	// Autocomplete
+	suggestions []suggestion
+	suggestIdx  int
+	lastInput   string
+
+	// Delete confirmation
+	confirmDelete     bool
+	deleteResourceKind string // e.g. "instance", "run", "pod"
+	deleteResourceName string
+	deleteFunc        func() (string, error) // the actual delete function
+}
+
+const maxLogLines = 50
+
+func newTUIModel(ns string) tuiModel {
+	ti := textinput.New()
+	ti.Placeholder = "Type / for commands or press ? for help..."
+	ti.CharLimit = 256
+	ti.Prompt = "❯ "
+	ti.PromptStyle = tuiPromptStyle
+	ti.TextStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#FFFFFF"))
+
+	return tuiModel{
+		namespace:    ns,
+		connected:    k8sClient != nil,
+		input:        ti,
+		inputFocused: false,
+		activeView:   viewInstances,
+		logLines:     []string{tuiDimStyle.Render("K8sClaw TUI ready — press ? for help, / to enter commands")},
+	}
+}
+
+func (m tuiModel) Init() tea.Cmd {
+	return tea.Batch(textinput.Blink, refreshDataCmd(), tickCmd())
+}
+
+func tickCmd() tea.Cmd {
+	return tea.Tick(3*time.Second, func(t time.Time) tea.Msg {
+		return tickMsg(t)
+	})
+}
+
+func refreshDataCmd() tea.Cmd {
+	return func() tea.Msg {
+		if k8sClient == nil {
+			return dataRefreshMsg{}
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+
+		var inst k8sclawv1alpha1.ClawInstanceList
+		var runs k8sclawv1alpha1.AgentRunList
+		var pols k8sclawv1alpha1.ClawPolicyList
+		var skls k8sclawv1alpha1.SkillPackList
+
+		// Best-effort fetch all.
+		_ = k8sClient.List(ctx, &inst)
+		_ = k8sClient.List(ctx, &runs)
+		_ = k8sClient.List(ctx, &pols)
+		_ = k8sClient.List(ctx, &skls)
+
+		// Sort runs newest first.
+		sort.Slice(runs.Items, func(i, j int) bool {
+			return runs.Items[i].CreationTimestamp.After(runs.Items[j].CreationTimestamp.Time)
+		})
+
+		// Build channel rows from instances.
+		var chRows []channelRow
+		for _, i := range inst.Items {
+			statusMap := make(map[string]k8sclawv1alpha1.ChannelStatus)
+			for _, cs := range i.Status.Channels {
+				statusMap[cs.Type] = cs
+			}
+			for _, ch := range i.Spec.Channels {
+				row := channelRow{
+					InstanceName: i.Name,
+					Type:         ch.Type,
+					SecretRef:    ch.ConfigRef.Secret,
+					Status:       "Unknown",
+				}
+				if cs, ok := statusMap[ch.Type]; ok {
+					row.Status = cs.Status
+					row.Message = cs.Message
+					if cs.LastHealthCheck != nil {
+						row.LastCheck = shortDuration(time.Since(cs.LastHealthCheck.Time))
+					}
+				}
+				chRows = append(chRows, row)
+			}
+		}
+
+		// Build pod rows from actual pods labelled for k8sclaw.
+		var podRows []podRow
+		var podList corev1.PodList
+		if err := k8sClient.List(ctx, &podList, client.MatchingLabels{"app.kubernetes.io/managed-by": "k8sclaw"}); err == nil {
+			for _, p := range podList.Items {
+				instName := p.Labels["k8sclaw.io/instance"]
+				var restarts int32
+				for _, cs := range p.Status.ContainerStatuses {
+					restarts += cs.RestartCount
+				}
+				podRows = append(podRows, podRow{
+					Name:     p.Name,
+					Instance: instName,
+					Phase:    string(p.Status.Phase),
+					Node:     p.Spec.NodeName,
+					IP:       p.Status.PodIP,
+					Age:      shortDuration(time.Since(p.CreationTimestamp.Time)),
+					Restarts: restarts,
+				})
+			}
+		}
+		// Also include pods from AgentRun status.
+		for _, r := range runs.Items {
+			if r.Status.PodName == "" {
+				continue
+			}
+			// Check if already in podRows.
+			var found bool
+			for _, pr := range podRows {
+				if pr.Name == r.Status.PodName {
+					found = true
+					break
+				}
+			}
+			if !found {
+				var pod corev1.Pod
+				if err := k8sClient.Get(ctx, types.NamespacedName{Name: r.Status.PodName, Namespace: r.Namespace}, &pod); err == nil {
+					var restarts int32
+					for _, cs := range pod.Status.ContainerStatuses {
+						restarts += cs.RestartCount
+					}
+					podRows = append(podRows, podRow{
+						Name:     pod.Name,
+						Instance: r.Spec.InstanceRef,
+						Phase:    string(pod.Status.Phase),
+						Node:     pod.Spec.NodeName,
+						IP:       pod.Status.PodIP,
+						Age:      shortDuration(time.Since(pod.CreationTimestamp.Time)),
+						Restarts: restarts,
+					})
+				}
+			}
+		}
+
+		return dataRefreshMsg{
+			instances: inst.Items,
+			runs:      runs.Items,
+			policies:  pols.Items,
+			skills:    skls.Items,
+			channels:  chRows,
+			pods:      podRows,
+		}
+	}
+}
+
+// ── Update ───────────────────────────────────────────────────────────────────
+
+func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	var tiCmd tea.Cmd
+
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		if m.confirmDelete {
+			switch msg.String() {
+			case "y", "Y":
+				fn := m.deleteFunc
+				m.confirmDelete = false
+				m.deleteFunc = nil
+				return m, m.asyncCmd(fn)
+			default:
+				m.confirmDelete = false
+				m.deleteFunc = nil
+				m.addLog(tuiDimStyle.Render("Delete cancelled"))
+				return m, nil
+			}
+		}
+
+		if m.showModal {
+			m.showModal = false
+			return m, nil
+		}
+
+		// When input is focused, handle input-specific keys first.
+		if m.inputFocused {
+			// Wizard mode: route input to wizard.
+			if m.wizard.active {
+				switch msg.Type {
+				case tea.KeyCtrlC:
+					m.quitting = true
+					return m, tea.Quit
+				case tea.KeyEsc:
+					m.wizard.reset()
+					m.inputFocused = false
+					m.input.Blur()
+					m.input.SetValue("")
+					m.input.Placeholder = "Type / for commands or press ? for help..."
+					m.suggestions = nil
+					m.addLog(tuiDimStyle.Render("Wizard cancelled"))
+					return m, nil
+				case tea.KeyEnter:
+					val := strings.TrimSpace(m.input.Value())
+					m.input.SetValue("")
+					return m.advanceWizard(val)
+				}
+				m.input, tiCmd = m.input.Update(msg)
+				return m, tiCmd
+			}
+
+			switch msg.Type {
+			case tea.KeyCtrlC:
+				m.quitting = true
+				return m, tea.Quit
+			case tea.KeyEsc:
+				if len(m.suggestions) > 0 {
+					m.suggestions = nil
+					m.suggestIdx = 0
+					return m, nil
+				}
+				m.inputFocused = false
+				m.input.Blur()
+				m.input.SetValue("")
+				m.suggestions = nil
+				return m, nil
+			case tea.KeyTab:
+				if len(m.suggestions) > 0 {
+					m.acceptSuggestion()
+					return m, nil
+				}
+			case tea.KeyUp:
+				if len(m.suggestions) > 0 {
+					m.suggestIdx--
+					if m.suggestIdx < 0 {
+						m.suggestIdx = len(m.suggestions) - 1
+					}
+					return m, nil
+				}
+			case tea.KeyDown:
+				if len(m.suggestions) > 0 {
+					m.suggestIdx++
+					if m.suggestIdx >= len(m.suggestions) {
+						m.suggestIdx = 0
+					}
+					return m, nil
+				}
+			case tea.KeyEnter:
+				if len(m.suggestions) > 0 {
+					m.acceptSuggestion()
+					return m, nil
+				}
+				input := strings.TrimSpace(m.input.Value())
+				if input == "" {
+					break
+				}
+				m.input.SetValue("")
+				m.suggestions = nil
+				m.suggestIdx = 0
+				if strings.HasPrefix(input, "/") {
+					return m.handleCommand(input)
+				}
+				m.addLog(tuiDimStyle.Render("Hint: type /help or press ?"))
+				return m, nil
+			}
+
+			m.input, tiCmd = m.input.Update(msg)
+			currentInput := m.input.Value()
+			if currentInput != m.lastInput {
+				m.lastInput = currentInput
+				cmd := m.updateSuggestions(currentInput)
+				if cmd != nil {
+					return m, tea.Batch(tiCmd, cmd)
+				}
+			}
+			return m, tiCmd
+		}
+
+		// Table / global key handling (input not focused).
+		switch msg.String() {
+		case "q", "ctrl+c":
+			m.quitting = true
+			return m, tea.Quit
+		case "esc":
+			// Go back: clear drill-in filter or return to Instances view.
+			if m.drillInstance != "" {
+				m.drillInstance = ""
+				m.activeView = viewInstances
+				m.selectedRow = 0
+				m.tableScroll = 0
+				return m, nil
+			}
+			if m.activeView != viewInstances {
+				m.activeView = viewInstances
+				m.selectedRow = 0
+				m.tableScroll = 0
+				return m, nil
+			}
+			return m, nil
+		case "?":
+			m.showModal = true
+			return m, nil
+		case "/":
+			m.inputFocused = true
+			m.input.Focus()
+			m.input.SetValue("/")
+			m.input.CursorEnd()
+			m.lastInput = "/"
+			m.updateSuggestions("/")
+			return m, textinput.Blink
+		case "1":
+			m.activeView = viewInstances
+			m.selectedRow = 0
+			m.tableScroll = 0
+			return m, nil
+		case "2":
+			m.activeView = viewRuns
+			m.selectedRow = 0
+			m.tableScroll = 0
+			return m, nil
+		case "3":
+			m.activeView = viewPolicies
+			m.selectedRow = 0
+			m.tableScroll = 0
+			return m, nil
+		case "4":
+			m.activeView = viewSkills
+			m.selectedRow = 0
+			m.tableScroll = 0
+			return m, nil
+		case "5":
+			m.activeView = viewChannels
+			m.selectedRow = 0
+			m.tableScroll = 0
+			m.drillInstance = ""
+			return m, nil
+		case "6":
+			m.activeView = viewPods
+			m.selectedRow = 0
+			m.tableScroll = 0
+			m.drillInstance = ""
+			return m, nil
+		case "j", "down":
+			maxRow := m.activeViewCount() - 1
+			if maxRow < 0 {
+				maxRow = 0
+			}
+			if m.selectedRow < maxRow {
+				m.selectedRow++
+			}
+			return m, nil
+		case "k", "up":
+			if m.selectedRow > 0 {
+				m.selectedRow--
+			}
+			return m, nil
+		case "enter":
+			// Show detail for selected row.
+			return m.handleRowAction()
+		case "l":
+			// Show logs for selected pod/resource (like kubectl logs).
+			return m.handleRowLogs()
+		case "d":
+			// Describe selected resource (like kubectl describe).
+			return m.handleRowDescribe()
+		case "x":
+			// Delete selected resource (with confirmation).
+			return m.handleRowDelete()
+		case "R":
+			// Create a new run on the selected instance.
+			return m.handleRunPrompt()
+		case "O":
+			// Launch onboard wizard (instances view or anytime).
+			return m.startOnboardWizard()
+		case "r":
+			return m, refreshDataCmd()
+		}
+
+	case tea.WindowSizeMsg:
+		m.width = msg.Width
+		m.height = msg.Height
+		m.ready = true
+		m.input.Width = m.width - 6
+		return m, nil
+
+	case dataRefreshMsg:
+		m.instances = msg.instances
+		m.runs = msg.runs
+		m.policies = msg.policies
+		m.skills = msg.skills
+		m.channels = msg.channels
+		m.pods = msg.pods
+		// Clamp selection.
+		maxRow := m.activeViewCount() - 1
+		if maxRow < 0 {
+			maxRow = 0
+		}
+		if m.selectedRow > maxRow {
+			m.selectedRow = maxRow
+		}
+		return m, nil
+
+	case cmdResultMsg:
+		if m.wizard.active && m.wizard.step == wizStepApplying {
+			m.wizard.step = wizStepDone
+			if msg.err != nil {
+				m.wizard.err = msg.err.Error()
+				m.wizard.resultMsgs = []string{tuiErrorStyle.Render("✗ " + msg.err.Error())}
+			} else {
+				// Parse result messages from output (newline-separated).
+				m.wizard.resultMsgs = strings.Split(msg.output, "\n")
+			}
+			m.input.Placeholder = "Press Enter to return"
+			return m, nil
+		}
+		if msg.err != nil {
+			m.addLog(tuiErrorStyle.Render("✗ " + msg.err.Error()))
+		} else if msg.output != "" {
+			m.addLog(msg.output)
+		}
+		return m, refreshDataCmd()
+
+	case suggestionsMsg:
+		m.suggestions = msg.items
+		m.suggestIdx = 0
+		return m, nil
+
+	case tickMsg:
+		return m, tea.Batch(refreshDataCmd(), tickCmd())
+	}
+
+	if m.inputFocused {
+		m.input, tiCmd = m.input.Update(msg)
+		return m, tiCmd
+	}
+	return m, nil
+}
+
+func (m tuiModel) activeViewCount() int {
+	switch m.activeView {
+	case viewInstances:
+		return len(m.instances)
+	case viewRuns:
+		return len(m.runs)
+	case viewPolicies:
+		return len(m.policies)
+	case viewSkills:
+		return len(m.skills)
+	case viewChannels:
+		return len(m.filteredChannels())
+	case viewPods:
+		return len(m.filteredPods())
+	}
+	return 0
+}
+
+func (m tuiModel) filteredChannels() []channelRow {
+	if m.drillInstance == "" {
+		return m.channels
+	}
+	var out []channelRow
+	for _, ch := range m.channels {
+		if ch.InstanceName == m.drillInstance {
+			out = append(out, ch)
+		}
+	}
+	return out
+}
+
+func (m tuiModel) filteredPods() []podRow {
+	if m.drillInstance == "" {
+		return m.pods
+	}
+	var out []podRow
+	for _, p := range m.pods {
+		if p.Instance == m.drillInstance {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+func (m *tuiModel) addLog(s string) {
+	m.logLines = append(m.logLines, s)
+	if len(m.logLines) > maxLogLines {
+		m.logLines = m.logLines[len(m.logLines)-maxLogLines:]
+	}
+}
+
+func (m tuiModel) handleRowAction() (tea.Model, tea.Cmd) {
+	switch m.activeView {
+	case viewRuns:
+		if m.selectedRow < len(m.runs) {
+			name := m.runs[m.selectedRow].Name
+			return m, m.asyncCmd(func() (string, error) {
+				return tuiRunStatus(m.namespace, name)
+			})
+		}
+	case viewInstances:
+		if m.selectedRow < len(m.instances) {
+			inst := m.instances[m.selectedRow]
+			// Show instance detail: provider config + drill into channels.
+			model := inst.Spec.Agents.Default.Model
+			baseURL := inst.Spec.Agents.Default.BaseURL
+			if baseURL == "" {
+				baseURL = "(default)"
+			}
+			chCount := len(inst.Spec.Channels)
+			m.addLog(fmt.Sprintf("%s │ model:%s baseURL:%s channels:%d pods:%d",
+				inst.Name, model, baseURL, chCount, inst.Status.ActiveAgentPods))
+			// Drill into channels view for this instance.
+			m.drillInstance = inst.Name
+			m.activeView = viewChannels
+			m.selectedRow = 0
+			m.tableScroll = 0
+		}
+	case viewPolicies:
+		if m.selectedRow < len(m.policies) {
+			name := m.policies[m.selectedRow].Name
+			return m, m.asyncCmd(func() (string, error) {
+				return tuiListFeatures(m.namespace, name)
+			})
+		}
+	case viewChannels:
+		filtered := m.filteredChannels()
+		if m.selectedRow < len(filtered) {
+			ch := filtered[m.selectedRow]
+			detail := fmt.Sprintf("%s/%s │ secret:%s status:%s", ch.InstanceName, ch.Type, ch.SecretRef, ch.Status)
+			if ch.Message != "" {
+				detail += " msg:" + ch.Message
+			}
+			if ch.LastCheck != "" {
+				detail += " checked:" + ch.LastCheck + " ago"
+			}
+			m.addLog(detail)
+		}
+	case viewPods:
+		filtered := m.filteredPods()
+		if m.selectedRow < len(filtered) {
+			p := filtered[m.selectedRow]
+			m.addLog(fmt.Sprintf("%s │ inst:%s phase:%s node:%s ip:%s restarts:%d",
+				p.Name, p.Instance, p.Phase, p.Node, p.IP, p.Restarts))
+		}
+	}
+	return m, nil
+}
+
+func (m tuiModel) handleRowLogs() (tea.Model, tea.Cmd) {
+	switch m.activeView {
+	case viewPods:
+		filtered := m.filteredPods()
+		if m.selectedRow < len(filtered) {
+			podName := filtered[m.selectedRow].Name
+			return m, m.asyncCmd(func() (string, error) {
+				return tuiPodLogs(m.namespace, podName)
+			})
+		}
+	case viewRuns:
+		if m.selectedRow < len(m.runs) {
+			run := m.runs[m.selectedRow]
+			if run.Status.PodName != "" {
+				return m, m.asyncCmd(func() (string, error) {
+					return tuiPodLogs(m.namespace, run.Status.PodName)
+				})
+			}
+			m.addLog(tuiDimStyle.Render("No pod yet for run: " + run.Name))
+		}
+	case viewInstances:
+		if m.selectedRow < len(m.instances) {
+			inst := m.instances[m.selectedRow]
+			// Show events for the instance.
+			return m, m.asyncCmd(func() (string, error) {
+				return tuiResourceEvents(m.namespace, "ClawInstance", inst.Name)
+			})
+		}
+	case viewPolicies:
+		if m.selectedRow < len(m.policies) {
+			name := m.policies[m.selectedRow].Name
+			return m, m.asyncCmd(func() (string, error) {
+				return tuiResourceEvents(m.namespace, "ClawPolicy", name)
+			})
+		}
+	case viewSkills:
+		if m.selectedRow < len(m.skills) {
+			name := m.skills[m.selectedRow].Name
+			return m, m.asyncCmd(func() (string, error) {
+				return tuiResourceEvents(m.namespace, "SkillPack", name)
+			})
+		}
+	case viewChannels:
+		filtered := m.filteredChannels()
+		if m.selectedRow < len(filtered) {
+			ch := filtered[m.selectedRow]
+			return m, m.asyncCmd(func() (string, error) {
+				return tuiResourceEvents(m.namespace, "ClawInstance", ch.InstanceName)
+			})
+		}
+	default:
+		m.addLog(tuiDimStyle.Render("Logs not available for this view"))
+	}
+	return m, nil
+}
+
+func (m tuiModel) handleRowDescribe() (tea.Model, tea.Cmd) {
+	switch m.activeView {
+	case viewInstances:
+		if m.selectedRow < len(m.instances) {
+			name := m.instances[m.selectedRow].Name
+			return m, m.asyncCmd(func() (string, error) {
+				return tuiDescribeResource(m.namespace, "clawinstance", name)
+			})
+		}
+	case viewRuns:
+		if m.selectedRow < len(m.runs) {
+			name := m.runs[m.selectedRow].Name
+			return m, m.asyncCmd(func() (string, error) {
+				return tuiDescribeResource(m.namespace, "agentrun", name)
+			})
+		}
+	case viewPolicies:
+		if m.selectedRow < len(m.policies) {
+			name := m.policies[m.selectedRow].Name
+			return m, m.asyncCmd(func() (string, error) {
+				return tuiDescribeResource(m.namespace, "clawpolicy", name)
+			})
+		}
+	case viewSkills:
+		if m.selectedRow < len(m.skills) {
+			name := m.skills[m.selectedRow].Name
+			return m, m.asyncCmd(func() (string, error) {
+				return tuiDescribeResource(m.namespace, "skillpack", name)
+			})
+		}
+	case viewPods:
+		filtered := m.filteredPods()
+		if m.selectedRow < len(filtered) {
+			podName := filtered[m.selectedRow].Name
+			return m, m.asyncCmd(func() (string, error) {
+				return tuiDescribeResource(m.namespace, "pod", podName)
+			})
+		}
+	case viewChannels:
+		filtered := m.filteredChannels()
+		if m.selectedRow < len(filtered) {
+			ch := filtered[m.selectedRow]
+			// Describe the parent instance for the channel.
+			return m, m.asyncCmd(func() (string, error) {
+				return tuiDescribeResource(m.namespace, "clawinstance", ch.InstanceName)
+			})
+		}
+	}
+	return m, nil
+}
+
+func (m tuiModel) handleRowDelete() (tea.Model, tea.Cmd) {
+	switch m.activeView {
+	case viewInstances:
+		if m.selectedRow < len(m.instances) {
+			name := m.instances[m.selectedRow].Name
+			m.confirmDelete = true
+			m.deleteResourceKind = "instance"
+			m.deleteResourceName = name
+			ns := m.namespace
+			m.deleteFunc = func() (string, error) { return tuiDelete(ns, "instance", name) }
+		}
+	case viewRuns:
+		if m.selectedRow < len(m.runs) {
+			name := m.runs[m.selectedRow].Name
+			m.confirmDelete = true
+			m.deleteResourceKind = "run"
+			m.deleteResourceName = name
+			ns := m.namespace
+			m.deleteFunc = func() (string, error) { return tuiDelete(ns, "run", name) }
+		}
+	case viewPolicies:
+		if m.selectedRow < len(m.policies) {
+			name := m.policies[m.selectedRow].Name
+			m.confirmDelete = true
+			m.deleteResourceKind = "policy"
+			m.deleteResourceName = name
+			ns := m.namespace
+			m.deleteFunc = func() (string, error) { return tuiDelete(ns, "policy", name) }
+		}
+	case viewChannels:
+		filtered := m.filteredChannels()
+		if m.selectedRow < len(filtered) {
+			ch := filtered[m.selectedRow]
+			m.confirmDelete = true
+			m.deleteResourceKind = "channel"
+			m.deleteResourceName = ch.InstanceName + "/" + ch.Type
+			instName := ch.InstanceName
+			chType := ch.Type
+			ns := m.namespace
+			m.deleteFunc = func() (string, error) { return tuiRemoveChannel(ns, instName, chType) }
+		}
+	case viewPods:
+		filtered := m.filteredPods()
+		if m.selectedRow < len(filtered) {
+			podName := filtered[m.selectedRow].Name
+			m.confirmDelete = true
+			m.deleteResourceKind = "pod"
+			m.deleteResourceName = podName
+			ns := m.namespace
+			m.deleteFunc = func() (string, error) { return tuiDeletePod(ns, podName) }
+		}
+	}
+	return m, nil
+}
+
+func (m tuiModel) handleRunPrompt() (tea.Model, tea.Cmd) {
+	var instName string
+	switch m.activeView {
+	case viewInstances:
+		if m.selectedRow < len(m.instances) {
+			instName = m.instances[m.selectedRow].Name
+		}
+	case viewRuns:
+		if m.selectedRow < len(m.runs) {
+			instName = m.runs[m.selectedRow].Spec.InstanceRef
+		}
+	case viewChannels:
+		filtered := m.filteredChannels()
+		if m.selectedRow < len(filtered) {
+			instName = filtered[m.selectedRow].InstanceName
+		}
+	case viewPods:
+		filtered := m.filteredPods()
+		if m.selectedRow < len(filtered) {
+			instName = filtered[m.selectedRow].Instance
+		}
+	}
+	if instName == "" {
+		if len(m.instances) > 0 {
+			instName = m.instances[0].Name
+		} else {
+			m.addLog(tuiErrorStyle.Render("No instances available to run against"))
+			return m, nil
+		}
+	}
+	m.inputFocused = true
+	m.input.Focus()
+	m.input.SetValue("/run " + instName + " ")
+	m.input.CursorEnd()
+	m.lastInput = m.input.Value()
+	m.suggestions = nil
+	return m, textinput.Blink
+}
+
+// ── acceptSuggestion / updateSuggestions ─────────────────────────────────────
+
+func (m *tuiModel) acceptSuggestion() {
+	if m.suggestIdx < 0 || m.suggestIdx >= len(m.suggestions) {
+		return
+	}
+	sel := m.suggestions[m.suggestIdx]
+	current := m.input.Value()
+	parts := strings.Fields(current)
+	hasTrailingSpace := strings.HasSuffix(current, " ")
+
+	if len(parts) <= 1 && !hasTrailingSpace {
+		m.input.SetValue(sel.text + " ")
+	} else {
+		if hasTrailingSpace {
+			m.input.SetValue(strings.Join(parts, " ") + " " + sel.text + " ")
+		} else {
+			parts[len(parts)-1] = sel.text
+			m.input.SetValue(strings.Join(parts, " ") + " ")
+		}
+	}
+	m.input.CursorEnd()
+	m.suggestions = nil
+	m.suggestIdx = 0
+}
+
+func (m *tuiModel) updateSuggestions(input string) tea.Cmd {
+	m.suggestions = nil
+	m.suggestIdx = 0
+
+	if input == "" || !strings.HasPrefix(input, "/") {
+		return nil
+	}
+
+	parts := strings.Fields(input)
+	cmd := strings.ToLower(parts[0])
+
+	if len(parts) == 1 && !strings.HasSuffix(input, " ") {
+		var matches []suggestion
+		for _, s := range slashCommandSuggestions {
+			if strings.HasPrefix(s.text, cmd) && s.text != cmd {
+				matches = append(matches, s)
+			}
+		}
+		m.suggestions = matches
+		return nil
+	}
+
+	argIdx := len(parts) - 1
+	if strings.HasSuffix(input, " ") {
+		argIdx = len(parts)
+	}
+	prefix := ""
+	if argIdx < len(parts) {
+		prefix = strings.ToLower(parts[argIdx])
+	}
+	ns := m.namespace
+
+	switch cmd {
+	case "/ns", "/namespace":
+		if argIdx == 1 {
+			return m.fetchSuggestionsAsync(func() []suggestion { return fetchNamespaceSuggestions(prefix) })
+		}
+	case "/run":
+		if argIdx == 1 {
+			return m.fetchSuggestionsAsync(func() []suggestion { return fetchInstanceSuggestions(ns, prefix) })
+		}
+	case "/abort":
+		if argIdx == 1 {
+			return m.fetchSuggestionsAsync(func() []suggestion { return fetchRunSuggestions(ns, prefix, true) })
+		}
+	case "/status":
+		if argIdx == 1 {
+			return m.fetchSuggestionsAsync(func() []suggestion { return fetchRunSuggestions(ns, prefix, false) })
+		}
+	case "/features":
+		if argIdx == 1 {
+			return m.fetchSuggestionsAsync(func() []suggestion { return fetchPolicySuggestions(ns, prefix) })
+		}
+	case "/channels", "/pods":
+		if argIdx == 1 {
+			return m.fetchSuggestionsAsync(func() []suggestion { return fetchInstanceSuggestions(ns, prefix) })
+		}
+	case "/channel":
+		if argIdx == 1 {
+			return m.fetchSuggestionsAsync(func() []suggestion { return fetchInstanceSuggestions(ns, prefix) })
+		}
+		if argIdx == 2 {
+			var matches []suggestion
+			for _, s := range channelTypeSuggestions {
+				if prefix == "" || strings.HasPrefix(s.text, prefix) {
+					matches = append(matches, s)
+				}
+			}
+			m.suggestions = matches
+			return nil
+		}
+	case "/rmchannel":
+		if argIdx == 1 {
+			return m.fetchSuggestionsAsync(func() []suggestion { return fetchInstanceSuggestions(ns, prefix) })
+		}
+		if argIdx == 2 {
+			var matches []suggestion
+			for _, s := range channelTypeSuggestions {
+				if prefix == "" || strings.HasPrefix(s.text, prefix) {
+					matches = append(matches, s)
+				}
+			}
+			m.suggestions = matches
+			return nil
+		}
+	case "/provider":
+		if argIdx == 1 {
+			return m.fetchSuggestionsAsync(func() []suggestion { return fetchInstanceSuggestions(ns, prefix) })
+		}
+		if argIdx == 2 {
+			var matches []suggestion
+			for _, s := range providerSuggestions {
+				if prefix == "" || strings.HasPrefix(s.text, prefix) {
+					matches = append(matches, s)
+				}
+			}
+			m.suggestions = matches
+			return nil
+		}
+	case "/baseurl":
+		if argIdx == 1 {
+			return m.fetchSuggestionsAsync(func() []suggestion { return fetchInstanceSuggestions(ns, prefix) })
+		}
+	case "/delete":
+		if argIdx == 1 {
+			var matches []suggestion
+			for _, s := range deleteTypeSuggestions {
+				if prefix == "" || strings.HasPrefix(s.text, prefix) {
+					matches = append(matches, s)
+				}
+			}
+			m.suggestions = matches
+			return nil
+		}
+		if argIdx == 2 && len(parts) >= 2 {
+			rt := strings.ToLower(parts[1])
+			return m.fetchSuggestionsAsync(func() []suggestion { return fetchDeleteTargetSuggestions(ns, rt, prefix) })
+		}
+	}
+	return nil
+}
+
+func (m *tuiModel) fetchSuggestionsAsync(fn func() []suggestion) tea.Cmd {
+	return func() tea.Msg { return suggestionsMsg{items: fn()} }
+}
+
+// ── K8s suggestion fetchers ──────────────────────────────────────────────────
+
+func fetchNamespaceSuggestions(prefix string) []suggestion {
+	if k8sClient == nil {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	var nsList corev1.NamespaceList
+	if err := k8sClient.List(ctx, &nsList); err != nil {
+		return nil
+	}
+	var out []suggestion
+	for _, ns := range nsList.Items {
+		if prefix == "" || strings.HasPrefix(strings.ToLower(ns.Name), prefix) {
+			out = append(out, suggestion{text: ns.Name, desc: string(ns.Status.Phase)})
+		}
+	}
+	return out
+}
+
+func fetchInstanceSuggestions(ns, prefix string) []suggestion {
+	if k8sClient == nil {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	var list k8sclawv1alpha1.ClawInstanceList
+	if err := k8sClient.List(ctx, &list, client.InNamespace(ns)); err != nil {
+		return nil
+	}
+	var out []suggestion
+	for _, inst := range list.Items {
+		if prefix == "" || strings.HasPrefix(strings.ToLower(inst.Name), prefix) {
+			phase := string(inst.Status.Phase)
+			if phase == "" {
+				phase = "-"
+			}
+			out = append(out, suggestion{text: inst.Name, desc: phase})
+		}
+	}
+	return out
+}
+
+func fetchRunSuggestions(ns, prefix string, activeOnly bool) []suggestion {
+	if k8sClient == nil {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	var list k8sclawv1alpha1.AgentRunList
+	if err := k8sClient.List(ctx, &list, client.InNamespace(ns)); err != nil {
+		return nil
+	}
+	var out []suggestion
+	for _, run := range list.Items {
+		phase := string(run.Status.Phase)
+		if phase == "" {
+			phase = "Pending"
+		}
+		if activeOnly && (phase == "Completed" || phase == "Failed") {
+			continue
+		}
+		if prefix == "" || strings.HasPrefix(strings.ToLower(run.Name), prefix) {
+			out = append(out, suggestion{text: run.Name, desc: phase})
+		}
+	}
+	return out
+}
+
+func fetchPolicySuggestions(ns, prefix string) []suggestion {
+	if k8sClient == nil {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	var list k8sclawv1alpha1.ClawPolicyList
+	if err := k8sClient.List(ctx, &list, client.InNamespace(ns)); err != nil {
+		return nil
+	}
+	var out []suggestion
+	for _, pol := range list.Items {
+		desc := fmt.Sprintf("%d bindings", pol.Status.BoundInstances)
+		if prefix == "" || strings.HasPrefix(strings.ToLower(pol.Name), prefix) {
+			out = append(out, suggestion{text: pol.Name, desc: desc})
+		}
+	}
+	return out
+}
+
+func fetchDeleteTargetSuggestions(ns, resourceType, prefix string) []suggestion {
+	switch resourceType {
+	case "instance", "inst":
+		return fetchInstanceSuggestions(ns, prefix)
+	case "run":
+		return fetchRunSuggestions(ns, prefix, false)
+	case "policy", "pol":
+		return fetchPolicySuggestions(ns, prefix)
+	}
+	return nil
+}
+
+// ── Command handler ──────────────────────────────────────────────────────────
+
+func (m tuiModel) handleCommand(input string) (tea.Model, tea.Cmd) {
+	parts := strings.Fields(input)
+	cmd := strings.ToLower(parts[0])
+	args := parts[1:]
+
+	// Return to table mode after command.
+	m.inputFocused = false
+	m.input.Blur()
+
+	switch cmd {
+	case "/quit", "/q", "/exit":
+		m.quitting = true
+		return m, tea.Quit
+
+	case "/help", "/h", "/", "/?":
+		m.showModal = true
+		return m, nil
+
+	case "/onboard":
+		return m.startOnboardWizard()
+
+	case "/instances", "/inst":
+		m.activeView = viewInstances
+		m.selectedRow = 0
+		m.addLog("Switched to Instances view")
+		return m, nil
+
+	case "/runs":
+		m.activeView = viewRuns
+		m.selectedRow = 0
+		m.addLog("Switched to Runs view")
+		return m, nil
+
+	case "/policies", "/pol":
+		m.activeView = viewPolicies
+		m.selectedRow = 0
+		m.addLog("Switched to Policies view")
+		return m, nil
+
+	case "/skills":
+		m.activeView = viewSkills
+		m.selectedRow = 0
+		m.addLog("Switched to Skills view")
+		return m, nil
+
+	case "/channels", "/ch":
+		m.activeView = viewChannels
+		m.selectedRow = 0
+		m.tableScroll = 0
+		if len(args) > 0 {
+			m.drillInstance = args[0]
+			m.addLog(fmt.Sprintf("Channels for instance: %s", args[0]))
+		} else {
+			m.drillInstance = ""
+			m.addLog("Switched to Channels view (all instances)")
+		}
+		return m, nil
+
+	case "/pods":
+		m.activeView = viewPods
+		m.selectedRow = 0
+		m.tableScroll = 0
+		if len(args) > 0 {
+			m.drillInstance = args[0]
+			m.addLog(fmt.Sprintf("Pods for instance: %s", args[0]))
+		} else {
+			m.drillInstance = ""
+			m.addLog("Switched to Pods view (all instances)")
+		}
+		return m, nil
+
+	case "/channel":
+		if len(args) < 3 {
+			m.addLog(tuiErrorStyle.Render("Usage: /channel <instance> <type> <secret-name>"))
+			return m, nil
+		}
+		inst, chType, secret := args[0], args[1], args[2]
+		return m, m.asyncCmd(func() (string, error) { return tuiAddChannel(m.namespace, inst, chType, secret) })
+
+	case "/rmchannel":
+		if len(args) < 2 {
+			m.addLog(tuiErrorStyle.Render("Usage: /rmchannel <instance> <channel-type>"))
+			return m, nil
+		}
+		return m, m.asyncCmd(func() (string, error) { return tuiRemoveChannel(m.namespace, args[0], args[1]) })
+
+	case "/provider":
+		if len(args) < 3 {
+			m.addLog(tuiErrorStyle.Render("Usage: /provider <instance> <provider> <model>"))
+			return m, nil
+		}
+		inst, prov, model := args[0], args[1], args[2]
+		return m, m.asyncCmd(func() (string, error) { return tuiSetProvider(m.namespace, inst, prov, model) })
+
+	case "/baseurl":
+		if len(args) < 2 {
+			m.addLog(tuiErrorStyle.Render("Usage: /baseurl <instance> <url>"))
+			return m, nil
+		}
+		return m, m.asyncCmd(func() (string, error) { return tuiSetBaseURL(m.namespace, args[0], args[1]) })
+
+	case "/run":
+		if len(args) < 2 {
+			m.addLog(tuiErrorStyle.Render("Usage: /run <instance> <task>  (or press R to quick-run)"))
+			return m, nil
+		}
+		instance := args[0]
+		task := strings.Join(args[1:], " ")
+		return m, m.asyncCmd(func() (string, error) { return tuiCreateRun(m.namespace, instance, task) })
+
+	case "/abort":
+		if len(args) < 1 {
+			m.addLog(tuiErrorStyle.Render("Usage: /abort <run-name>"))
+			return m, nil
+		}
+		return m, m.asyncCmd(func() (string, error) { return tuiAbortRun(m.namespace, args[0]) })
+
+	case "/status":
+		if len(args) < 1 {
+			return m, m.asyncCmd(func() (string, error) { return tuiClusterStatus(m.namespace) })
+		}
+		return m, m.asyncCmd(func() (string, error) { return tuiRunStatus(m.namespace, args[0]) })
+
+	case "/features":
+		if len(args) < 1 {
+			m.addLog(tuiErrorStyle.Render("Usage: /features <policy-name>"))
+			return m, nil
+		}
+		return m, m.asyncCmd(func() (string, error) { return tuiListFeatures(m.namespace, args[0]) })
+
+	case "/delete":
+		if len(args) < 2 {
+			m.addLog(tuiErrorStyle.Render("Usage: /delete <type> <name>"))
+			return m, nil
+		}
+		return m, m.asyncCmd(func() (string, error) { return tuiDelete(m.namespace, args[0], args[1]) })
+
+	case "/namespace", "/ns":
+		if len(args) < 1 {
+			m.addLog(fmt.Sprintf("Namespace: %s", m.namespace))
+			return m, nil
+		}
+		m.namespace = args[0]
+		m.addLog(tuiSuccessStyle.Render(fmt.Sprintf("✓ Switched to namespace: %s", m.namespace)))
+		return m, refreshDataCmd()
+
+	default:
+		m.addLog(tuiErrorStyle.Render(fmt.Sprintf("Unknown command: %s — press ? for help", cmd)))
+	}
+
+	return m, nil
+}
+
+func (m *tuiModel) asyncCmd(fn func() (string, error)) tea.Cmd {
+	return func() tea.Msg {
+		out, err := fn()
+		return cmdResultMsg{output: out, err: err}
+	}
+}
+
+func (m tuiModel) startOnboardWizard() (tea.Model, tea.Cmd) {
+	if !m.connected {
+		m.addLog(tuiErrorStyle.Render("✗ Not connected to cluster — cannot onboard"))
+		return m, nil
+	}
+	m.wizard.reset()
+	m.wizard.active = true
+	m.wizard.step = wizStepCheckCluster
+	m.inputFocused = true
+	m.input.Focus()
+	m.input.SetValue("")
+	m.input.Placeholder = ""
+	m.suggestions = nil
+	return m.advanceWizard("")
+}
+
+// ── View ─────────────────────────────────────────────────────────────────────
+
+func (m tuiModel) View() string {
+	if m.quitting {
+		return ""
+	}
+	if !m.ready {
+		return "\n  Loading..."
+	}
+
+	// Layout:
+	//  1. Header bar          (1 line)
+	//  2. Tab bar / wizard    (dynamic)
+	//  3. Input               (1 line)
+	//  4. Status bar          (1 line)
+
+	// Wizard mode: full-screen wizard panel.
+	if m.wizard.active {
+		inputH := 1
+		fixedH := 1 + 1 + inputH + 1 // header+sep+input+statusbar
+		wizH := m.height - fixedH
+		if wizH < 3 {
+			wizH = 3
+		}
+
+		var view strings.Builder
+		view.WriteString(m.renderHeader())
+		view.WriteString("\n")
+		view.WriteString(m.renderWizardPanel(wizH))
+		view.WriteString(tuiSepStyle.Render(strings.Repeat("─", m.width)))
+		view.WriteString("\n")
+		view.WriteString(" " + m.input.View())
+		view.WriteString("\n")
+		view.WriteString(m.renderStatusBar())
+		return view.String()
+	}
+
+	// Normal layout:
+	//  1. Header bar          (1 line)
+	//  2. Tab bar             (1 line)
+	//  3. Column headers      (1 line)
+	//  4. Table rows          (dynamic)
+	//  5. Separator           (1 line)
+	//  6. Log pane            (logH lines)
+	//  7. Separator           (1 line)
+	//  8. Input + suggestions (1-N lines)
+	//  9. Status bar          (1 line)
+
+	logH := 5
+	inputH := 1
+	suggestH := 0
+	if len(m.suggestions) > 0 {
+		suggestH = min(len(m.suggestions), 6) + 1
+	}
+	fixedH := 1 + 1 + 1 + 1 + logH + 1 + inputH + suggestH + 1 // header+tabs+colhdr+sep+log+sep+input+suggest+statusbar
+	tableH := m.height - fixedH
+	if tableH < 1 {
+		tableH = 1
+	}
+
+	var view strings.Builder
+
+	// 1. Header bar
+	view.WriteString(m.renderHeader())
+	view.WriteString("\n")
+
+	// 2. Tab bar
+	view.WriteString(m.renderTabBar())
+	view.WriteString("\n")
+
+	// 3-4. Table
+	view.WriteString(m.renderTable(tableH))
+
+	// 5. Separator
+	view.WriteString(tuiSepStyle.Render(strings.Repeat("─", m.width)))
+	view.WriteString("\n")
+
+	// 6. Log pane
+	view.WriteString(m.renderLog(logH))
+
+	// 7. Separator
+	view.WriteString(tuiSepStyle.Render(strings.Repeat("─", m.width)))
+	view.WriteString("\n")
+
+	// 8. Suggestions + Input
+	if len(m.suggestions) > 0 {
+		view.WriteString(m.renderSuggestions())
+	}
+	if m.inputFocused {
+		view.WriteString(" " + m.input.View())
+	} else {
+		view.WriteString(tuiDimStyle.Render(" Press / to enter a command"))
+	}
+	view.WriteString("\n")
+
+	// 9. Status bar
+	view.WriteString(m.renderStatusBar())
+
+	base := view.String()
+	if m.confirmDelete {
+		return m.renderDeleteConfirm(base)
+	}
+	if m.showModal {
+		return m.renderModalOverlay(base)
+	}
+	return base
+}
+
+func (m tuiModel) renderHeader() string {
+	logo := tuiBannerStyle.Render(" K8sClaw ")
+	connIcon := tuiSuccessStyle.Render(" ●")
+	if !m.connected {
+		connIcon = tuiErrorStyle.Render(" ●")
+	}
+
+	ns := tuiDimStyle.Render(" ns:") + lipgloss.NewStyle().Foreground(lipgloss.Color("#F5C2E7")).Render(m.namespace)
+
+	counts := tuiDimStyle.Render(" │ ") +
+		tuiCountStyle.Render(fmt.Sprintf("%d", len(m.instances))) + tuiDimStyle.Render(" inst ") +
+		tuiCountStyle.Render(fmt.Sprintf("%d", len(m.runs))) + tuiDimStyle.Render(" runs ") +
+		tuiCountStyle.Render(fmt.Sprintf("%d", len(m.policies))) + tuiDimStyle.Render(" pol ") +
+		tuiCountStyle.Render(fmt.Sprintf("%d", len(m.channels))) + tuiDimStyle.Render(" ch ") +
+		tuiCountStyle.Render(fmt.Sprintf("%d", len(m.pods))) + tuiDimStyle.Render(" pods")
+
+	// Pad to full width.
+	left := logo + connIcon + ns + counts
+	w := lipgloss.Width(left)
+	pad := ""
+	if m.width > w {
+		pad = strings.Repeat(" ", m.width-w)
+	}
+	return lipgloss.NewStyle().Background(lipgloss.Color("#0F0F23")).Render(left + pad)
+}
+
+func (m tuiModel) renderTabBar() string {
+	var tabs strings.Builder
+	for i, name := range viewNames {
+		label := fmt.Sprintf(" %d:%s ", i+1, name)
+		if tuiViewKind(i) == m.activeView {
+			tabs.WriteString(tuiTabActiveStyle.Render(label))
+		} else {
+			tabs.WriteString(tuiTabStyle.Render(label))
+		}
+	}
+	// Show drill-down filter.
+	if m.drillInstance != "" && (m.activeView == viewChannels || m.activeView == viewPods) {
+		tabs.WriteString(tuiDimStyle.Render(" "))
+		tabs.WriteString(lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#F5C2E7")).
+			Background(lipgloss.Color("#0F0F23")).
+			Render("⊳ " + m.drillInstance))
+	}
+	left := tabs.String()
+	w := lipgloss.Width(left)
+	pad := ""
+	if m.width > w {
+		pad = strings.Repeat(" ", m.width-w)
+	}
+	return lipgloss.NewStyle().Background(lipgloss.Color("#0F0F23")).Render(left + pad)
+}
+
+func (m tuiModel) renderTable(tableH int) string {
+	var b strings.Builder
+
+	switch m.activeView {
+	case viewInstances:
+		b.WriteString(m.renderInstancesTable(tableH))
+	case viewRuns:
+		b.WriteString(m.renderRunsTable(tableH))
+	case viewPolicies:
+		b.WriteString(m.renderPoliciesTable(tableH))
+	case viewSkills:
+		b.WriteString(m.renderSkillsTable(tableH))
+	case viewChannels:
+		b.WriteString(m.renderChannelsTable(tableH))
+	case viewPods:
+		b.WriteString(m.renderPodsTable(tableH))
+	}
+
+	return b.String()
+}
+
+func (m tuiModel) renderInstancesTable(tableH int) string {
+	var b strings.Builder
+
+	header := fmt.Sprintf(" %-22s %-12s %-20s %-8s %-8s", "NAME", "PHASE", "CHANNELS", "PODS", "AGE")
+	b.WriteString(tuiColHeaderStyle.Render(padRight(header, m.width)))
+	b.WriteString("\n")
+
+	if len(m.instances) == 0 {
+		b.WriteString(m.renderEmptyTable(tableH-1, "No instances — press O to onboard or type /onboard"))
+		return b.String()
+	}
+
+	for i := 0; i < tableH-1; i++ {
+		idx := i + m.tableScroll
+		if idx >= len(m.instances) {
+			b.WriteString(strings.Repeat(" ", m.width) + "\n")
+			continue
+		}
+		inst := m.instances[idx]
+		age := shortDuration(time.Since(inst.CreationTimestamp.Time))
+
+		channels := make([]string, 0)
+		for _, ch := range inst.Status.Channels {
+			channels = append(channels, ch.Type)
+		}
+		chStr := strings.Join(channels, ",")
+		if chStr == "" {
+			chStr = "-"
+		}
+
+		row := fmt.Sprintf(" %-22s %-12s %-20s %-8d %-8s",
+			truncate(inst.Name, 22), inst.Status.Phase, truncate(chStr, 20), inst.Status.ActiveAgentPods, age)
+
+		b.WriteString(m.styleRow(idx, row))
+		b.WriteString("\n")
+	}
+	return b.String()
+}
+
+func (m tuiModel) renderRunsTable(tableH int) string {
+	var b strings.Builder
+
+	header := fmt.Sprintf(" %-26s %-18s %-12s %-22s %-8s", "NAME", "INSTANCE", "PHASE", "POD", "AGE")
+	b.WriteString(tuiColHeaderStyle.Render(padRight(header, m.width)))
+	b.WriteString("\n")
+
+	if len(m.runs) == 0 {
+		b.WriteString(m.renderEmptyTable(tableH-1, "No runs — try: /run <instance> <task>"))
+		return b.String()
+	}
+
+	for i := 0; i < tableH-1; i++ {
+		idx := i + m.tableScroll
+		if idx >= len(m.runs) {
+			b.WriteString(strings.Repeat(" ", m.width) + "\n")
+			continue
+		}
+		run := m.runs[idx]
+		age := shortDuration(time.Since(run.CreationTimestamp.Time))
+		pod := run.Status.PodName
+		if pod == "" {
+			pod = "-"
+		}
+		phase := string(run.Status.Phase)
+		if phase == "" {
+			phase = "Pending"
+		}
+
+		// Build row without phase (we'll colorize phase separately).
+		nameCol := fmt.Sprintf(" %-26s %-18s ", truncate(run.Name, 26), truncate(run.Spec.InstanceRef, 18))
+		phaseCol := fmt.Sprintf("%-12s ", phase)
+		restCol := fmt.Sprintf("%-22s %-8s", truncate(pod, 22), age)
+
+		if idx == m.selectedRow {
+			b.WriteString(tuiRowSelectedStyle.Render(padRight(nameCol+phaseCol+restCol, m.width)))
+		} else {
+			style := tuiRowStyle
+			if idx%2 == 1 {
+				style = tuiRowAltStyle
+			}
+			// Colorize phase.
+			switch phase {
+			case "Running":
+				phaseCol = tuiRunningStyle.Render(fmt.Sprintf("%-12s ", phase))
+			case "Completed":
+				phaseCol = tuiSuccessStyle.Render(fmt.Sprintf("%-12s ", phase))
+			case "Failed", "Timeout":
+				phaseCol = tuiErrorStyle.Render(fmt.Sprintf("%-12s ", phase))
+			default:
+				phaseCol = tuiDimStyle.Render(fmt.Sprintf("%-12s ", phase))
+			}
+			b.WriteString(style.Render(nameCol) + phaseCol + style.Render(restCol))
+			// Pad remaining.
+			renderedW := lipgloss.Width(style.Render(nameCol)) + lipgloss.Width(phaseCol) + lipgloss.Width(style.Render(restCol))
+			if m.width > renderedW {
+				b.WriteString(style.Render(strings.Repeat(" ", m.width-renderedW)))
+			}
+		}
+		b.WriteString("\n")
+	}
+	return b.String()
+}
+
+func (m tuiModel) renderPoliciesTable(tableH int) string {
+	var b strings.Builder
+
+	header := fmt.Sprintf(" %-26s %-18s %-8s", "NAME", "BOUND INSTANCES", "AGE")
+	b.WriteString(tuiColHeaderStyle.Render(padRight(header, m.width)))
+	b.WriteString("\n")
+
+	if len(m.policies) == 0 {
+		b.WriteString(m.renderEmptyTable(tableH-1, "No policies found"))
+		return b.String()
+	}
+
+	for i := 0; i < tableH-1; i++ {
+		idx := i + m.tableScroll
+		if idx >= len(m.policies) {
+			b.WriteString(strings.Repeat(" ", m.width) + "\n")
+			continue
+		}
+		pol := m.policies[idx]
+		age := shortDuration(time.Since(pol.CreationTimestamp.Time))
+		row := fmt.Sprintf(" %-26s %-18d %-8s", truncate(pol.Name, 26), pol.Status.BoundInstances, age)
+		b.WriteString(m.styleRow(idx, row))
+		b.WriteString("\n")
+	}
+	return b.String()
+}
+
+func (m tuiModel) renderSkillsTable(tableH int) string {
+	var b strings.Builder
+
+	header := fmt.Sprintf(" %-26s %-10s %-26s %-8s", "NAME", "SKILLS", "CONFIGMAP", "AGE")
+	b.WriteString(tuiColHeaderStyle.Render(padRight(header, m.width)))
+	b.WriteString("\n")
+
+	if len(m.skills) == 0 {
+		b.WriteString(m.renderEmptyTable(tableH-1, "No skill packs found"))
+		return b.String()
+	}
+
+	for i := 0; i < tableH-1; i++ {
+		idx := i + m.tableScroll
+		if idx >= len(m.skills) {
+			b.WriteString(strings.Repeat(" ", m.width) + "\n")
+			continue
+		}
+		sk := m.skills[idx]
+		age := shortDuration(time.Since(sk.CreationTimestamp.Time))
+		cm := sk.Status.ConfigMapName
+		if cm == "" {
+			cm = "-"
+		}
+		row := fmt.Sprintf(" %-26s %-10d %-26s %-8s", truncate(sk.Name, 26), len(sk.Spec.Skills), truncate(cm, 26), age)
+		b.WriteString(m.styleRow(idx, row))
+		b.WriteString("\n")
+	}
+	return b.String()
+}
+
+func (m tuiModel) renderChannelsTable(tableH int) string {
+	var b strings.Builder
+
+	filterLabel := ""
+	if m.drillInstance != "" {
+		filterLabel = " [" + m.drillInstance + "]"
+	}
+	header := fmt.Sprintf(" %-20s %-12s %-22s %-14s %-10s %-20s", "INSTANCE"+filterLabel, "TYPE", "SECRET", "STATUS", "CHECKED", "MESSAGE")
+	b.WriteString(tuiColHeaderStyle.Render(padRight(header, m.width)))
+	b.WriteString("\n")
+
+	filtered := m.filteredChannels()
+	if len(filtered) == 0 {
+		msg := "No channels — try: /channel <instance> <type> <secret>"
+		if m.drillInstance != "" {
+			msg = fmt.Sprintf("No channels on %s — try: /channel %s telegram my-secret", m.drillInstance, m.drillInstance)
+		}
+		b.WriteString(m.renderEmptyTable(tableH-1, msg))
+		return b.String()
+	}
+
+	for i := 0; i < tableH-1; i++ {
+		idx := i + m.tableScroll
+		if idx >= len(filtered) {
+			b.WriteString(strings.Repeat(" ", m.width) + "\n")
+			continue
+		}
+		ch := filtered[idx]
+		checked := ch.LastCheck
+		if checked == "" {
+			checked = "-"
+		}
+		msg := ch.Message
+		if msg == "" {
+			msg = "-"
+		}
+
+		statusCol := fmt.Sprintf("%-14s ", ch.Status)
+		nameCol := fmt.Sprintf(" %-20s %-12s %-22s ", truncate(ch.InstanceName, 20), ch.Type, truncate(ch.SecretRef, 22))
+		restCol := fmt.Sprintf("%-10s %-20s", checked, truncate(msg, 20))
+
+		if idx == m.selectedRow {
+			b.WriteString(tuiRowSelectedStyle.Render(padRight(nameCol+statusCol+restCol, m.width)))
+		} else {
+			style := tuiRowStyle
+			if idx%2 == 1 {
+				style = tuiRowAltStyle
+			}
+			switch ch.Status {
+			case "Connected":
+				statusCol = tuiSuccessStyle.Render(fmt.Sprintf("%-14s ", ch.Status))
+			case "Error", "Disconnected":
+				statusCol = tuiErrorStyle.Render(fmt.Sprintf("%-14s ", ch.Status))
+			default:
+				statusCol = tuiDimStyle.Render(fmt.Sprintf("%-14s ", ch.Status))
+			}
+			b.WriteString(style.Render(nameCol) + statusCol + style.Render(restCol))
+			renderedW := lipgloss.Width(style.Render(nameCol)) + lipgloss.Width(statusCol) + lipgloss.Width(style.Render(restCol))
+			if m.width > renderedW {
+				b.WriteString(style.Render(strings.Repeat(" ", m.width-renderedW)))
+			}
+		}
+		b.WriteString("\n")
+	}
+	return b.String()
+}
+
+func (m tuiModel) renderPodsTable(tableH int) string {
+	var b strings.Builder
+
+	filterLabel := ""
+	if m.drillInstance != "" {
+		filterLabel = " [" + m.drillInstance + "]"
+	}
+	header := fmt.Sprintf(" %-30s %-20s %-12s %-16s %-16s %-10s %-8s", "NAME"+filterLabel, "INSTANCE", "PHASE", "NODE", "IP", "RESTARTS", "AGE")
+	b.WriteString(tuiColHeaderStyle.Render(padRight(header, m.width)))
+	b.WriteString("\n")
+
+	filtered := m.filteredPods()
+	if len(filtered) == 0 {
+		msg := "No agent pods running"
+		if m.drillInstance != "" {
+			msg = fmt.Sprintf("No pods for %s", m.drillInstance)
+		}
+		b.WriteString(m.renderEmptyTable(tableH-1, msg))
+		return b.String()
+	}
+
+	for i := 0; i < tableH-1; i++ {
+		idx := i + m.tableScroll
+		if idx >= len(filtered) {
+			b.WriteString(strings.Repeat(" ", m.width) + "\n")
+			continue
+		}
+		p := filtered[idx]
+		node := p.Node
+		if node == "" {
+			node = "-"
+		}
+		ip := p.IP
+		if ip == "" {
+			ip = "-"
+		}
+
+		phaseCol := fmt.Sprintf("%-12s ", p.Phase)
+		nameCol := fmt.Sprintf(" %-30s %-20s ", truncate(p.Name, 30), truncate(p.Instance, 20))
+		restCol := fmt.Sprintf("%-16s %-16s %-10d %-8s", truncate(node, 16), ip, p.Restarts, p.Age)
+
+		if idx == m.selectedRow {
+			b.WriteString(tuiRowSelectedStyle.Render(padRight(nameCol+phaseCol+restCol, m.width)))
+		} else {
+			style := tuiRowStyle
+			if idx%2 == 1 {
+				style = tuiRowAltStyle
+			}
+			switch p.Phase {
+			case "Running":
+				phaseCol = tuiRunningStyle.Render(fmt.Sprintf("%-12s ", p.Phase))
+			case "Succeeded":
+				phaseCol = tuiSuccessStyle.Render(fmt.Sprintf("%-12s ", p.Phase))
+			case "Failed":
+				phaseCol = tuiErrorStyle.Render(fmt.Sprintf("%-12s ", p.Phase))
+			default:
+				phaseCol = tuiDimStyle.Render(fmt.Sprintf("%-12s ", p.Phase))
+			}
+			b.WriteString(style.Render(nameCol) + phaseCol + style.Render(restCol))
+			renderedW := lipgloss.Width(style.Render(nameCol)) + lipgloss.Width(phaseCol) + lipgloss.Width(style.Render(restCol))
+			if m.width > renderedW {
+				b.WriteString(style.Render(strings.Repeat(" ", m.width-renderedW)))
+			}
+		}
+		b.WriteString("\n")
+	}
+	return b.String()
+}
+
+func (m tuiModel) renderEmptyTable(rows int, msg string) string {
+	var b strings.Builder
+	mid := rows / 2
+	for i := 0; i < rows; i++ {
+		if i == mid {
+			centered := tuiDimStyle.Render(msg)
+			pad := (m.width - lipgloss.Width(centered)) / 2
+			if pad < 0 {
+				pad = 0
+			}
+			b.WriteString(strings.Repeat(" ", pad) + centered)
+		}
+		b.WriteString("\n")
+	}
+	return b.String()
+}
+
+func (m tuiModel) styleRow(idx int, content string) string {
+	padded := padRight(content, m.width)
+	if idx == m.selectedRow {
+		return tuiRowSelectedStyle.Render(padded)
+	}
+	if idx%2 == 1 {
+		return tuiRowAltStyle.Render(padded)
+	}
+	return tuiRowStyle.Render(padded)
+}
+
+func (m tuiModel) renderLog(logH int) string {
+	var b strings.Builder
+	title := tuiLogBorderStyle.Render("─── Log ")
+	titleW := lipgloss.Width(title)
+	if m.width > titleW {
+		title += tuiSepStyle.Render(strings.Repeat("─", m.width-titleW))
+	}
+	b.WriteString(title + "\n")
+
+	start := len(m.logLines) - (logH - 1)
+	if start < 0 {
+		start = 0
+	}
+	visible := m.logLines[start:]
+	for i := 0; i < logH-1; i++ {
+		if i < len(visible) {
+			b.WriteString(" " + visible[i])
+		}
+		b.WriteString("\n")
+	}
+	return b.String()
+}
+
+func (m tuiModel) renderSuggestions() string {
+	maxShow := 6
+	items := m.suggestions
+	if len(items) > maxShow {
+		items = items[:maxShow]
+	}
+
+	var b strings.Builder
+	for i, s := range items {
+		nameStyle := tuiSuggestStyle
+		descStyle := tuiSuggestDescStyle
+		if i == m.suggestIdx {
+			nameStyle = tuiSuggestSelectedStyle
+			descStyle = tuiSuggestDescSelectedStyle
+		}
+		line := nameStyle.Render(fmt.Sprintf(" %-22s", s.text)) + descStyle.Render(fmt.Sprintf(" %s ", s.desc))
+		b.WriteString(" " + line + "\n")
+	}
+	if len(m.suggestions) > maxShow {
+		b.WriteString(tuiDimStyle.Render(fmt.Sprintf("  +%d more", len(m.suggestions)-maxShow)) + "\n")
+	}
+	return b.String()
+}
+
+func (m tuiModel) renderStatusBar() string {
+	var keys []string
+	if m.wizard.active {
+		keys = []string{"Esc", "cancel wizard", "Enter", "submit"}
+	} else if m.inputFocused {
+		keys = []string{"Esc", "exit input", "Tab", "complete", "Enter", "execute"}
+	} else if m.confirmDelete {
+		keys = []string{"y", "confirm delete", "any", "cancel"}
+	} else {
+		keys = []string{
+			"1-6", "views",
+			"j/k", "navigate",
+			"Enter", "detail",
+			"Esc", "back",
+			"l", "logs",
+			"d", "describe",
+			"R", "run",
+			"O", "onboard",
+			"x", "delete",
+			"r", "refresh",
+			"/", "command",
+			"?", "help",
+			"q", "quit",
+		}
+	}
+
+	var sb strings.Builder
+	for i := 0; i < len(keys)-1; i += 2 {
+		sb.WriteString(tuiStatusKeyStyle.Render(" "+keys[i]+" "))
+		sb.WriteString(tuiStatusBarStyle.Render(keys[i+1]+" "))
+	}
+
+	left := sb.String()
+	w := lipgloss.Width(left)
+	pad := ""
+	if m.width > w {
+		pad = strings.Repeat(" ", m.width-w)
+	}
+	return lipgloss.NewStyle().Background(lipgloss.Color("#181825")).Render(left + pad)
+}
+
+func (m tuiModel) renderDeleteConfirm(base string) string {
+	var content strings.Builder
+	content.WriteString(tuiModalTitleStyle.Render("  ⚠  Confirm Delete"))
+	content.WriteString("\n\n")
+	content.WriteString(fmt.Sprintf("  Delete %s %s?\n\n",
+		tuiModalCmdStyle.Render(m.deleteResourceKind),
+		tuiModalCmdStyle.Render(m.deleteResourceName)))
+	content.WriteString(fmt.Sprintf("  %s to confirm, any other key to cancel",
+		tuiStatusKeyStyle.Render(" y ")))
+
+	modal := tuiModalBorderStyle.Render(content.String())
+	lines := strings.Split(base, "\n")
+	modalLines := strings.Split(modal, "\n")
+
+	startRow := (len(lines) - len(modalLines)) / 2
+	if startRow < 1 {
+		startRow = 1
+	}
+	for i, ml := range modalLines {
+		row := startRow + i
+		if row >= 0 && row < len(lines) {
+			mw := lipgloss.Width(ml)
+			pad := (m.width - mw) / 2
+			if pad < 0 {
+				pad = 0
+			}
+			lines[row] = strings.Repeat(" ", pad) + ml
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+func (m tuiModel) renderModalOverlay(base string) string {
+	var content strings.Builder
+	content.WriteString(tuiModalTitleStyle.Render("  ⌨  Commands"))
+	content.WriteString("\n\n")
+
+	for _, c := range tuiCommands {
+		content.WriteString(fmt.Sprintf("  %-26s %s\n",
+			tuiModalCmdStyle.Render(c.cmd),
+			tuiModalDescStyle.Render(c.desc)))
+	}
+
+	content.WriteString("\n")
+	content.WriteString(tuiDimStyle.Render("  Press any key to dismiss"))
+
+	modal := tuiModalBorderStyle.Render(content.String())
+	lines := strings.Split(base, "\n")
+	modalLines := strings.Split(modal, "\n")
+
+	startRow := (len(lines) - len(modalLines)) / 2
+	if startRow < 1 {
+		startRow = 1
+	}
+	for i, ml := range modalLines {
+		row := startRow + i
+		if row >= 0 && row < len(lines) {
+			mw := lipgloss.Width(ml)
+			pad := (m.width - mw) / 2
+			if pad < 0 {
+				pad = 0
+			}
+			lines[row] = strings.Repeat(" ", pad) + ml
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+// ── TUI command implementations ──────────────────────────────────────────────
+
+func tuiCreateRun(ns, instance, task string) (string, error) {
+	ctx := context.Background()
+	var inst k8sclawv1alpha1.ClawInstance
+	if err := k8sClient.Get(ctx, types.NamespacedName{Name: instance, Namespace: ns}, &inst); err != nil {
+		return "", fmt.Errorf("instance %q not found: %w", instance, err)
+	}
+
+	runName := fmt.Sprintf("%s-run-%d", instance, time.Now().Unix())
+	run := &k8sclawv1alpha1.AgentRun{
+		ObjectMeta: metav1.ObjectMeta{Name: runName, Namespace: ns},
+		Spec: k8sclawv1alpha1.AgentRunSpec{
+			InstanceRef: instance,
+			Task:        task,
+			Model: k8sclawv1alpha1.ModelSpec{
+				Provider: "openai",
+				Model:    inst.Spec.Agents.Default.Model,
+			},
+			Timeout: &metav1.Duration{Duration: 10 * time.Minute},
+		},
+	}
+	if err := k8sClient.Create(ctx, run); err != nil {
+		return "", fmt.Errorf("create run: %w", err)
+	}
+	return tuiSuccessStyle.Render(fmt.Sprintf("✓ Created AgentRun: %s", runName)), nil
+}
+
+func tuiAbortRun(ns, name string) (string, error) {
+	ctx := context.Background()
+	var run k8sclawv1alpha1.AgentRun
+	if err := k8sClient.Get(ctx, types.NamespacedName{Name: name, Namespace: ns}, &run); err != nil {
+		return "", fmt.Errorf("run %q not found: %w", name, err)
+	}
+	if run.Status.Phase == "Completed" || run.Status.Phase == "Failed" {
+		return tuiDimStyle.Render(fmt.Sprintf("Run %s already %s", name, run.Status.Phase)), nil
+	}
+	if err := k8sClient.Delete(ctx, &run); err != nil {
+		return "", fmt.Errorf("abort run: %w", err)
+	}
+	return tuiSuccessStyle.Render(fmt.Sprintf("✓ Aborted: %s", name)), nil
+}
+
+func tuiRunStatus(ns, name string) (string, error) {
+	ctx := context.Background()
+	var run k8sclawv1alpha1.AgentRun
+	if err := k8sClient.Get(ctx, types.NamespacedName{Name: name, Namespace: ns}, &run); err != nil {
+		return "", fmt.Errorf("run %q not found: %w", name, err)
+	}
+	phase := string(run.Status.Phase)
+	if phase == "" {
+		phase = "Pending"
+	}
+	pod := run.Status.PodName
+	if pod == "" {
+		pod = "-"
+	}
+	return fmt.Sprintf("%s │ phase:%s pod:%s task:%s",
+		run.Name, phase, pod, truncate(run.Spec.Task, 40)), nil
+}
+
+func tuiClusterStatus(ns string) (string, error) {
+	ctx := context.Background()
+	var instances k8sclawv1alpha1.ClawInstanceList
+	var runs k8sclawv1alpha1.AgentRunList
+	var policies k8sclawv1alpha1.ClawPolicyList
+	_ = k8sClient.List(ctx, &instances, client.InNamespace(ns))
+	_ = k8sClient.List(ctx, &runs, client.InNamespace(ns))
+	_ = k8sClient.List(ctx, &policies, client.InNamespace(ns))
+
+	pending, running, completed, failed := 0, 0, 0, 0
+	for _, r := range runs.Items {
+		switch r.Status.Phase {
+		case "Running":
+			running++
+		case "Completed":
+			completed++
+		case "Failed", "Timeout":
+			failed++
+		default:
+			pending++
+		}
+	}
+	return fmt.Sprintf("ns:%s │ %d inst │ %d pol │ runs: %d pending %d running %d done %d failed",
+		ns, len(instances.Items), len(policies.Items), pending, running, completed, failed), nil
+}
+
+func tuiListFeatures(ns, policyName string) (string, error) {
+	ctx := context.Background()
+	var pol k8sclawv1alpha1.ClawPolicy
+	if err := k8sClient.Get(ctx, types.NamespacedName{Name: policyName, Namespace: ns}, &pol); err != nil {
+		return "", fmt.Errorf("policy %q not found: %w", policyName, err)
+	}
+	if len(pol.Spec.FeatureGates) == 0 {
+		return tuiDimStyle.Render(fmt.Sprintf("No feature gates on %s", policyName)), nil
+	}
+	names := make([]string, 0, len(pol.Spec.FeatureGates))
+	for name := range pol.Spec.FeatureGates {
+		v := "off"
+		if pol.Spec.FeatureGates[name] {
+			v = "on"
+		}
+		names = append(names, fmt.Sprintf("%s=%s", name, v))
+	}
+	sort.Strings(names)
+	return fmt.Sprintf("%s features: %s", policyName, strings.Join(names, ", ")), nil
+}
+
+func tuiDelete(ns, resourceType, name string) (string, error) {
+	ctx := context.Background()
+	switch strings.ToLower(resourceType) {
+	case "instance", "inst":
+		obj := &k8sclawv1alpha1.ClawInstance{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns}}
+		if err := k8sClient.Delete(ctx, obj); err != nil {
+			return "", fmt.Errorf("delete instance: %w", err)
+		}
+		return tuiSuccessStyle.Render(fmt.Sprintf("✓ Deleted instance: %s", name)), nil
+	case "run":
+		obj := &k8sclawv1alpha1.AgentRun{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns}}
+		if err := k8sClient.Delete(ctx, obj); err != nil {
+			return "", fmt.Errorf("delete run: %w", err)
+		}
+		return tuiSuccessStyle.Render(fmt.Sprintf("✓ Deleted run: %s", name)), nil
+	case "policy", "pol":
+		obj := &k8sclawv1alpha1.ClawPolicy{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns}}
+		if err := k8sClient.Delete(ctx, obj); err != nil {
+			return "", fmt.Errorf("delete policy: %w", err)
+		}
+		return tuiSuccessStyle.Render(fmt.Sprintf("✓ Deleted policy: %s", name)), nil
+	default:
+		return "", fmt.Errorf("unknown type: %s (use: instance, run, policy, channel)", resourceType)
+	}
+}
+
+func tuiAddChannel(ns, instanceName, chType, secretName string) (string, error) {
+	ctx := context.Background()
+	var inst k8sclawv1alpha1.ClawInstance
+	if err := k8sClient.Get(ctx, types.NamespacedName{Name: instanceName, Namespace: ns}, &inst); err != nil {
+		return "", fmt.Errorf("instance %q not found: %w", instanceName, err)
+	}
+
+	// Check if channel type already exists.
+	for _, ch := range inst.Spec.Channels {
+		if strings.EqualFold(ch.Type, chType) {
+			return "", fmt.Errorf("channel %q already exists on %s — use /rmchannel first", chType, instanceName)
+		}
+	}
+
+	inst.Spec.Channels = append(inst.Spec.Channels, k8sclawv1alpha1.ChannelSpec{
+		Type: strings.ToLower(chType),
+		ConfigRef: k8sclawv1alpha1.SecretRef{
+			Secret: secretName,
+		},
+	})
+	if err := k8sClient.Update(ctx, &inst); err != nil {
+		return "", fmt.Errorf("update instance: %w", err)
+	}
+	return tuiSuccessStyle.Render(fmt.Sprintf("✓ Added %s channel to %s (secret: %s)", chType, instanceName, secretName)), nil
+}
+
+func tuiRemoveChannel(ns, instanceName, chType string) (string, error) {
+	ctx := context.Background()
+	var inst k8sclawv1alpha1.ClawInstance
+	if err := k8sClient.Get(ctx, types.NamespacedName{Name: instanceName, Namespace: ns}, &inst); err != nil {
+		return "", fmt.Errorf("instance %q not found: %w", instanceName, err)
+	}
+
+	var newChannels []k8sclawv1alpha1.ChannelSpec
+	found := false
+	for _, ch := range inst.Spec.Channels {
+		if strings.EqualFold(ch.Type, chType) {
+			found = true
+			continue
+		}
+		newChannels = append(newChannels, ch)
+	}
+	if !found {
+		return "", fmt.Errorf("channel %q not found on instance %s", chType, instanceName)
+	}
+
+	inst.Spec.Channels = newChannels
+	if err := k8sClient.Update(ctx, &inst); err != nil {
+		return "", fmt.Errorf("update instance: %w", err)
+	}
+	return tuiSuccessStyle.Render(fmt.Sprintf("✓ Removed %s channel from %s", chType, instanceName)), nil
+}
+
+func tuiSetProvider(ns, instanceName, provider, model string) (string, error) {
+	ctx := context.Background()
+	var inst k8sclawv1alpha1.ClawInstance
+	if err := k8sClient.Get(ctx, types.NamespacedName{Name: instanceName, Namespace: ns}, &inst); err != nil {
+		return "", fmt.Errorf("instance %q not found: %w", instanceName, err)
+	}
+
+	old := inst.Spec.Agents.Default.Model
+	inst.Spec.Agents.Default.Model = model
+	// BaseURL is cleared when switching provider (user can set it separately with /baseurl).
+	if provider != "openai-compatible" {
+		inst.Spec.Agents.Default.BaseURL = ""
+	}
+
+	if err := k8sClient.Update(ctx, &inst); err != nil {
+		return "", fmt.Errorf("update instance: %w", err)
+	}
+	return tuiSuccessStyle.Render(fmt.Sprintf("✓ Set %s provider=%s model=%s (was: %s)", instanceName, provider, model, old)), nil
+}
+
+func tuiSetBaseURL(ns, instanceName, baseURL string) (string, error) {
+	ctx := context.Background()
+	var inst k8sclawv1alpha1.ClawInstance
+	if err := k8sClient.Get(ctx, types.NamespacedName{Name: instanceName, Namespace: ns}, &inst); err != nil {
+		return "", fmt.Errorf("instance %q not found: %w", instanceName, err)
+	}
+
+	old := inst.Spec.Agents.Default.BaseURL
+	if old == "" {
+		old = "(default)"
+	}
+	inst.Spec.Agents.Default.BaseURL = baseURL
+	if err := k8sClient.Update(ctx, &inst); err != nil {
+		return "", fmt.Errorf("update instance: %w", err)
+	}
+	return tuiSuccessStyle.Render(fmt.Sprintf("✓ Set %s baseURL=%s (was: %s)", instanceName, baseURL, old)), nil
+}
+
+func tuiDeletePod(ns, podName string) (string, error) {
+	ctx := context.Background()
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: podName, Namespace: ns}}
+	if err := k8sClient.Delete(ctx, pod); err != nil {
+		return "", fmt.Errorf("delete pod: %w", err)
+	}
+	return tuiSuccessStyle.Render(fmt.Sprintf("✓ Deleted pod: %s", podName)), nil
+}
+
+func tuiPodLogs(ns, podName string) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// Use kubectl for streaming-friendly log retrieval.
+	cmd := exec.CommandContext(ctx, "kubectl", "logs", podName, "-n", ns, "--tail=50")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("logs %s: %s", podName, strings.TrimSpace(string(out)))
+	}
+	lines := strings.TrimSpace(string(out))
+	if lines == "" {
+		return tuiDimStyle.Render(fmt.Sprintf("(no logs for %s)", podName)), nil
+	}
+	// Show last few lines in the log pane.
+	parts := strings.Split(lines, "\n")
+	if len(parts) > 15 {
+		parts = parts[len(parts)-15:]
+	}
+	header := tuiHeaderStyle.Render(fmt.Sprintf("── logs: %s ──", podName))
+	return header + "\n" + strings.Join(parts, "\n"), nil
+}
+
+func tuiDescribeResource(ns, kind, name string) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "kubectl", "describe", kind, name, "-n", ns)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("describe %s/%s: %s", kind, name, strings.TrimSpace(string(out)))
+	}
+	lines := strings.TrimSpace(string(out))
+	if lines == "" {
+		return tuiDimStyle.Render(fmt.Sprintf("(empty describe for %s/%s)", kind, name)), nil
+	}
+	// Show a summary — last 20 lines (events are at the bottom).
+	parts := strings.Split(lines, "\n")
+	if len(parts) > 20 {
+		parts = parts[len(parts)-20:]
+	}
+	header := tuiHeaderStyle.Render(fmt.Sprintf("── describe: %s/%s ──", kind, name))
+	return header + "\n" + strings.Join(parts, "\n"), nil
+}
+
+func tuiResourceEvents(ns, kind, name string) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "kubectl", "get", "events", "-n", ns,
+		"--field-selector", fmt.Sprintf("involvedObject.name=%s,involvedObject.kind=%s", name, kind),
+		"--sort-by=.lastTimestamp",
+		"-o", "custom-columns=TIME:.lastTimestamp,TYPE:.type,REASON:.reason,MESSAGE:.message",
+		"--no-headers")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("events %s/%s: %s", kind, name, strings.TrimSpace(string(out)))
+	}
+	lines := strings.TrimSpace(string(out))
+	if lines == "" {
+		return tuiDimStyle.Render(fmt.Sprintf("(no events for %s/%s)", kind, name)), nil
+	}
+	parts := strings.Split(lines, "\n")
+	if len(parts) > 15 {
+		parts = parts[len(parts)-15:]
+	}
+	header := tuiHeaderStyle.Render(fmt.Sprintf("── events: %s/%s ──", kind, name))
+	return header + "\n" + strings.Join(parts, "\n"), nil
+}
+
+// ── Onboard Wizard Logic ─────────────────────────────────────────────────────
+
+// advanceWizard processes the user's input for the current wizard step and
+// moves to the next step. It is the state-machine core of the TUI wizard.
+func (m tuiModel) advanceWizard(val string) (tea.Model, tea.Cmd) {
+	w := &m.wizard
+
+	switch w.step {
+	case wizStepCheckCluster:
+		// Auto step — verify CRDs are reachable.
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		var instances k8sclawv1alpha1.ClawInstanceList
+		if err := k8sClient.List(ctx, &instances, client.InNamespace(m.namespace)); err != nil {
+			w.err = "CRDs not found — run 'k8sclaw install' first"
+			w.active = false
+			m.inputFocused = false
+			m.input.Blur()
+			m.input.Placeholder = "Type / for commands or press ? for help..."
+			m.addLog(tuiErrorStyle.Render("✗ Onboard: " + w.err))
+			return m, nil
+		}
+		w.err = ""
+		w.step = wizStepInstanceName
+		m.input.Placeholder = "Instance name (default: my-agent)"
+		return m, nil
+
+	case wizStepInstanceName:
+		if val == "" {
+			val = "my-agent"
+		}
+		w.instanceName = val
+		w.step = wizStepProvider
+		m.input.Placeholder = "Choice [1-6] (default: 1 — OpenAI)"
+		return m, nil
+
+	case wizStepProvider:
+		if val == "" {
+			val = "1"
+		}
+		w.providerChoice = val
+		switch val {
+		case "2":
+			w.providerName = "anthropic"
+			w.secretEnvKey = "ANTHROPIC_API_KEY"
+			m.input.Placeholder = "Model name (default: claude-sonnet-4-20250514)"
+		case "3":
+			w.providerName = "github-copilot"
+			w.secretEnvKey = "GITHUB_TOKEN"
+			w.baseURL = "https://api.githubcopilot.com"
+			m.input.Placeholder = "Model name (default: gpt-4o)"
+		case "4":
+			w.providerName = "azure-openai"
+			w.secretEnvKey = "AZURE_OPENAI_API_KEY"
+			w.step = wizStepBaseURL
+			m.input.Placeholder = "Azure OpenAI endpoint URL"
+			return m, nil
+		case "5":
+			w.providerName = "ollama"
+			w.secretEnvKey = ""
+			w.step = wizStepBaseURL
+			m.input.Placeholder = "Ollama URL (default: http://ollama.default.svc:11434/v1)"
+			return m, nil
+		case "6":
+			w.providerName = "custom"
+			w.secretEnvKey = "API_KEY"
+			w.step = wizStepBaseURL
+			m.input.Placeholder = "API base URL (empty for default)"
+			return m, nil
+		default:
+			w.providerName = "openai"
+			w.secretEnvKey = "OPENAI_API_KEY"
+			m.input.Placeholder = "Model name (default: gpt-4o)"
+		}
+		w.step = wizStepModel
+		return m, nil
+
+	case wizStepBaseURL:
+		if val == "" && w.providerName == "ollama" {
+			val = "http://ollama.default.svc:11434/v1"
+		}
+		w.baseURL = val
+		w.step = wizStepModel
+		switch w.providerName {
+		case "ollama":
+			m.input.Placeholder = "Model name (default: llama3)"
+		case "azure-openai":
+			m.input.Placeholder = "Deployment name (default: gpt-4o)"
+		default:
+			m.input.Placeholder = "Model name"
+		}
+		return m, nil
+
+	case wizStepModel:
+		if val == "" {
+			switch w.providerName {
+			case "anthropic":
+				val = "claude-sonnet-4-20250514"
+			case "ollama":
+				val = "llama3"
+			default:
+				val = "gpt-4o"
+			}
+		}
+		w.modelName = val
+		if w.secretEnvKey == "" {
+			// No API key needed (ollama).
+			w.step = wizStepChannel
+			m.input.Placeholder = "Channel [1-5] (default: 5 — skip)"
+			return m, nil
+		}
+		w.step = wizStepAPIKey
+		m.input.Placeholder = fmt.Sprintf("%s (paste key, Enter to skip)", w.secretEnvKey)
+		return m, nil
+
+	case wizStepAPIKey:
+		w.apiKey = val
+		w.step = wizStepChannel
+		m.input.Placeholder = "Channel [1-5] (default: 5 — skip)"
+		return m, nil
+
+	case wizStepChannel:
+		if val == "" {
+			val = "5"
+		}
+		w.channelChoice = val
+		switch val {
+		case "1":
+			w.channelType = "telegram"
+			w.channelTokenKey = "TELEGRAM_BOT_TOKEN"
+			w.step = wizStepChannelToken
+			m.input.Placeholder = "Telegram Bot Token"
+			return m, nil
+		case "2":
+			w.channelType = "slack"
+			w.channelTokenKey = "SLACK_BOT_TOKEN"
+			w.step = wizStepChannelToken
+			m.input.Placeholder = "Slack Bot OAuth Token"
+			return m, nil
+		case "3":
+			w.channelType = "discord"
+			w.channelTokenKey = "DISCORD_BOT_TOKEN"
+			w.step = wizStepChannelToken
+			m.input.Placeholder = "Discord Bot Token"
+			return m, nil
+		case "4":
+			w.channelType = "whatsapp"
+			w.channelTokenKey = "WHATSAPP_ACCESS_TOKEN"
+			w.step = wizStepChannelToken
+			m.input.Placeholder = "WhatsApp Access Token"
+			return m, nil
+		default:
+			w.channelType = ""
+		}
+		w.step = wizStepPolicy
+		m.input.Placeholder = "Apply default policy? [Y/n]"
+		return m, nil
+
+	case wizStepChannelToken:
+		w.channelToken = val
+		w.step = wizStepPolicy
+		m.input.Placeholder = "Apply default policy? [Y/n]"
+		return m, nil
+
+	case wizStepPolicy:
+		v := strings.ToLower(val)
+		w.applyPolicy = (v == "" || v == "y" || v == "yes")
+		w.step = wizStepConfirm
+		m.input.Placeholder = "Proceed? [Y/n]"
+		return m, nil
+
+	case wizStepConfirm:
+		v := strings.ToLower(val)
+		if v == "n" || v == "no" {
+			w.reset()
+			m.inputFocused = false
+			m.input.Blur()
+			m.input.Placeholder = "Type / for commands or press ? for help..."
+			m.addLog(tuiDimStyle.Render("Onboard wizard cancelled"))
+			return m, nil
+		}
+		w.step = wizStepApplying
+		return m, m.asyncCmd(func() (string, error) {
+			return tuiOnboardApply(m.namespace, w)
+		})
+
+	case wizStepDone:
+		// User pressed Enter on final screen — close wizard.
+		w.reset()
+		m.inputFocused = false
+		m.input.Blur()
+		m.input.Placeholder = "Type / for commands or press ? for help..."
+		return m, refreshDataCmd()
+	}
+
+	return m, nil
+}
+
+// renderWizardPanel renders the full wizard overlay panel.
+func (m tuiModel) renderWizardPanel(h int) string {
+	w := &m.wizard
+
+	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#E94560"))
+	labelStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#74C7EC")).Bold(true)
+	valueStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#A6E3A1"))
+	menuStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#CDD6F4"))
+	menuNumStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#F5C2E7")).Bold(true)
+	hintStyle := tuiDimStyle
+	stepStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#FAB387")).Bold(true)
+
+	var lines []string
+	lines = append(lines, "")
+	lines = append(lines, titleStyle.Render("  ╔═══════════════════════════════════════════╗"))
+	lines = append(lines, titleStyle.Render("  ║         K8sClaw · Onboarding Wizard       ║"))
+	lines = append(lines, titleStyle.Render("  ╚═══════════════════════════════════════════╝"))
+	lines = append(lines, "")
+
+	// Show completed values as a recap.
+	stepNum := 1
+	if w.step > wizStepCheckCluster {
+		lines = append(lines, labelStyle.Render("  ✅ Cluster check passed"))
+		lines = append(lines, "")
+	}
+
+	if w.step > wizStepInstanceName {
+		stepNum = 2
+		lines = append(lines, hintStyle.Render("  Instance: ")+valueStyle.Render(w.instanceName))
+	}
+	if w.step > wizStepModel && w.step > wizStepProvider {
+		stepNum = 3
+		lines = append(lines, hintStyle.Render("  Provider: ")+valueStyle.Render(w.providerName)+
+			hintStyle.Render("  Model: ")+valueStyle.Render(w.modelName))
+		if w.baseURL != "" {
+			lines = append(lines, hintStyle.Render("  Base URL: ")+valueStyle.Render(w.baseURL))
+		}
+		if w.apiKey != "" {
+			lines = append(lines, hintStyle.Render("  API Key:  ")+valueStyle.Render("••••••••"))
+		}
+	}
+	if w.step > wizStepChannelToken && w.step > wizStepChannel {
+		stepNum = 4
+		if w.channelType != "" {
+			lines = append(lines, hintStyle.Render("  Channel:  ")+valueStyle.Render(w.channelType))
+		} else {
+			lines = append(lines, hintStyle.Render("  Channel:  ")+hintStyle.Render("(none)"))
+		}
+	}
+	if w.step > wizStepPolicy {
+		stepNum = 5
+		pv := "yes"
+		if !w.applyPolicy {
+			pv = "no"
+		}
+		lines = append(lines, hintStyle.Render("  Policy:   ")+valueStyle.Render(pv))
+	}
+
+	if w.step >= wizStepInstanceName && w.step <= wizStepPolicy {
+		lines = append(lines, "")
+	}
+
+	// Show current step prompt.
+	switch w.step {
+	case wizStepCheckCluster:
+		lines = append(lines, stepStyle.Render("  📋 Step 1/5 — Checking cluster..."))
+
+	case wizStepInstanceName:
+		lines = append(lines, stepStyle.Render("  📋 Step 1/5 — Create your ClawInstance"))
+		lines = append(lines, menuStyle.Render("  An instance represents you (or a tenant) in the system."))
+		lines = append(lines, "")
+		lines = append(lines, labelStyle.Render("  Enter instance name:"))
+
+	case wizStepProvider:
+		lines = append(lines, stepStyle.Render("  📋 Step 2/5 — AI Provider"))
+		lines = append(lines, menuStyle.Render("  Which model provider do you want to use?"))
+		lines = append(lines, "")
+		lines = append(lines, menuNumStyle.Render("  1)")+menuStyle.Render(" OpenAI"))
+		lines = append(lines, menuNumStyle.Render("  2)")+menuStyle.Render(" Anthropic"))
+		lines = append(lines, menuNumStyle.Render("  3)")+menuStyle.Render(" GitHub Copilot  (uses your Copilot subscription)"))
+		lines = append(lines, menuNumStyle.Render("  4)")+menuStyle.Render(" Azure OpenAI"))
+		lines = append(lines, menuNumStyle.Render("  5)")+menuStyle.Render(" Ollama          (local, no API key needed)"))
+		lines = append(lines, menuNumStyle.Render("  6)")+menuStyle.Render(" Other / OpenAI-compatible"))
+
+	case wizStepBaseURL:
+		lines = append(lines, stepStyle.Render("  📋 Step 2/5 — AI Provider (continued)"))
+		lines = append(lines, labelStyle.Render("  Enter base URL:"))
+
+	case wizStepModel:
+		lines = append(lines, stepStyle.Render("  📋 Step 2/5 — AI Provider (continued)"))
+		lines = append(lines, labelStyle.Render("  Enter model name:"))
+
+	case wizStepAPIKey:
+		lines = append(lines, stepStyle.Render("  📋 Step 2/5 — AI Provider (continued)"))
+		lines = append(lines, labelStyle.Render(fmt.Sprintf("  Paste your %s:", w.secretEnvKey)))
+		lines = append(lines, hintStyle.Render("  Press Enter to skip — you can add it later."))
+
+	case wizStepChannel:
+		lines = append(lines, stepStyle.Render("  📋 Step 3/5 — Connect a Channel (optional)"))
+		lines = append(lines, menuStyle.Render("  Channels let your agent receive messages from external platforms."))
+		lines = append(lines, "")
+		lines = append(lines, menuNumStyle.Render("  1)")+menuStyle.Render(" Telegram  — easiest, just talk to @BotFather"))
+		lines = append(lines, menuNumStyle.Render("  2)")+menuStyle.Render(" Slack"))
+		lines = append(lines, menuNumStyle.Render("  3)")+menuStyle.Render(" Discord"))
+		lines = append(lines, menuNumStyle.Render("  4)")+menuStyle.Render(" WhatsApp"))
+		lines = append(lines, menuNumStyle.Render("  5)")+menuStyle.Render(" Skip — I'll add a channel later"))
+
+	case wizStepChannelToken:
+		lines = append(lines, stepStyle.Render("  📋 Step 3/5 — Connect a Channel (continued)"))
+		lines = append(lines, labelStyle.Render(fmt.Sprintf("  Paste your %s token:", w.channelType)))
+
+	case wizStepPolicy:
+		lines = append(lines, stepStyle.Render("  📋 Step 4/5 — Default Policy"))
+		lines = append(lines, menuStyle.Render("  A ClawPolicy controls what tools agents can use, sandboxing, etc."))
+		lines = append(lines, labelStyle.Render("  Apply the default policy?"))
+
+	case wizStepConfirm:
+		lines = append(lines, stepStyle.Render("  📋 Step 5/5 — Confirm"))
+		lines = append(lines, "")
+		lines = append(lines, tuiSepStyle.Render("  "+strings.Repeat("━", 50)))
+		lines = append(lines, labelStyle.Render("  Summary"))
+		lines = append(lines, tuiSepStyle.Render("  "+strings.Repeat("━", 50)))
+		lines = append(lines, hintStyle.Render("  Instance:  ")+valueStyle.Render(w.instanceName)+
+			hintStyle.Render("  (namespace: ")+valueStyle.Render(m.namespace)+hintStyle.Render(")"))
+		lines = append(lines, hintStyle.Render("  Provider:  ")+valueStyle.Render(w.providerName)+
+			hintStyle.Render("  (model: ")+valueStyle.Render(w.modelName)+hintStyle.Render(")"))
+		if w.baseURL != "" {
+			lines = append(lines, hintStyle.Render("  Base URL:  ")+valueStyle.Render(w.baseURL))
+		}
+		if w.channelType != "" {
+			lines = append(lines, hintStyle.Render("  Channel:   ")+valueStyle.Render(w.channelType))
+		} else {
+			lines = append(lines, hintStyle.Render("  Channel:   ")+hintStyle.Render("(none)"))
+		}
+		pv := "yes"
+		if !w.applyPolicy {
+			pv = "no"
+		}
+		lines = append(lines, hintStyle.Render("  Policy:    ")+valueStyle.Render(pv))
+		lines = append(lines, tuiSepStyle.Render("  "+strings.Repeat("━", 50)))
+		lines = append(lines, "")
+		lines = append(lines, labelStyle.Render("  Proceed?"))
+
+	case wizStepApplying:
+		lines = append(lines, stepStyle.Render("  ⏳ Applying resources..."))
+
+	case wizStepDone:
+		lines = append(lines, "")
+		for _, msg := range w.resultMsgs {
+			lines = append(lines, "  "+msg)
+		}
+		lines = append(lines, "")
+		lines = append(lines, hintStyle.Render("  Press Enter to return to the dashboard."))
+	}
+
+	_ = stepNum
+	if w.err != "" {
+		lines = append(lines, "")
+		lines = append(lines, tuiErrorStyle.Render("  ✗ "+w.err))
+	}
+
+	// Pad to fill available height.
+	for len(lines) < h {
+		lines = append(lines, "")
+	}
+	// Trim if too long.
+	if len(lines) > h {
+		lines = lines[:h]
+	}
+
+	return strings.Join(lines, "\n") + "\n"
+}
+
+// tuiOnboardApply creates all K8s resources for the onboard wizard.
+// Uses the K8s client directly — no kubectl exec — so it's TUI-safe.
+func tuiOnboardApply(ns string, w *wizardState) (string, error) {
+	ctx := context.Background()
+	var msgs []string
+
+	providerSecretName := fmt.Sprintf("%s-%s-key", w.instanceName, w.providerName)
+	channelSecretName := fmt.Sprintf("%s-%s-secret", w.instanceName, w.channelType)
+	policyName := "default-policy"
+
+	// 1. Create AI provider secret.
+	if w.apiKey != "" {
+		// Delete existing if present.
+		existing := &corev1.Secret{}
+		if err := k8sClient.Get(ctx, types.NamespacedName{Name: providerSecretName, Namespace: ns}, existing); err == nil {
+			_ = k8sClient.Delete(ctx, existing)
+		}
+		secret := &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{Name: providerSecretName, Namespace: ns},
+			StringData: map[string]string{w.secretEnvKey: w.apiKey},
+		}
+		if err := k8sClient.Create(ctx, secret); err != nil {
+			return "", fmt.Errorf("create provider secret: %w", err)
+		}
+		msgs = append(msgs, tuiSuccessStyle.Render(fmt.Sprintf("✓ Created secret: %s", providerSecretName)))
+	} else if w.secretEnvKey != "" {
+		msgs = append(msgs, tuiDimStyle.Render(fmt.Sprintf("⚠ No API key — create secret later: kubectl create secret generic %s --from-literal=%s=<key>",
+			providerSecretName, w.secretEnvKey)))
+	}
+
+	// 2. Create channel secret.
+	if w.channelType != "" && w.channelToken != "" {
+		existing := &corev1.Secret{}
+		if err := k8sClient.Get(ctx, types.NamespacedName{Name: channelSecretName, Namespace: ns}, existing); err == nil {
+			_ = k8sClient.Delete(ctx, existing)
+		}
+		secret := &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{Name: channelSecretName, Namespace: ns},
+			StringData: map[string]string{w.channelTokenKey: w.channelToken},
+		}
+		if err := k8sClient.Create(ctx, secret); err != nil {
+			return "", fmt.Errorf("create channel secret: %w", err)
+		}
+		msgs = append(msgs, tuiSuccessStyle.Render(fmt.Sprintf("✓ Created secret: %s", channelSecretName)))
+	}
+
+	// 3. Apply default policy.
+	if w.applyPolicy {
+		pol := &k8sclawv1alpha1.ClawPolicy{
+			ObjectMeta: metav1.ObjectMeta{Name: policyName, Namespace: ns},
+			Spec: k8sclawv1alpha1.ClawPolicySpec{
+				ToolGating: &k8sclawv1alpha1.ToolGatingSpec{
+					DefaultAction: "allow",
+					Rules: []k8sclawv1alpha1.ToolGatingRule{
+						{Tool: "exec_command", Action: "ask"},
+						{Tool: "write_file", Action: "allow"},
+						{Tool: "network_request", Action: "deny"},
+					},
+				},
+				SubagentPolicy: &k8sclawv1alpha1.SubagentPolicySpec{
+					MaxDepth:      3,
+					MaxConcurrent: 5,
+				},
+				SandboxPolicy: &k8sclawv1alpha1.SandboxPolicySpec{
+					Required:     false,
+					DefaultImage: "ghcr.io/alexsjones/k8sclaw/sandbox:latest",
+					MaxCPU:       "4",
+					MaxMemory:    "8Gi",
+				},
+				FeatureGates: map[string]bool{
+					"browser-automation": false,
+					"code-execution":     true,
+					"file-access":        true,
+				},
+			},
+		}
+		if err := k8sClient.Create(ctx, pol); err != nil {
+			// If already exists, update it.
+			var existingPol k8sclawv1alpha1.ClawPolicy
+			if getErr := k8sClient.Get(ctx, types.NamespacedName{Name: policyName, Namespace: ns}, &existingPol); getErr == nil {
+				existingPol.Spec = pol.Spec
+				if err2 := k8sClient.Update(ctx, &existingPol); err2 != nil {
+					return "", fmt.Errorf("update policy: %w", err2)
+				}
+				msgs = append(msgs, tuiSuccessStyle.Render(fmt.Sprintf("✓ Updated policy: %s", policyName)))
+			} else {
+				return "", fmt.Errorf("apply policy: %w", err)
+			}
+		} else {
+			msgs = append(msgs, tuiSuccessStyle.Render(fmt.Sprintf("✓ Created policy: %s", policyName)))
+		}
+	}
+
+	// 4. Create ClawInstance.
+	inst := &k8sclawv1alpha1.ClawInstance{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      w.instanceName,
+			Namespace: ns,
+		},
+		Spec: k8sclawv1alpha1.ClawInstanceSpec{
+			Agents: k8sclawv1alpha1.AgentsSpec{
+				Default: k8sclawv1alpha1.AgentConfig{
+					Model:   w.modelName,
+					BaseURL: w.baseURL,
+				},
+			},
+			AuthRefs: []k8sclawv1alpha1.SecretRef{
+				{
+					Secret: providerSecretName,
+				},
+			},
+		},
+	}
+
+	if w.channelType != "" {
+		inst.Spec.Channels = []k8sclawv1alpha1.ChannelSpec{
+			{
+				Type: w.channelType,
+				ConfigRef: k8sclawv1alpha1.SecretRef{
+					Secret: channelSecretName,
+				},
+			},
+		}
+	}
+	if w.applyPolicy {
+		inst.Spec.PolicyRef = policyName
+	}
+
+	// Try create; if it exists, update.
+	if err := k8sClient.Create(ctx, inst); err != nil {
+		var existing k8sclawv1alpha1.ClawInstance
+		if getErr := k8sClient.Get(ctx, types.NamespacedName{Name: w.instanceName, Namespace: ns}, &existing); getErr == nil {
+			existing.Spec = inst.Spec
+			if err2 := k8sClient.Update(ctx, &existing); err2 != nil {
+				return "", fmt.Errorf("update instance: %w", err2)
+			}
+			msgs = append(msgs, tuiSuccessStyle.Render(fmt.Sprintf("✓ Updated ClawInstance: %s", w.instanceName)))
+		} else {
+			return "", fmt.Errorf("create instance: %w", err)
+		}
+	} else {
+		msgs = append(msgs, tuiSuccessStyle.Render(fmt.Sprintf("✓ Created ClawInstance: %s", w.instanceName)))
+	}
+
+	msgs = append(msgs, "")
+	msgs = append(msgs, tuiSuccessStyle.Render("✅ Onboarding complete!"))
+
+	return strings.Join(msgs, "\n"), nil
+}
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
+
+func shortDuration(d time.Duration) string {
+	if d < time.Minute {
+		return fmt.Sprintf("%ds", int(d.Seconds()))
+	}
+	if d < time.Hour {
+		return fmt.Sprintf("%dm", int(d.Minutes()))
+	}
+	if d < 24*time.Hour {
+		return fmt.Sprintf("%dh", int(d.Hours()))
+	}
+	return fmt.Sprintf("%dd", int(d.Hours()/24))
+}
+
+func padRight(s string, w int) string {
+	sw := lipgloss.Width(s)
+	if sw >= w {
+		return s
+	}
+	return s + strings.Repeat(" ", w-sw)
+}
+
+func truncate(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	if maxLen < 4 {
+		return s[:maxLen]
+	}
+	return s[:maxLen-1] + "…"
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }

@@ -191,7 +191,7 @@ func (r *ClawInstanceReconciler) buildChannelDeployment(
 							},
 							Env: []corev1.EnvVar{
 								{Name: "INSTANCE_NAME", Value: instance.Name},
-								{Name: "EVENT_BUS_URL", Value: "nats://nats.k8sclaw:4222"},
+									{Name: "EVENT_BUS_URL", Value: "nats://nats.k8sclaw-system.svc:4222"},
 							},
 						},
 					},
