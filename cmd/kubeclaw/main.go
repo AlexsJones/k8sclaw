@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -1292,6 +1293,7 @@ var tuiCommands = []struct{ cmd, desc string }{
 	{"R", "Run task on selected instance"},
 	{"O", "Launch onboard wizard"},
 	{"x", "Delete selected resource"},
+	{"e", "Edit memory / heartbeat config"},
 	{"Enter", "Show detail / drill in"},
 	{"r", "Refresh data"},
 }
@@ -1411,11 +1413,43 @@ type tuiModel struct {
 	deleteResourceName string
 	deleteFunc        func() (string, error) // the actual delete function
 
+	// Edit modal
+	showEditModal    bool
+	editTab          int // 0=Memory, 1=Heartbeat
+	editInstanceName string
+	editScheduleName string // non-empty when editing an existing schedule
+	editField        int    // which field is selected in the current tab
+	editMemory       editMemoryForm
+	editHeartbeat    editHeartbeatForm
+
 	// Feed
 	feedExpanded     bool // fullscreen feed mode
 	feedInputFocused bool // typing in the feed chat
 	feedInput        textinput.Model
 }
+
+// editMemoryForm holds the editable memory fields for a ClawInstance.
+type editMemoryForm struct {
+	enabled      bool
+	maxSizeKB    string // edited as text, parsed to int on apply
+	systemPrompt string
+}
+
+// editHeartbeatForm holds the editable schedule fields.
+type editHeartbeatForm struct {
+	schedule          string
+	task              string
+	schedType         int    // index into editScheduleTypes
+	concurrencyPolicy int    // index into editConcurrencyPolicies
+	includeMemory     bool
+	suspend           bool
+}
+
+var editScheduleTypes = []string{"heartbeat", "scheduled", "sweep"}
+var editConcurrencyPolicies = []string{"Forbid", "Allow", "Replace"}
+var editMemoryFieldCount = 3  // enabled, maxSizeKB, systemPrompt
+var editHeartbeatFieldCount = 6 // schedule, task, type, concurrencyPolicy, includeMemory, suspend
+var editTabNames = []string{"Memory", "Heartbeat"}
 
 const maxLogLines = 200
 
@@ -1692,6 +1726,128 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.showModal {
 			m.showModal = false
 			return m, nil
+		}
+
+		if m.showEditModal {
+			switch msg.String() {
+			case "esc":
+				m.showEditModal = false
+				m.addLog(tuiDimStyle.Render("Edit cancelled"))
+				return m, nil
+			case "tab":
+				m.editTab = (m.editTab + 1) % len(editTabNames)
+				m.editField = 0
+				return m, nil
+			case "shift+tab":
+				m.editTab = (m.editTab + len(editTabNames) - 1) % len(editTabNames)
+				m.editField = 0
+				return m, nil
+			case "j", "down":
+				max := editMemoryFieldCount
+				if m.editTab == 1 {
+					max = editHeartbeatFieldCount
+				}
+				if m.editField < max-1 {
+					m.editField++
+				}
+				return m, nil
+			case "k", "up":
+				if m.editField > 0 {
+					m.editField--
+				}
+				return m, nil
+			case " ":
+				// Toggle boolean fields
+				if m.editTab == 0 {
+					if m.editField == 0 {
+						m.editMemory.enabled = !m.editMemory.enabled
+					}
+				} else {
+					switch m.editField {
+					case 4:
+						m.editHeartbeat.includeMemory = !m.editHeartbeat.includeMemory
+					case 5:
+						m.editHeartbeat.suspend = !m.editHeartbeat.suspend
+					}
+				}
+				return m, nil
+			case "left", "h":
+				// Cycle enum fields backward
+				if m.editTab == 1 {
+					switch m.editField {
+					case 2:
+						m.editHeartbeat.schedType = (m.editHeartbeat.schedType + len(editScheduleTypes) - 1) % len(editScheduleTypes)
+					case 3:
+						m.editHeartbeat.concurrencyPolicy = (m.editHeartbeat.concurrencyPolicy + len(editConcurrencyPolicies) - 1) % len(editConcurrencyPolicies)
+					}
+				}
+				return m, nil
+			case "right", "l":
+				// Cycle enum fields forward
+				if m.editTab == 1 {
+					switch m.editField {
+					case 2:
+						m.editHeartbeat.schedType = (m.editHeartbeat.schedType + 1) % len(editScheduleTypes)
+					case 3:
+						m.editHeartbeat.concurrencyPolicy = (m.editHeartbeat.concurrencyPolicy + 1) % len(editConcurrencyPolicies)
+					}
+				}
+				return m, nil
+			case "backspace":
+				// Delete last char from text fields
+				if m.editTab == 0 {
+					switch m.editField {
+					case 1:
+						if len(m.editMemory.maxSizeKB) > 0 {
+							m.editMemory.maxSizeKB = m.editMemory.maxSizeKB[:len(m.editMemory.maxSizeKB)-1]
+						}
+					case 2:
+						if len(m.editMemory.systemPrompt) > 0 {
+							m.editMemory.systemPrompt = m.editMemory.systemPrompt[:len(m.editMemory.systemPrompt)-1]
+						}
+					}
+				} else {
+					switch m.editField {
+					case 0:
+						if len(m.editHeartbeat.schedule) > 0 {
+							m.editHeartbeat.schedule = m.editHeartbeat.schedule[:len(m.editHeartbeat.schedule)-1]
+						}
+					case 1:
+						if len(m.editHeartbeat.task) > 0 {
+							m.editHeartbeat.task = m.editHeartbeat.task[:len(m.editHeartbeat.task)-1]
+						}
+					}
+				}
+				return m, nil
+			case "enter":
+				// Apply changes
+				m.showEditModal = false
+				return m, m.applyEditModal()
+			default:
+				// Type into text fields
+				ch := msg.String()
+				if len(ch) == 1 {
+					if m.editTab == 0 {
+						switch m.editField {
+						case 1:
+							// Only allow digits for maxSizeKB
+							if ch >= "0" && ch <= "9" {
+								m.editMemory.maxSizeKB += ch
+							}
+						case 2:
+							m.editMemory.systemPrompt += ch
+						}
+					} else {
+						switch m.editField {
+						case 0:
+							m.editHeartbeat.schedule += ch
+						case 1:
+							m.editHeartbeat.task += ch
+						}
+					}
+				}
+				return m, nil
+			}
 		}
 
 		if m.feedExpanded {
@@ -1990,6 +2146,9 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "x":
 			// Delete selected resource (with confirmation).
 			return m.handleRowDelete()
+		case "e":
+			// Edit selected resource (memory/heartbeat config).
+			return m.handleRowEdit()
 		case "R":
 			// Create a new run on the selected instance.
 			return m.handleRunPrompt()
@@ -2395,6 +2554,190 @@ func (m tuiModel) handleRowDelete() (tea.Model, tea.Cmd) {
 		}
 	}
 	return m, nil
+}
+
+func (m tuiModel) handleRowEdit() (tea.Model, tea.Cmd) {
+	switch m.activeView {
+	case viewInstances:
+		if m.selectedRow >= len(m.instances) {
+			return m, nil
+		}
+		inst := m.instances[m.selectedRow]
+		m.editInstanceName = inst.Name
+		m.editScheduleName = ""
+		m.editTab = 0
+		m.editField = 0
+		// Populate memory form from instance spec.
+		if inst.Spec.Memory != nil {
+			m.editMemory = editMemoryForm{
+				enabled:      inst.Spec.Memory.Enabled,
+				maxSizeKB:    fmt.Sprintf("%d", inst.Spec.Memory.MaxSizeKB),
+				systemPrompt: inst.Spec.Memory.SystemPrompt,
+			}
+		} else {
+			m.editMemory = editMemoryForm{
+				enabled:   false,
+				maxSizeKB: "256",
+			}
+		}
+		// Find first schedule for this instance to pre-populate heartbeat tab.
+		m.editHeartbeat = editHeartbeatForm{
+			schedule:          "*/5 * * * *",
+			task:              "check status",
+			schedType:         0,
+			concurrencyPolicy: 0,
+			includeMemory:     true,
+			suspend:           false,
+		}
+		for i, sched := range m.schedules {
+			if sched.Spec.InstanceRef == inst.Name {
+				m.editScheduleName = sched.Name
+				m.editHeartbeat.schedule = sched.Spec.Schedule
+				m.editHeartbeat.task = sched.Spec.Task
+				for j, t := range editScheduleTypes {
+					if t == sched.Spec.Type {
+						m.editHeartbeat.schedType = j
+						break
+					}
+				}
+				for j, p := range editConcurrencyPolicies {
+					if p == sched.Spec.ConcurrencyPolicy {
+						m.editHeartbeat.concurrencyPolicy = j
+						break
+					}
+				}
+				m.editHeartbeat.includeMemory = sched.Spec.IncludeMemory
+				m.editHeartbeat.suspend = sched.Spec.Suspend
+				_ = i
+				break
+			}
+		}
+		m.showEditModal = true
+	case viewSchedules:
+		if m.selectedRow >= len(m.schedules) {
+			return m, nil
+		}
+		sched := m.schedules[m.selectedRow]
+		m.editScheduleName = sched.Name
+		m.editInstanceName = sched.Spec.InstanceRef
+		m.editTab = 1
+		m.editField = 0
+		m.editHeartbeat = editHeartbeatForm{
+			schedule:      sched.Spec.Schedule,
+			task:          sched.Spec.Task,
+			includeMemory: sched.Spec.IncludeMemory,
+			suspend:       sched.Spec.Suspend,
+		}
+		for j, t := range editScheduleTypes {
+			if t == sched.Spec.Type {
+				m.editHeartbeat.schedType = j
+				break
+			}
+		}
+		for j, p := range editConcurrencyPolicies {
+			if p == sched.Spec.ConcurrencyPolicy {
+				m.editHeartbeat.concurrencyPolicy = j
+				break
+			}
+		}
+		// Also populate memory from instance if found.
+		m.editMemory = editMemoryForm{maxSizeKB: "256"}
+		for _, inst := range m.instances {
+			if inst.Name == sched.Spec.InstanceRef {
+				if inst.Spec.Memory != nil {
+					m.editMemory = editMemoryForm{
+						enabled:      inst.Spec.Memory.Enabled,
+						maxSizeKB:    fmt.Sprintf("%d", inst.Spec.Memory.MaxSizeKB),
+						systemPrompt: inst.Spec.Memory.SystemPrompt,
+					}
+				}
+				break
+			}
+		}
+		m.showEditModal = true
+	default:
+		m.addLog(tuiDimStyle.Render("Edit not available for this view"))
+	}
+	return m, nil
+}
+
+func (m tuiModel) applyEditModal() tea.Cmd {
+	ns := m.namespace
+	instName := m.editInstanceName
+	schedName := m.editScheduleName
+	mem := m.editMemory
+	hb := m.editHeartbeat
+	return func() tea.Msg {
+		ctx := context.Background()
+		var msgs []string
+
+		// Apply memory changes to ClawInstance.
+		if instName != "" {
+			var inst kubeclawv1alpha1.ClawInstance
+			if err := k8sClient.Get(ctx, types.NamespacedName{Name: instName, Namespace: ns}, &inst); err != nil {
+				return cmdResultMsg{err: fmt.Errorf("get instance %q: %w", instName, err)}
+			}
+			maxKB := 256
+			if v, err := strconv.Atoi(mem.maxSizeKB); err == nil && v > 0 {
+				maxKB = v
+			}
+			inst.Spec.Memory = &kubeclawv1alpha1.MemorySpec{
+				Enabled:      mem.enabled,
+				MaxSizeKB:    maxKB,
+				SystemPrompt: mem.systemPrompt,
+			}
+			if err := k8sClient.Update(ctx, &inst); err != nil {
+				return cmdResultMsg{err: fmt.Errorf("update instance %q memory: %w", instName, err)}
+			}
+			msgs = append(msgs, fmt.Sprintf("memory updated on %s", instName))
+		}
+
+		// Apply heartbeat/schedule changes.
+		schedType := editScheduleTypes[hb.schedType]
+		concPolicy := editConcurrencyPolicies[hb.concurrencyPolicy]
+		if schedName != "" {
+			// Update existing schedule.
+			var sched kubeclawv1alpha1.ClawSchedule
+			if err := k8sClient.Get(ctx, types.NamespacedName{Name: schedName, Namespace: ns}, &sched); err != nil {
+				return cmdResultMsg{err: fmt.Errorf("get schedule %q: %w", schedName, err)}
+			}
+			sched.Spec.Schedule = hb.schedule
+			sched.Spec.Task = hb.task
+			sched.Spec.Type = schedType
+			sched.Spec.ConcurrencyPolicy = concPolicy
+			sched.Spec.IncludeMemory = hb.includeMemory
+			sched.Spec.Suspend = hb.suspend
+			if err := k8sClient.Update(ctx, &sched); err != nil {
+				return cmdResultMsg{err: fmt.Errorf("update schedule %q: %w", schedName, err)}
+			}
+			msgs = append(msgs, fmt.Sprintf("schedule %s updated", schedName))
+		} else if instName != "" && hb.schedule != "" && hb.task != "" {
+			// Create new schedule for instance.
+			newName := instName + "-schedule"
+			sched := kubeclawv1alpha1.ClawSchedule{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      newName,
+					Namespace: ns,
+				},
+				Spec: kubeclawv1alpha1.ClawScheduleSpec{
+					InstanceRef:       instName,
+					Schedule:          hb.schedule,
+					Task:              hb.task,
+					Type:              schedType,
+					ConcurrencyPolicy: concPolicy,
+					IncludeMemory:     hb.includeMemory,
+					Suspend:           hb.suspend,
+				},
+			}
+			if err := k8sClient.Create(ctx, &sched); err != nil {
+				return cmdResultMsg{err: fmt.Errorf("create schedule: %w", err)}
+			}
+			msgs = append(msgs, fmt.Sprintf("schedule %s created", newName))
+		}
+
+		result := tuiSuccessStyle.Render("✓ " + strings.Join(msgs, ", "))
+		return cmdResultMsg{output: result}
+	}
 }
 
 func (m tuiModel) handleRunPrompt() (tea.Model, tea.Cmd) {
@@ -3038,6 +3381,9 @@ func (m tuiModel) View() string {
 	}
 	if m.confirmDelete {
 		return m.renderDeleteConfirm(base)
+	}
+	if m.showEditModal {
+		return m.renderEditModal(base)
 	}
 	if m.showModal {
 		return m.renderModalOverlay(base)
@@ -3858,6 +4204,7 @@ func (m tuiModel) renderStatusBar() string {
 			"R", "run",
 			"O", "onboard",
 			"x", "delete",
+			"e", "edit",
 			"r", "refresh",
 			"/", "command",
 			"?", "help",
@@ -3929,6 +4276,103 @@ func (m tuiModel) renderModalOverlay(base string) string {
 
 	content.WriteString("\n")
 	content.WriteString(tuiDimStyle.Render("  Press any key to dismiss"))
+
+	modal := tuiModalBorderStyle.Render(content.String())
+	lines := strings.Split(base, "\n")
+	modalLines := strings.Split(modal, "\n")
+
+	startRow := (len(lines) - len(modalLines)) / 2
+	if startRow < 1 {
+		startRow = 1
+	}
+	for i, ml := range modalLines {
+		row := startRow + i
+		if row >= 0 && row < len(lines) {
+			mw := lipgloss.Width(ml)
+			pad := (m.width - mw) / 2
+			if pad < 0 {
+				pad = 0
+			}
+			lines[row] = strings.Repeat(" ", pad) + ml
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+func (m tuiModel) renderEditModal(base string) string {
+	var content strings.Builder
+
+	// Title
+	title := "Edit " + m.editInstanceName
+	if m.editScheduleName != "" {
+		title += " / " + m.editScheduleName
+	}
+	content.WriteString(tuiModalTitleStyle.Render("  ✎  " + title))
+	content.WriteString("\n\n")
+
+	// Tab bar
+	for i, name := range editTabNames {
+		if i == m.editTab {
+			content.WriteString(tuiSuggestSelectedStyle.Render(" " + name + " "))
+		} else {
+			content.WriteString(tuiSuggestStyle.Render(" " + name + " "))
+		}
+		content.WriteString(" ")
+	}
+	content.WriteString("\n")
+	content.WriteString(tuiDimStyle.Render("  ─────────────────────────────────"))
+	content.WriteString("\n\n")
+
+	highlight := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#1A1A2E")).
+		Background(lipgloss.Color("#E94560")).
+		Bold(true)
+
+	label := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#CDD6F4")).
+		Background(lipgloss.Color("#16213E")).
+		Width(20)
+
+	value := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#89DCEB")).
+		Background(lipgloss.Color("#16213E"))
+
+	renderField := func(idx int, name string, val string) {
+		lbl := label.Render("  " + name + ":")
+		v := value.Render(val)
+		if m.editField == idx {
+			lbl = highlight.Render("▸ " + name + ":")
+		}
+		content.WriteString(fmt.Sprintf("  %s %s\n", lbl, v))
+	}
+
+	renderBool := func(idx int, name string, val bool) {
+		tog := "○ off"
+		if val {
+			tog = "● on"
+		}
+		renderField(idx, name, tog)
+	}
+
+	if m.editTab == 0 {
+		// Memory tab
+		renderBool(0, "Enabled", m.editMemory.enabled)
+		renderField(1, "MaxSizeKB", m.editMemory.maxSizeKB)
+		renderField(2, "SystemPrompt", m.editMemory.systemPrompt)
+	} else {
+		// Heartbeat tab
+		renderField(0, "Schedule", m.editHeartbeat.schedule)
+		renderField(1, "Task", m.editHeartbeat.task)
+		renderField(2, "Type", "◀ "+editScheduleTypes[m.editHeartbeat.schedType]+" ▶")
+		renderField(3, "Concurrency", "◀ "+editConcurrencyPolicies[m.editHeartbeat.concurrencyPolicy]+" ▶")
+		renderBool(4, "IncludeMemory", m.editHeartbeat.includeMemory)
+		renderBool(5, "Suspend", m.editHeartbeat.suspend)
+	}
+
+	content.WriteString("\n")
+	content.WriteString(tuiDimStyle.Render("  tab switch tabs · ↑↓ navigate · space toggle"))
+	content.WriteString("\n")
+	content.WriteString(tuiDimStyle.Render("  ←→ cycle · type to edit · enter apply · esc cancel"))
 
 	modal := tuiModalBorderStyle.Render(content.String())
 	lines := strings.Split(base, "\n")
