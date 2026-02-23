@@ -3350,7 +3350,7 @@ func (m tuiModel) View() string {
 	if len(m.suggestions) > 0 {
 		suggestH = min(len(m.suggestions), 6) + 1
 	}
-	chrome := 1 + 1 + 1 + 1 + 1 + inputH + suggestH + 1 // header+tabs+colhdr+sep(above log)+sep(below log)+input+suggest+statusbar
+	chrome := 1 + 1 + 1 + 1 + inputH + suggestH + 1 // header+tabs+sep(above log)+sep(below log)+input+suggest+statusbar
 	available := m.height - chrome
 	if available < 4 {
 		available = 4
@@ -3407,7 +3407,10 @@ func (m tuiModel) View() string {
 
 	if showFeed {
 		rightW := fullWidth - m.width - 1 // 1 for vertical separator
-		feedStr := m.renderFeed(rightW, m.height)
+		// Count left-pane lines so the feed matches exactly — avoids the
+		// right pane being taller and pushing the header off-screen.
+		leftLineCount := strings.Count(base, "\n") + 1
+		feedStr := m.renderFeed(rightW, leftLineCount)
 		base = joinPanesHorizontally(base, feedStr, m.width, rightW)
 		m.width = fullWidth // restore for overlay centering
 	}
