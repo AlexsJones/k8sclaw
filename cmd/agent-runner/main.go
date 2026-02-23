@@ -6,9 +6,11 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -152,34 +154,134 @@ func callLLM(baseURL, apiKey, model, systemPrompt, task string) (*chatResponse, 
 		Stream: false,
 	})
 
-	req, err := http.NewRequest("POST", url, bytes.NewReader(body))
-	if err != nil {
-		return nil, fmt.Errorf("creating request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	if apiKey != "" {
-		req.Header.Set("Authorization", "Bearer "+apiKey)
+	const maxRetries = 5
+
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		req, err := http.NewRequest("POST", url, bytes.NewReader(body))
+		if err != nil {
+			return nil, fmt.Errorf("creating request: %w", err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		if apiKey != "" {
+			req.Header.Set("Authorization", "Bearer "+apiKey)
+		}
+
+		client := &http.Client{Timeout: 5 * time.Minute}
+		resp, err := client.Do(req)
+		if err != nil {
+			if attempt < maxRetries {
+				wait := backoff(attempt)
+				log.Printf("HTTP error (attempt %d/%d), retrying in %s: %v", attempt+1, maxRetries+1, wait, err)
+				time.Sleep(wait)
+				continue
+			}
+			return nil, fmt.Errorf("HTTP request failed after %d attempts: %w", maxRetries+1, err)
+		}
+
+		respBody, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+
+		if resp.StatusCode == http.StatusOK {
+			var chatResp chatResponse
+			if err := json.Unmarshal(respBody, &chatResp); err != nil {
+				return nil, fmt.Errorf("parsing response: %w (body: %s)", err, truncate(string(respBody), 300))
+			}
+			return &chatResp, nil
+		}
+
+		// Parse the error body for classification.
+		apiErr := parseAPIError(respBody)
+
+		// Permanent errors — don't retry.
+		if isPermanentError(resp.StatusCode, apiErr) {
+			return nil, fmt.Errorf("%s (HTTP %d): %s", apiErr.friendlyMessage(), resp.StatusCode, truncate(string(respBody), 500))
+		}
+
+		// Retryable errors (429 rate limit, 5xx server errors).
+		if attempt < maxRetries && isRetryable(resp.StatusCode) {
+			wait := retryAfter(resp, attempt)
+			log.Printf("HTTP %d (attempt %d/%d), retrying in %s: %s",
+				resp.StatusCode, attempt+1, maxRetries+1, wait, apiErr.friendlyMessage())
+			time.Sleep(wait)
+			continue
+		}
+
+		return nil, fmt.Errorf("LLM returned HTTP %d after %d attempts: %s",
+			resp.StatusCode, attempt+1, truncate(string(respBody), 500))
 	}
 
-	client := &http.Client{Timeout: 5 * time.Minute}
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("HTTP request failed: %w", err)
+	return nil, fmt.Errorf("LLM request failed after %d attempts", maxRetries+1)
+}
+
+// apiError represents a parsed error from an OpenAI-compatible API.
+type apiError struct {
+	Error struct {
+		Message string `json:"message"`
+		Type    string `json:"type"`
+		Code    string `json:"code"`
+	} `json:"error"`
+}
+
+func (e apiError) friendlyMessage() string {
+	switch e.Error.Code {
+	case "insufficient_quota":
+		return "API quota exceeded — check your plan and billing"
+	case "invalid_api_key":
+		return "invalid API key"
+	case "model_not_found":
+		return "model not found"
+	case "rate_limit_exceeded":
+		return "rate limited"
+	default:
+		if e.Error.Message != "" {
+			return e.Error.Message
+		}
+		if e.Error.Type != "" {
+			return e.Error.Type
+		}
+		return "unknown API error"
 	}
-	defer resp.Body.Close()
+}
 
-	respBody, _ := io.ReadAll(resp.Body)
+func parseAPIError(body []byte) apiError {
+	var ae apiError
+	_ = json.Unmarshal(body, &ae)
+	return ae
+}
 
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("LLM returned HTTP %d: %s", resp.StatusCode, truncate(string(respBody), 500))
+// isPermanentError returns true for errors that should not be retried.
+func isPermanentError(status int, ae apiError) bool {
+	// Quota exhaustion is permanent until the user upgrades.
+	if ae.Error.Code == "insufficient_quota" || ae.Error.Type == "insufficient_quota" {
+		return true
 	}
-
-	var chatResp chatResponse
-	if err := json.Unmarshal(respBody, &chatResp); err != nil {
-		return nil, fmt.Errorf("parsing response: %w (body: %s)", err, truncate(string(respBody), 300))
+	// Auth / model errors are permanent.
+	if status == 401 || status == 403 || status == 404 {
+		return true
 	}
+	if ae.Error.Code == "invalid_api_key" || ae.Error.Code == "model_not_found" {
+		return true
+	}
+	return false
+}
 
-	return &chatResp, nil
+func isRetryable(status int) bool {
+	return status == 429 || status >= 500
+}
+
+// retryAfter computes the wait duration, respecting Retry-After header if present.
+func retryAfter(resp *http.Response, attempt int) time.Duration {
+	if ra := resp.Header.Get("Retry-After"); ra != "" {
+		if secs, err := strconv.Atoi(ra); err == nil {
+			return time.Duration(secs) * time.Second
+		}
+	}
+	return backoff(attempt)
+}
+
+func backoff(attempt int) time.Duration {
+	secs := math.Min(float64(int(1)<<uint(attempt)), 30) // 1, 2, 4, 8, 16, 30
+	return time.Duration(secs) * time.Second
 }
 
 func writeJSON(path string, v any) {

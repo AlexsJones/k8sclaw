@@ -204,7 +204,6 @@ The wizard walks you through five steps:
 |----------|----------|---------|
 | OpenAI | (default) | `OPENAI_API_KEY` |
 | Anthropic | (default) | `ANTHROPIC_API_KEY` |
-| GitHub Copilot | `https://api.githubcopilot.com` | `GITHUB_TOKEN` (PAT with `copilot` scope) |
 | Azure OpenAI | your endpoint | `AZURE_OPENAI_API_KEY` |
 | Ollama | `http://ollama:11434/v1` | none |
 | Any OpenAI-compatible | custom URL | custom |

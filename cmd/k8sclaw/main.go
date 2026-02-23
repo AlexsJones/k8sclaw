@@ -472,11 +472,10 @@ func runOnboard() error {
 	fmt.Println("  Which model provider do you want to use?")
 	fmt.Println("    1) OpenAI")
 	fmt.Println("    2) Anthropic")
-	fmt.Println("    3) GitHub Copilot  (uses your Copilot subscription)")
-	fmt.Println("    4) Azure OpenAI")
-	fmt.Println("    5) Ollama          (local, no API key needed)")
-	fmt.Println("    6) Other / OpenAI-compatible")
-	providerChoice := prompt(reader, "  Choice [1-6]", "1")
+	fmt.Println("    3) Azure OpenAI")
+	fmt.Println("    4) Ollama          (local, no API key needed)")
+	fmt.Println("    5) Other / OpenAI-compatible")
+	providerChoice := prompt(reader, "  Choice [1-5]", "1")
 
 	var providerName, secretEnvKey, modelName, baseURL string
 	switch providerChoice {
@@ -485,24 +484,17 @@ func runOnboard() error {
 		secretEnvKey = "ANTHROPIC_API_KEY"
 		modelName = prompt(reader, "  Model name", "claude-sonnet-4-20250514")
 	case "3":
-		providerName = "github-copilot"
-		secretEnvKey = "GITHUB_TOKEN"
-		baseURL = "https://api.githubcopilot.com"
-		modelName = prompt(reader, "  Model name", "gpt-4o")
-		fmt.Println("\n  💡 Use a GitHub PAT with the 'copilot' scope.")
-		fmt.Println("  Create one at: https://github.com/settings/tokens")
-	case "4":
 		providerName = "azure-openai"
 		secretEnvKey = "AZURE_OPENAI_API_KEY"
 		baseURL = prompt(reader, "  Azure OpenAI endpoint URL", "")
 		modelName = prompt(reader, "  Deployment name", "gpt-4o")
-	case "5":
+	case "4":
 		providerName = "ollama"
 		secretEnvKey = ""
 		baseURL = prompt(reader, "  Ollama URL", "http://ollama.default.svc:11434/v1")
 		modelName = prompt(reader, "  Model name", "llama3")
 		fmt.Println("  💡 No API key needed for Ollama.")
-	case "6":
+	case "5":
 		providerName = prompt(reader, "  Provider name", "custom")
 		secretEnvKey = prompt(reader, "  API key env var name (empty if none)", "API_KEY")
 		baseURL = prompt(reader, "  API base URL", "")
@@ -883,9 +875,9 @@ func runInstall(ver string) error {
 		return err
 	}
 
-	// Apply webhook.
+	// Apply webhook (use --server-side --force-conflicts to overwrite stale configs).
 	fmt.Println("  Deploying webhook...")
-	if err := kubectl("apply", "-f", filepath.Join(tmpDir, "config/webhook/")); err != nil {
+	if err := kubectl("apply", "--server-side", "--force-conflicts", "-f", filepath.Join(tmpDir, "config/webhook/")); err != nil {
 		return err
 	}
 
@@ -914,6 +906,13 @@ func runUninstall() error {
 		_ = kubectl("delete", "--ignore-not-found", "-f", m)
 	}
 
+	// Strip finalizers from all K8sClaw CRD instances so CRD deletion doesn't
+	// hang waiting for the (now-deleted) controller to reconcile them.
+	fmt.Println("  Removing finalizers from K8sClaw resources...")
+	for _, res := range []string{"agentruns", "clawinstances", "clawpolicies", "skillpacks"} {
+		stripFinalizers(res)
+	}
+
 	// CRDs last.
 	crdBase := "https://raw.githubusercontent.com/" + ghRepo + "/main/config/crd/bases/"
 	crds := []string{
@@ -928,6 +927,30 @@ func runUninstall() error {
 
 	fmt.Println("  K8sClaw uninstalled.")
 	return nil
+}
+
+// stripFinalizers patches all instances of a K8sClaw CRD to remove finalizers.
+func stripFinalizers(resource string) {
+	// List all resource names across all namespaces.
+	out, err := exec.Command("kubectl", "get", resource+".k8sclaw.io",
+		"--all-namespaces", "-o", "jsonpath={range .items[*]}{.metadata.namespace}/{.metadata.name}{\"\\n\"}{end}").
+		Output()
+	if err != nil {
+		return // CRD may not exist
+	}
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if line == "" {
+			continue
+		}
+		parts := strings.SplitN(line, "/", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		ns, name := parts[0], parts[1]
+		_ = exec.Command("kubectl", "patch", resource+".k8sclaw.io", name,
+			"-n", ns, "--type=merge",
+			"-p", `{"metadata":{"finalizers":[]}}`).Run()
+	}
 }
 
 func resolveLatestTag() (string, error) {
@@ -1207,7 +1230,6 @@ var providerSuggestions = []suggestion{
 	{"openai", "OpenAI (GPT-4o, etc.)"},
 	{"anthropic", "Anthropic (Claude)"},
 	{"azure-openai", "Azure OpenAI Service"},
-	{"github-copilot", "GitHub Copilot"},
 	{"ollama", "Ollama (local)"},
 	{"openai-compatible", "OpenAI-compatible endpoint"},
 }
@@ -3214,7 +3236,7 @@ func tuiCreateRun(ns, instance, task string) (string, error) {
 	// pattern.  The onboard wizard names secrets like "<inst>-openai-key".
 	provider := "openai"
 	for _, ref := range inst.Spec.AuthRefs {
-		for _, p := range []string{"anthropic", "azure-openai", "github-copilot", "ollama", "openai"} {
+		for _, p := range []string{"anthropic", "azure-openai", "ollama", "openai"} {
 			if strings.Contains(ref.Secret, p) {
 				provider = p
 				break
@@ -3572,23 +3594,18 @@ func (m tuiModel) advanceWizard(val string) (tea.Model, tea.Cmd) {
 			w.secretEnvKey = "ANTHROPIC_API_KEY"
 			m.input.Placeholder = "Model name (default: claude-sonnet-4-20250514)"
 		case "3":
-			w.providerName = "github-copilot"
-			w.secretEnvKey = "GITHUB_TOKEN"
-			w.baseURL = "https://api.githubcopilot.com"
-			m.input.Placeholder = "Model name (default: gpt-4o)"
-		case "4":
 			w.providerName = "azure-openai"
 			w.secretEnvKey = "AZURE_OPENAI_API_KEY"
 			w.step = wizStepBaseURL
 			m.input.Placeholder = "Azure OpenAI endpoint URL"
 			return m, nil
-		case "5":
+		case "4":
 			w.providerName = "ollama"
 			w.secretEnvKey = ""
 			w.step = wizStepBaseURL
 			m.input.Placeholder = "Ollama URL (default: http://ollama.default.svc:11434/v1)"
 			return m, nil
-		case "6":
+		case "5":
 			w.providerName = "custom"
 			w.secretEnvKey = "API_KEY"
 			w.step = wizStepBaseURL
@@ -3802,10 +3819,9 @@ func (m tuiModel) renderWizardPanel(h int) string {
 		lines = append(lines, "")
 		lines = append(lines, menuNumStyle.Render("  1)")+menuStyle.Render(" OpenAI"))
 		lines = append(lines, menuNumStyle.Render("  2)")+menuStyle.Render(" Anthropic"))
-		lines = append(lines, menuNumStyle.Render("  3)")+menuStyle.Render(" GitHub Copilot  (uses your Copilot subscription)"))
-		lines = append(lines, menuNumStyle.Render("  4)")+menuStyle.Render(" Azure OpenAI"))
-		lines = append(lines, menuNumStyle.Render("  5)")+menuStyle.Render(" Ollama          (local, no API key needed)"))
-		lines = append(lines, menuNumStyle.Render("  6)")+menuStyle.Render(" Other / OpenAI-compatible"))
+		lines = append(lines, menuNumStyle.Render("  3)")+menuStyle.Render(" Azure OpenAI"))
+		lines = append(lines, menuNumStyle.Render("  4)")+menuStyle.Render(" Ollama          (local, no API key needed)"))
+		lines = append(lines, menuNumStyle.Render("  5)")+menuStyle.Render(" Other / OpenAI-compatible"))
 
 	case wizStepBaseURL:
 		lines = append(lines, stepStyle.Render("  📋 Step 2/5 — AI Provider (continued)"))
