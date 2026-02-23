@@ -4591,14 +4591,24 @@ func tuiRunStatus(ns, name string) (string, error) {
 		run.Name, phase, pod, truncate(run.Spec.Task, 40)))
 
 	if run.Status.Result != "" {
-		b.WriteString("\n" + tuiSuccessStyle.Render("╭─ Result ─────────────────────────────────╮"))
-		for _, line := range strings.Split(run.Status.Result, "\n") {
-			b.WriteString("\n│ " + line)
+		// Show result inline — truncate to first 2 lines, max 80 chars each.
+		lines := strings.Split(strings.TrimSpace(run.Status.Result), "\n")
+		shown := 0
+		for _, line := range lines {
+			if shown >= 2 {
+				b.WriteString("\n" + tuiDimStyle.Render("  ┊ use /result "+name+" for full output"))
+				break
+			}
+			line = strings.TrimRight(line, " \t\r")
+			if len(line) > 80 {
+				line = line[:77] + "..."
+			}
+			b.WriteString("\n" + tuiSuccessStyle.Render("  ↳ "+line))
+			shown++
 		}
-		b.WriteString("\n" + tuiSuccessStyle.Render("╰──────────────────────────────────────────╯"))
 	}
 	if run.Status.Error != "" {
-		b.WriteString("\n" + tuiErrorStyle.Render("Error: "+run.Status.Error))
+		b.WriteString("\n" + tuiErrorStyle.Render("  ✗ "+run.Status.Error))
 	}
 	return b.String(), nil
 }
