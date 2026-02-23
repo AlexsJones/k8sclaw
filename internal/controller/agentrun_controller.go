@@ -366,8 +366,11 @@ func (r *AgentRunReconciler) buildContainers(agentRun *k8sclawv1alpha1.AgentRun)
 				{Name: "AGENT_RUN_ID", Value: agentRun.Name},
 				{Name: "AGENT_ID", Value: agentRun.Spec.AgentID},
 				{Name: "SESSION_KEY", Value: agentRun.Spec.SessionKey},
+				{Name: "TASK", Value: agentRun.Spec.Task},
+				{Name: "SYSTEM_PROMPT", Value: agentRun.Spec.SystemPrompt},
 				{Name: "MODEL_PROVIDER", Value: agentRun.Spec.Model.Provider},
 				{Name: "MODEL_NAME", Value: agentRun.Spec.Model.Model},
+				{Name: "MODEL_BASE_URL", Value: agentRun.Spec.Model.BaseURL},
 				{Name: "THINKING_MODE", Value: agentRun.Spec.Model.Thinking},
 			},
 			VolumeMounts: []corev1.VolumeMount{

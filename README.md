@@ -29,8 +29,44 @@ curl -fsSL https://deploy.k8sclaw.ai/install.sh | sh
 ```bash
 k8sclaw install          # CRDs, controllers, webhook, NATS, RBAC, network policies
 k8sclaw onboard          # interactive setup wizard — instance, provider, channel
+k8sclaw                  # launch the interactive TUI (default command)
 k8sclaw uninstall        # clean removal
 ```
+
+## Interactive TUI
+
+Running `k8sclaw` with no arguments launches a **k9s-style interactive terminal UI** with full cluster management.
+
+### Views
+
+| View | Description |
+|------|-------------|
+| Instances | ClawInstance list with status, channels, and agent config |
+| Runs | AgentRun list with phase, duration, and associated instance |
+| Channels | Channel pod status (Telegram, Slack, Discord, WhatsApp) |
+
+### Keybindings
+
+| Key | Action |
+|-----|--------|
+| `l` | View logs for the selected resource |
+| `d` | Describe the selected resource (kubectl describe) |
+| `x` | Delete the selected resource (with confirmation) |
+| `R` | Switch to Runs view |
+| `O` | Launch the onboard wizard |
+| `Esc` | Go back / close panel |
+| `?` | Toggle help |
+| `Tab` | Cycle between views |
+| `/` | Slash commands — `/run`, `/instances`, `/runs`, `/channels` |
+
+### Slash Commands
+
+| Command | Description |
+|---------|-------------|
+| `/run <task>` | Create and submit an AgentRun with the given task |
+| `/instances` | Switch to Instances view |
+| `/runs` | Switch to Runs view |
+| `/channels` | Switch to Channels view |
 
 ## Architecture
 
@@ -139,7 +175,7 @@ cert-manager (if not present), and network policies to your current `kubectl` co
 To install a specific version:
 
 ```bash
-k8sclaw install --version v0.0.8
+k8sclaw install --version v0.0.13
 ```
 
 ### 3. Onboard — interactive setup wizard
@@ -176,7 +212,15 @@ The wizard walks you through five steps:
 **Step 4** connects a messaging channel — Telegram (easiest), Slack, Discord, or WhatsApp.
 The wizard creates the K8s Secrets, ClawPolicy, and ClawInstance for you.
 
-### 4. Use the CLI
+### 4. Launch K8sClaw
+
+```bash
+k8sclaw
+```
+
+This launches the interactive TUI — browse instances, runs, and channels; view logs and describe output inline; submit agent runs with `/run <task>`.
+
+You can also use the CLI directly:
 
 ```bash
 k8sclaw instances list                              # list instances

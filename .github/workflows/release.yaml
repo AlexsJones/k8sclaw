@@ -84,6 +84,7 @@ jobs:
     strategy:
       matrix:
         image:
+          - agent-runner
           - controller
           - apiserver
           - ipc-bridge

@@ -23,13 +23,13 @@ CONTROLLER_GEN ?= $(LOCALBIN)/controller-gen
 BIN_DIR = bin
 
 # All binaries
-BINARIES = controller apiserver ipc-bridge webhook k8sclaw
+BINARIES = controller apiserver ipc-bridge webhook agent-runner k8sclaw
 
 # All channel binaries
 CHANNELS = telegram whatsapp discord slack
 
 # All images
-IMAGES = controller apiserver ipc-bridge webhook \
+IMAGES = controller apiserver ipc-bridge webhook agent-runner \
          channel-telegram channel-whatsapp channel-discord channel-slack
 
 .PHONY: all build test clean generate manifests docker-build docker-push install help
