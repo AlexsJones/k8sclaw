@@ -1403,6 +1403,9 @@ type tuiModel struct {
 	deleteResourceKind string // e.g. "instance", "run", "pod"
 	deleteResourceName string
 	deleteFunc        func() (string, error) // the actual delete function
+
+	// Feed
+	feedExpanded bool // fullscreen feed mode
 }
 
 const maxLogLines = 200
@@ -1593,6 +1596,18 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		if m.showModal {
 			m.showModal = false
+			return m, nil
+		}
+
+		if m.feedExpanded {
+			switch msg.String() {
+			case "esc", "f", "q":
+				m.feedExpanded = false
+				return m, nil
+			case "ctrl+c":
+				m.quitting = true
+				return m, tea.Quit
+			}
 			return m, nil
 		}
 
@@ -1830,6 +1845,11 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.startOnboardWizard()
 		case "r":
 			return m, refreshDataCmd()
+		case "f":
+			if len(m.instances) > 0 {
+				m.feedExpanded = !m.feedExpanded
+			}
+			return m, nil
 		}
 
 	case tea.WindowSizeMsg:
@@ -2797,6 +2817,9 @@ func (m tuiModel) View() string {
 		m.width = fullWidth // restore for overlay centering
 	}
 
+	if m.feedExpanded {
+		return m.renderFeedFullscreen()
+	}
 	if m.confirmDelete {
 		return m.renderDeleteConfirm(base)
 	}
@@ -3338,6 +3361,116 @@ func (m tuiModel) renderFeed(width, height int) string {
 	return padAndJoinLines(result, width)
 }
 
+func (m tuiModel) renderFeedFullscreen() string {
+	w := m.width
+	h := m.height
+
+	var allLines []string
+
+	// Title bar
+	title := " " + tuiFeedTitleStyle.Render("─── Feed (fullscreen) ")
+	titleW := lipgloss.Width(title)
+	hint := tuiDimStyle.Render("  f/Esc to close")
+	hintW := lipgloss.Width(hint)
+	if w > titleW+hintW {
+		title += tuiSepStyle.Render(strings.Repeat("─", w-titleW-hintW)) + hint
+	} else if w > titleW {
+		title += tuiSepStyle.Render(strings.Repeat("─", w-titleW))
+	}
+	allLines = append(allLines, title)
+
+	if len(m.runs) == 0 {
+		allLines = append(allLines, "")
+		allLines = append(allLines, tuiDimStyle.Render("  No runs yet"))
+		allLines = append(allLines, tuiDimStyle.Render("  Use /run <instance> <task>"))
+		for len(allLines) < h {
+			allLines = append(allLines, "")
+		}
+		return padAndJoinLines(allLines, w)
+	}
+
+	// Build feed entries — oldest first. In fullscreen, show more result lines.
+	maxResultLines := 20
+	for i := len(m.runs) - 1; i >= 0; i-- {
+		run := m.runs[i]
+
+		// Prompt line
+		task := run.Spec.Task
+		maxTaskW := w - 4
+		if maxTaskW < 10 {
+			maxTaskW = 10
+		}
+		if len(task) > maxTaskW {
+			task = task[:maxTaskW-3] + "..."
+		}
+		allLines = append(allLines, tuiFeedPromptStyle.Render(" ▸ "+task))
+
+		// Meta line
+		age := shortDuration(time.Since(run.CreationTimestamp.Time))
+		meta := fmt.Sprintf("   %s • %s", truncate(run.Name, w-12), age)
+		allLines = append(allLines, tuiFeedMetaStyle.Render(meta))
+
+		// Result / status
+		phase := string(run.Status.Phase)
+		switch phase {
+		case "Succeeded", "Completed":
+			if run.Status.Result != "" {
+				resultLines := strings.Split(run.Status.Result, "\n")
+				shown := 0
+				for _, rl := range resultLines {
+					if shown >= maxResultLines {
+						remaining := len(resultLines) - shown
+						allLines = append(allLines, tuiDimStyle.Render(fmt.Sprintf("   ┊ ... %d more lines", remaining)))
+						break
+					}
+					rl = strings.TrimRight(rl, " \t\r")
+					if len(rl) > w-5 {
+						rl = rl[:w-8] + "..."
+					}
+					allLines = append(allLines, tuiSuccessStyle.Render("   "+rl))
+					shown++
+				}
+			} else {
+				allLines = append(allLines, tuiSuccessStyle.Render("   ✓ Completed"))
+			}
+		case "Running":
+			allLines = append(allLines, tuiRunningStyle.Render("   ⏳ Running..."))
+		case "Failed", "Timeout":
+			errMsg := run.Status.Error
+			if errMsg == "" {
+				errMsg = phase
+			}
+			if len(errMsg) > w-6 {
+				errMsg = errMsg[:w-9] + "..."
+			}
+			allLines = append(allLines, tuiErrorStyle.Render("   ✗ "+errMsg))
+		default:
+			allLines = append(allLines, tuiDimStyle.Render("   ⏳ Pending..."))
+		}
+
+		allLines = append(allLines, "") // blank separator
+	}
+
+	// Auto-scroll to bottom
+	available := h - 1
+	if available < 1 {
+		available = 1
+	}
+	feedContent := allLines[1:]
+	start := len(feedContent) - available
+	if start < 0 {
+		start = 0
+	}
+	visible := feedContent[start:]
+
+	out := []string{allLines[0]}
+	out = append(out, visible...)
+	for len(out) < h {
+		out = append(out, "")
+	}
+	return padAndJoinLines(out, w)
+}
+
 func padAndJoinLines(lines []string, width int) string {
 	var b strings.Builder
 	for i, line := range lines {
@@ -3392,6 +3525,7 @@ func (m tuiModel) renderStatusBar() string {
 			"j/k", "navigate",
 			"Enter", "detail",
 			"Esc", "back",
+			"f", "feed",
 			"l", "logs",
 			"d", "describe",
 			"R", "run",
