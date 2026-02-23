@@ -36,6 +36,7 @@ type Bridge struct {
 	EventBus     eventbus.EventBus
 	Log          logr.Logger
 	Watcher      *Watcher
+	agentDone    chan struct{} // signalled when result.json is received
 }
 
 // NewBridge creates a new IPC bridge.
@@ -46,6 +47,7 @@ func NewBridge(basePath, agentRunID, instanceName string, bus eventbus.EventBus,
 		InstanceName: instanceName,
 		EventBus:     bus,
 		Log:          log,
+		agentDone:    make(chan struct{}),
 	}
 }
 
@@ -88,8 +90,15 @@ func (b *Bridge) Start(ctx context.Context) error {
 	// Subscribe to inbound events from the control plane
 	go b.subscribeToInbound(ctx)
 
-	// Wait for context cancellation
-	<-ctx.Done()
+	// Wait for context cancellation or agent completion.
+	select {
+	case <-ctx.Done():
+	case <-b.agentDone:
+		// Agent wrote result.json — give NATS publish a moment to flush,
+		// then exit so the Job can complete.
+		b.Log.Info("Agent completed, bridge exiting after grace period")
+		time.Sleep(2 * time.Second)
+	}
 	return watcher.Close()
 }
 
@@ -132,6 +141,11 @@ func (b *Bridge) handleOutputFile(ctx context.Context, fe FileEvent) {
 		event, _ := eventbus.NewEvent(eventbus.TopicAgentRunCompleted, metadata, json.RawMessage(data))
 		if err := b.EventBus.Publish(ctx, eventbus.TopicAgentRunCompleted, event); err != nil {
 			b.Log.Error(err, "failed to publish completion event")
+		}
+		// Signal that the agent is done so the bridge can exit.
+		select {
+		case b.agentDone <- struct{}{}:
+		default:
 		}
 
 	case filename == "status.json":

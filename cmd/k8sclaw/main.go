@@ -1690,6 +1690,23 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		// Table / global key handling (input not focused).
+		// Handle arrow keys via Type first (more reliable across terminals).
+		switch msg.Type {
+		case tea.KeyDown:
+			maxRow := m.activeViewCount() - 1
+			if maxRow < 0 {
+				maxRow = 0
+			}
+			if m.selectedRow < maxRow {
+				m.selectedRow++
+			}
+			return m, nil
+		case tea.KeyUp:
+			if m.selectedRow > 0 {
+				m.selectedRow--
+			}
+			return m, nil
+		}
 		switch msg.String() {
 		case "q", "ctrl+c":
 			m.quitting = true
