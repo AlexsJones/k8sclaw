@@ -2689,17 +2689,14 @@ func (m tuiModel) View() string {
 	}
 
 	// Split pane: show a conversational feed on the right when instances exist
-	// and the terminal is wide enough for the table columns to fit.
-	showFeed := len(m.instances) > 0 && m.width >= 140
+	// and the terminal is wide enough.
+	showFeed := len(m.instances) > 0 && m.width >= 100
 	fullWidth := m.width
 	if showFeed {
-		// Give the left pane enough room for table columns (~95 chars).
-		leftW := fullWidth * 2 / 3
-		if leftW < 95 {
-			leftW = 95
-		}
-		if leftW > fullWidth-30 {
-			leftW = fullWidth - 30 // ensure feed gets at least 30 cols
+		// Left pane gets 65%, feed gets 35% (minus 1 for separator).
+		leftW := fullWidth * 65 / 100
+		if leftW > fullWidth-25 {
+			leftW = fullWidth - 25 // ensure feed gets at least 25 cols
 		}
 		m.width = leftW
 	}
@@ -4393,8 +4390,17 @@ func joinPanesHorizontally(left, right string, leftW, rightW int) string {
 		if i < len(rightLines) {
 			r = rightLines[i]
 		}
-		// Pad left line to leftW so the separator aligns.
+		// Truncate left line if it exceeds leftW (table rows may be wider).
 		lw := lipgloss.Width(l)
+		if lw > leftW {
+			// Trim visible chars to leftW. Since ANSI codes make len > Width,
+			// we do a rough byte-trim and re-pad.
+			plain := stripAnsi(l)
+			if len(plain) > leftW {
+				l = plain[:leftW]
+			}
+			lw = lipgloss.Width(l)
+		}
 		if lw < leftW {
 			l += strings.Repeat(" ", leftW-lw)
 		}
