@@ -26,6 +26,7 @@ import (
 )
 
 const agentRunFinalizer = "kubeclaw.io/agentrun-finalizer"
+const systemNamespace = "kubeclaw-system"
 
 // AgentRunReconciler reconciles AgentRun objects.
 // It watches AgentRun CRDs and reconciles them into Kubernetes Jobs/Pods.
@@ -119,6 +120,12 @@ func (r *AgentRunReconciler) reconcilePending(ctx context.Context, log logr.Logg
 
 	// Resolve skill sidecars from SkillPack CRDs.
 	sidecars := r.resolveSkillSidecars(ctx, log, agentRun)
+
+	// Mirror skill ConfigMaps from kubeclaw-system into the agent namespace
+	// so projected volumes can reference them (ConfigMaps are namespace-local).
+	if err := r.mirrorSkillConfigMaps(ctx, log, agentRun); err != nil {
+		log.Error(err, "Failed to mirror skill ConfigMaps, skills may be missing")
+	}
 
 	// Create RBAC resources for skill sidecars that need them.
 	if err := r.ensureSkillRBAC(ctx, log, agentRun, sidecars); err != nil {
@@ -860,8 +867,12 @@ func (r *AgentRunReconciler) resolveSkillSidecars(ctx context.Context, log logr.
 			Namespace: agentRun.Namespace,
 			Name:      spName,
 		}, sp); err != nil {
-			// Try cluster-scoped (no namespace) as SkillPacks can live anywhere.
-			if err2 := r.Get(ctx, client.ObjectKey{Name: spName}, sp); err2 != nil {
+			// SkillPack not in agent namespace — try kubeclaw-system (default
+			// location for built-in skills installed by `kubeclaw install`).
+			if err2 := r.Get(ctx, client.ObjectKey{
+				Namespace: systemNamespace,
+				Name:      spName,
+			}, sp); err2 != nil {
 				log.V(1).Info("SkillPack not found, skipping sidecar", "name", spName)
 				continue
 			}
@@ -875,6 +886,71 @@ func (r *AgentRunReconciler) resolveSkillSidecars(ctx context.Context, log logr.
 		}
 	}
 	return sidecars
+}
+
+// mirrorSkillConfigMaps copies skill ConfigMaps from kubeclaw-system into the
+// AgentRun's namespace so that projected volumes can reference them.
+// ConfigMap volume projections are namespace-local in Kubernetes, so when
+// SkillPacks live in kubeclaw-system their ConfigMaps must be mirrored.
+func (r *AgentRunReconciler) mirrorSkillConfigMaps(ctx context.Context, log logr.Logger, agentRun *kubeclawv1alpha1.AgentRun) error {
+	if agentRun.Namespace == systemNamespace {
+		return nil // no mirroring needed
+	}
+	for _, ref := range agentRun.Spec.Skills {
+		cmName := ref.SkillPackRef
+		if cmName == "" {
+			cmName = ref.ConfigMapRef
+		}
+		if cmName == "" {
+			continue
+		}
+
+		// Check if ConfigMap already exists in the agent namespace.
+		existing := &corev1.ConfigMap{}
+		if err := r.Get(ctx, client.ObjectKey{
+			Namespace: agentRun.Namespace,
+			Name:      cmName,
+		}, existing); err == nil {
+			continue // already present
+		}
+
+		// Look for the ConfigMap in kubeclaw-system.
+		source := &corev1.ConfigMap{}
+		if err := r.Get(ctx, client.ObjectKey{
+			Namespace: systemNamespace,
+			Name:      cmName,
+		}, source); err != nil {
+			log.V(1).Info("Skill ConfigMap not found in kubeclaw-system, skipping mirror", "configmap", cmName)
+			continue
+		}
+
+		// Create a mirror copy in the agent namespace, owned by the AgentRun
+		// so it is garbage-collected when the run is deleted.
+		mirror := &corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      cmName,
+				Namespace: agentRun.Namespace,
+				Labels: map[string]string{
+					"kubeclaw.io/component":  "skillpack-mirror",
+					"kubeclaw.io/agent-run":  agentRun.Name,
+					"kubeclaw.io/managed-by": "kubeclaw",
+				},
+			},
+			Data: source.Data,
+		}
+		if err := controllerutil.SetControllerReference(agentRun, mirror, r.Scheme); err != nil {
+			log.Error(err, "Failed to set owner reference on skill ConfigMap mirror", "configmap", cmName)
+			continue
+		}
+		if err := r.Create(ctx, mirror); err != nil {
+			if !errors.IsAlreadyExists(err) {
+				log.Error(err, "Failed to mirror skill ConfigMap", "configmap", cmName)
+			}
+		} else {
+			log.Info("Mirrored skill ConfigMap into agent namespace", "configmap", cmName, "from", systemNamespace)
+		}
+	}
+	return nil
 }
 
 // ensureSkillRBAC creates Role/ClusterRole and bindings for skill sidecars.

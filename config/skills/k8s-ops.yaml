@@ -4,6 +4,7 @@ apiVersion: kubeclaw.io/v1alpha1
 kind: SkillPack
 metadata:
   name: k8s-ops
+  namespace: kubeclaw-system
   labels:
     kubeclaw.io/builtin: "true"
     kubeclaw.io/category: kubernetes

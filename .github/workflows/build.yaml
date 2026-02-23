@@ -46,6 +46,7 @@ jobs:
           - channel-whatsapp
           - channel-discord
           - channel-slack
+          - skill-k8s-ops
     steps:
       - uses: actions/checkout@v4
 

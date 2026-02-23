@@ -898,6 +898,16 @@ func runInstall(ver string) error {
 		return err
 	}
 
+	// Install default SkillPacks into kubeclaw-system.
+	skillsDir := filepath.Join(tmpDir, "config/skills/")
+	if _, err := os.Stat(skillsDir); err == nil {
+		fmt.Println("  Installing default SkillPacks...")
+		if err := kubectl("apply", "-f", skillsDir); err != nil {
+			// Non-fatal — skills are optional.
+			fmt.Printf("  Warning: failed to install default skills: %v\n", err)
+		}
+	}
+
 	fmt.Println("\n  KubeClaw installed successfully!")
 	fmt.Println("  Run: kubectl get pods -n kubeclaw-system")
 	return nil
@@ -1262,6 +1272,45 @@ var providerSuggestions = []suggestion{
 	{"azure-openai", "Azure OpenAI Service"},
 	{"ollama", "Ollama (local)"},
 	{"openai-compatible", "OpenAI-compatible endpoint"},
+}
+
+var modelSuggestions = map[string][]suggestion{
+	"openai": {
+		{"gpt-4o", "Best overall, 128k ctx"},
+		{"gpt-4o-mini", "Fast & cheap, 128k ctx"},
+		{"gpt-4.1", "Latest GPT-4.1, 1M ctx"},
+		{"gpt-4.1-mini", "Fast GPT-4.1, 1M ctx"},
+		{"gpt-4.1-nano", "Cheapest GPT-4.1, 1M ctx"},
+		{"o3", "Reasoning, 200k ctx"},
+		{"o3-mini", "Fast reasoning, 200k ctx"},
+		{"o4-mini", "Latest reasoning, 200k ctx"},
+	},
+	"anthropic": {
+		{"claude-sonnet-4-20250514", "Best balanced, 200k ctx"},
+		{"claude-opus-4-20250514", "Most capable, 200k ctx"},
+		{"claude-haiku-3-5-20241022", "Fast & cheap, 200k ctx"},
+	},
+	"azure-openai": {
+		{"gpt-4o", "GPT-4o deployment"},
+		{"gpt-4o-mini", "GPT-4o-mini deployment"},
+		{"gpt-4.1", "GPT-4.1 deployment"},
+		{"o3-mini", "o3-mini deployment"},
+	},
+	"google": {
+		{"gemini-2.5-pro", "Most capable, 1M ctx"},
+		{"gemini-2.5-flash", "Fast & efficient, 1M ctx"},
+		{"gemini-2.0-flash", "Previous gen fast, 1M ctx"},
+	},
+	"ollama": {
+		{"llama3", "Meta Llama 3 8B"},
+		{"llama3.3", "Meta Llama 3.3 70B"},
+		{"qwen3", "Alibaba Qwen3"},
+		{"deepseek-r1", "DeepSeek R1 reasoning"},
+		{"mistral", "Mistral 7B"},
+		{"codellama", "Code Llama 7B"},
+		{"phi4", "Microsoft Phi-4"},
+		{"gemma3", "Google Gemma 3"},
+	},
 }
 
 var tuiCommands = []struct{ cmd, desc string }{
@@ -2953,6 +3002,19 @@ func (m *tuiModel) updateSuggestions(input string) tea.Cmd {
 			}
 			m.suggestions = matches
 			return nil
+		}
+		if argIdx == 3 && len(parts) >= 3 {
+			prov := strings.ToLower(parts[2])
+			if models, ok := modelSuggestions[prov]; ok {
+				var matches []suggestion
+				for _, s := range models {
+					if prefix == "" || strings.HasPrefix(s.text, prefix) {
+						matches = append(matches, s)
+					}
+				}
+				m.suggestions = matches
+				return nil
+			}
 		}
 	case "/baseurl":
 		if argIdx == 1 {

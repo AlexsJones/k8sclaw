@@ -4,6 +4,7 @@ apiVersion: kubeclaw.io/v1alpha1
 kind: SkillPack
 metadata:
   name: incident-response
+  namespace: kubeclaw-system
   labels:
     kubeclaw.io/builtin: "true"
     kubeclaw.io/category: sre

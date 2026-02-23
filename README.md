@@ -26,6 +26,23 @@ Agentic frameworks like OpenClaw pioneered rich agent orchestration — sub-agen
 
 KubeClaw takes the same agentic control model and rebuilds it on Kubernetes primitives:
 
+### Isolated Skill Sidecars — a game-changer
+
+Most agent frameworks dump every tool into one shared process. One bad `kubectl delete` and your whole agent environment is toast. KubeClaw does this completely differently:
+
+**Every skill runs in its own sidecar container** — a separate, isolated process injected into the agent pod at runtime. Toggle a skill on, and the controller automatically:
+
+- Injects a dedicated sidecar container with only the binaries that skill needs (`kubectl`, `helm`, `terraform`, etc.)
+- Provisions **ephemeral, least-privilege RBAC** scoped to that single agent run — no standing permissions, no god-roles
+- Shares a `/workspace` volume so the agent can coordinate with the sidecar
+- **Garbage-collects everything** when the run finishes — containers, roles, bindings, all gone
+
+This means you can give an agent full `kubectl` access for a troubleshooting run without worrying about leftover permissions. Skills are declared as CRDs, toggled per-instance in the TUI with a single keypress, and their containers are built and shipped alongside the rest of KubeClaw. No plugins to install, no runtime to configure — just Kubernetes-native isolation that scales.
+
+> _"Give the agent tools, not trust."_ — Skills get exactly the permissions they declare, for exactly as long as the run lasts, and not a second longer.
+
+### How it compares
+
 | Concern | OpenClaw (in-process) | KubeClaw (Kubernetes-native) |
 |---------|----------------------|----------------------------|
 | **Agent execution** | Shared memory, single process | Ephemeral **Pod** per invocation (K8s Job) |

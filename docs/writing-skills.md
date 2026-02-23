@@ -144,6 +144,32 @@ docker build -t ghcr.io/yourorg/skill-my-tool:latest images/skill-my-tool/
 docker push ghcr.io/yourorg/skill-my-tool:latest
 ```
 
+### Registering a built-in skill image in CI
+
+If the skill is **bundled with KubeClaw** (i.e. lives under `images/` and `config/skills/`), you must add it to the build pipeline so it is built and pushed automatically:
+
+1. **Makefile** — append `skill-<name>` to the `IMAGES` variable.
+2. **`.github/workflows/build.yaml`** — add `skill-<name>` to the `image` matrix.
+3. **`.github/workflows/release.yaml`** — add `skill-<name>` to the `image` matrix.
+
+For example, to add a new `skill-my-tool`:
+
+```makefile
+# Makefile
+IMAGES = controller apiserver ... skill-k8s-ops skill-my-tool
+```
+
+```yaml
+# .github/workflows/build.yaml & release.yaml
+matrix:
+  image:
+    - ...
+    - skill-k8s-ops
+    - skill-my-tool
+```
+
+This ensures `make docker-build` / `make docker-push` and CI all build the sidecar image alongside the other KubeClaw components.
+
 ---
 
 ## Step 3: Add the Sidecar to the SkillPack

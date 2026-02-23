@@ -1,18 +1,20 @@
 # Skill sidecar: k8s-ops
 # Provides kubectl for Kubernetes operations skills.
 # Runs as non-root (UID 1000) with a read-only rootfs.
-FROM bitnami/kubectl:1.31 AS kubectl
-
 FROM alpine:3.20
 
-# Install minimal utilities the agent might need
+ARG KUBECTL_VERSION=v1.31.4
+ARG TARGETARCH=amd64
+
+# Install kubectl from official release + supporting tools
 RUN apk add --no-cache \
     bash \
     curl \
     jq \
-    && adduser -D -u 1000 agent
-
-COPY --from=kubectl /opt/bitnami/kubectl/bin/kubectl /usr/local/bin/kubectl
+    && adduser -D -u 1000 agent \
+    && curl -fsSL "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/${TARGETARCH}/kubectl" \
+       -o /usr/local/bin/kubectl \
+    && chmod +x /usr/local/bin/kubectl
 
 USER 1000
 WORKDIR /workspace
