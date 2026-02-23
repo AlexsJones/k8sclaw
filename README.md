@@ -1,7 +1,7 @@
 # KubeClaw
 
 <p align="center">
-  <img src="icon.svg" alt="kubeclaw icon" width="128" height="128">
+  <img src="icon.png" alt="kubeclaw icon" width="128" height="128">
 </p>
 
 <p align="center">
