@@ -1,4 +1,9 @@
 # K8sClaw
+---
+<p align="center">
+  <img src="icon.svg" alt="llmfit icon" width="128" height="128">
+</p>
+
 
 **Kubernetes-native AI Agent Management Platform**
 
