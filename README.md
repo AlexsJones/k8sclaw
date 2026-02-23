@@ -1,13 +1,34 @@
 # K8sClaw
 ---
 <p align="center">
-  <img src="icon.svg" alt="llmfit icon" width="128" height="128">
+  <img src="icon.svg" alt="k8sclaw icon" width="128" height="128">
 </p>
-
 
 **Kubernetes-native AI Agent Management Platform**
 
 K8sClaw decomposes a monolithic AI agent gateway into a multi-tenant, horizontally scalable system where every sub-agent runs as an ephemeral Kubernetes pod.
+
+### Quick install (macOS / Linux)
+
+```bash
+curl -fsSL https://deploy.k8sclaw.ai/install.sh | sh
+```
+
+Downloads the latest CLI binary from GitHub and installs it to `/usr/local/bin` (or `~/.local/bin`).
+
+### Deploy to your cluster
+
+```bash
+k8sclaw install
+```
+
+That's it. This downloads the release manifests and applies CRDs, controllers, webhook, RBAC, and network policies to your current `kubectl` context.
+
+To remove:
+
+```bash
+k8sclaw uninstall
+```
 
 ## Architecture
 
@@ -89,47 +110,39 @@ k8sclaw/
 
 ## Prerequisites
 
-- Go 1.23+
-- Docker
 - Kubernetes cluster (v1.28+)
 - NATS with JetStream enabled
 - PostgreSQL with pgvector extension
+- `kubectl` configured to your cluster
 
 ## Quick Start
 
-### Build
+### Install the CLI
 
 ```bash
-# Build all binaries
-make build
+# macOS / Linux
+curl -fsSL https://deploy.k8sclaw.ai/install.sh | sh
 
-# Build all Docker images
-make docker-build
-
-# Build a specific component
-make build-controller
-make build-apiserver
+# Or build from source
+make build-k8sclaw
 ```
 
-### Deploy
+### Deploy K8sClaw
 
 ```bash
-# Install CRDs
-make install
+# Install to your cluster
+k8sclaw install
 
-# Deploy to cluster
-make deploy
+# Or install a specific version
+k8sclaw install --version v0.1.0
 
 # Create a sample ClawInstance
-kubectl apply -f config/samples/clawinstance_sample.yaml
+kubectl apply -f https://raw.githubusercontent.com/AlexsJones/k8sclaw/main/config/samples/clawinstance_sample.yaml
 ```
 
-### CLI
+### Use the CLI
 
 ```bash
-# Build the CLI
-make build-k8sclaw
-
 # List instances
 k8sclaw instances list
 
@@ -141,6 +154,12 @@ k8sclaw features enable browser-automation --policy default-policy
 
 # List feature gates
 k8sclaw features list --policy default-policy
+```
+
+### Remove K8sClaw
+
+```bash
+k8sclaw uninstall
 ```
 
 ## Development

@@ -5,12 +5,19 @@
 REGISTRY ?= ghcr.io/alexsjones/k8sclaw
 TAG ?= latest
 
+# Tool versions
+CONTROLLER_GEN_VERSION ?= v0.17.2
+
 # Go parameters
 GOCMD = go
 GOBUILD = $(GOCMD) build
 GOTEST = $(GOCMD) test
 GOVET = $(GOCMD) vet
 GOMOD = $(GOCMD) mod
+
+# Local tool binaries
+LOCALBIN ?= $(shell pwd)/bin
+CONTROLLER_GEN ?= $(LOCALBIN)/controller-gen
 
 # Binary output directory
 BIN_DIR = bin
@@ -64,12 +71,18 @@ tidy: ## Run go mod tidy
 
 ##@ Code Generation
 
-generate: ## Generate code (deepcopy, CRD manifests)
-	controller-gen object:headerFile="hack/boilerplate.go.txt" paths="./api/..."
-	controller-gen rbac:roleName=k8sclaw-manager-role crd webhook paths="./..." output:crd:artifacts:config=config/crd/bases
+.PHONY: controller-gen
+controller-gen: $(CONTROLLER_GEN) ## Install controller-gen locally
+$(CONTROLLER_GEN):
+	@mkdir -p $(LOCALBIN)
+	GOBIN=$(LOCALBIN) $(GOCMD) install sigs.k8s.io/controller-tools/cmd/controller-gen@$(CONTROLLER_GEN_VERSION)
 
-manifests: ## Generate CRD manifests
-	controller-gen crd paths="./api/..." output:crd:artifacts:config=config/crd/bases
+generate: controller-gen ## Generate code (deepcopy, CRD manifests)
+	$(CONTROLLER_GEN) object:headerFile="hack/boilerplate.go.txt" paths="./api/..."
+	$(CONTROLLER_GEN) rbac:roleName=k8sclaw-manager-role crd webhook paths="./..." output:crd:artifacts:config=config/crd/bases
+
+manifests: controller-gen ## Generate CRD manifests
+	$(CONTROLLER_GEN) crd paths="./api/..." output:crd:artifacts:config=config/crd/bases
 
 ##@ Docker
 

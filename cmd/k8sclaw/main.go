@@ -5,7 +5,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -22,6 +26,9 @@ import (
 )
 
 var (
+	// version is set via -ldflags at build time.
+	version = "dev"
+
 	kubeconfig string
 	namespace  string
 	k8sClient  client.Client
@@ -34,6 +41,11 @@ func main() {
 		Long: `K8sClaw CLI for managing ClawInstances, AgentRuns, ClawPolicies,
 SkillPacks, and feature gates in your Kubernetes cluster.`,
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+			// Skip K8s client init for commands that don't need it.
+			switch cmd.Name() {
+			case "version", "install", "uninstall":
+				return nil
+			}
 			return initClient()
 		},
 	}
@@ -42,6 +54,8 @@ SkillPacks, and feature gates in your Kubernetes cluster.`,
 	rootCmd.PersistentFlags().StringVarP(&namespace, "namespace", "n", "default", "Kubernetes namespace")
 
 	rootCmd.AddCommand(
+		newInstallCmd(),
+		newUninstallCmd(),
 		newInstancesCmd(),
 		newRunsCmd(),
 		newPoliciesCmd(),
@@ -380,7 +394,188 @@ func newVersionCmd() *cobra.Command {
 		Use:   "version",
 		Short: "Print the version",
 		Run: func(cmd *cobra.Command, args []string) {
-			fmt.Println("k8sclaw v0.1.0-dev")
+			fmt.Printf("k8sclaw %s\n", version)
 		},
 	}
+}
+
+const (
+	ghRepo         = "AlexsJones/k8sclaw"
+	manifestAsset  = "k8sclaw-manifests.tar.gz"
+)
+
+func newInstallCmd() *cobra.Command {
+	var manifestVersion string
+	cmd := &cobra.Command{
+		Use:   "install",
+		Short: "Install K8sClaw into the current Kubernetes cluster",
+		Long: `Downloads the K8sClaw release manifests from GitHub and applies
+them to your current Kubernetes cluster using kubectl.
+
+Installs CRDs, the controller manager, API server, admission webhook,
+RBAC rules, and network policies.`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runInstall(manifestVersion)
+		},
+	}
+	cmd.Flags().StringVar(&manifestVersion, "version", "", "Release version to install (default: latest)")
+	return cmd
+}
+
+func newUninstallCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "uninstall",
+		Short: "Remove K8sClaw from the current Kubernetes cluster",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runUninstall()
+		},
+	}
+}
+
+func runInstall(ver string) error {
+	if ver == "" {
+		if version != "dev" {
+			ver = version
+		} else {
+			v, err := resolveLatestTag()
+			if err != nil {
+				return err
+			}
+			ver = v
+		}
+	}
+
+	fmt.Printf("  Installing K8sClaw %s...\n", ver)
+
+	// Download manifest bundle.
+	url := fmt.Sprintf("https://github.com/%s/releases/download/%s/%s", ghRepo, ver, manifestAsset)
+	tmpDir, err := os.MkdirTemp("", "k8sclaw-install-*")
+	if err != nil {
+		return fmt.Errorf("create temp dir: %w", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	bundlePath := filepath.Join(tmpDir, manifestAsset)
+	fmt.Println("  Downloading manifests...")
+	if err := downloadFile(url, bundlePath); err != nil {
+		return fmt.Errorf("download manifests: %w", err)
+	}
+
+	// Extract.
+	fmt.Println("  Extracting...")
+	tar := exec.Command("tar", "-xzf", bundlePath, "-C", tmpDir)
+	tar.Stderr = os.Stderr
+	if err := tar.Run(); err != nil {
+		return fmt.Errorf("extract manifests: %w", err)
+	}
+
+	// Apply CRDs first.
+	fmt.Println("  Applying CRDs...")
+	if err := kubectl("apply", "-f", filepath.Join(tmpDir, "config/crd/bases/")); err != nil {
+		return err
+	}
+
+	// Apply RBAC.
+	fmt.Println("  Applying RBAC...")
+	if err := kubectl("apply", "-f", filepath.Join(tmpDir, "config/rbac/")); err != nil {
+		return err
+	}
+
+	// Apply manager (controller + apiserver).
+	fmt.Println("  Deploying control plane...")
+	if err := kubectl("apply", "-f", filepath.Join(tmpDir, "config/manager/")); err != nil {
+		return err
+	}
+
+	// Apply webhook.
+	fmt.Println("  Deploying webhook...")
+	if err := kubectl("apply", "-f", filepath.Join(tmpDir, "config/webhook/")); err != nil {
+		return err
+	}
+
+	// Apply network policies.
+	fmt.Println("  Applying network policies...")
+	if err := kubectl("apply", "-f", filepath.Join(tmpDir, "config/network/")); err != nil {
+		return err
+	}
+
+	fmt.Println("\n  K8sClaw installed successfully!")
+	fmt.Println("  Try: kubectl apply -f https://raw.githubusercontent.com/" + ghRepo + "/main/config/samples/clawinstance_sample.yaml")
+	return nil
+}
+
+func runUninstall() error {
+	fmt.Println("  Removing K8sClaw...")
+
+	// Delete in reverse order.
+	manifests := []string{
+		"https://raw.githubusercontent.com/" + ghRepo + "/main/config/network/policies.yaml",
+		"https://raw.githubusercontent.com/" + ghRepo + "/main/config/webhook/manifests.yaml",
+		"https://raw.githubusercontent.com/" + ghRepo + "/main/config/manager/manager.yaml",
+		"https://raw.githubusercontent.com/" + ghRepo + "/main/config/rbac/role.yaml",
+	}
+	for _, m := range manifests {
+		_ = kubectl("delete", "--ignore-not-found", "-f", m)
+	}
+
+	// CRDs last.
+	crdBase := "https://raw.githubusercontent.com/" + ghRepo + "/main/config/crd/bases/"
+	crds := []string{
+		"k8sclaw.io_clawinstances.yaml",
+		"k8sclaw.io_agentruns.yaml",
+		"k8sclaw.io_clawpolicies.yaml",
+		"k8sclaw.io_skillpacks.yaml",
+	}
+	for _, c := range crds {
+		_ = kubectl("delete", "--ignore-not-found", "-f", crdBase+c)
+	}
+
+	fmt.Println("  K8sClaw uninstalled.")
+	return nil
+}
+
+func resolveLatestTag() (string, error) {
+	client := &http.Client{CheckRedirect: func(req *http.Request, via []*http.Request) error {
+		return http.ErrUseLastResponse
+	}}
+	resp, err := client.Get(fmt.Sprintf("https://github.com/%s/releases/latest", ghRepo))
+	if err != nil {
+		return "", fmt.Errorf("resolve latest release: %w", err)
+	}
+	defer resp.Body.Close()
+
+	loc := resp.Header.Get("Location")
+	if loc == "" {
+		return "", fmt.Errorf("no releases found at github.com/%s", ghRepo)
+	}
+	parts := strings.Split(loc, "/tag/")
+	if len(parts) < 2 {
+		return "", fmt.Errorf("unexpected redirect URL: %s", loc)
+	}
+	return parts[1], nil
+}
+
+func downloadFile(url, dest string) error {
+	resp, err := http.Get(url)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("HTTP %d from %s", resp.StatusCode, url)
+	}
+	f, err := os.Create(dest)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	_, err = io.Copy(f, resp.Body)
+	return err
+}
+
+func kubectl(args ...string) error {
+	cmd := exec.Command("kubectl", args...)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
 }
