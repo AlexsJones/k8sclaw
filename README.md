@@ -27,6 +27,7 @@ curl -fsSL https://deploy.k8sclaw.ai/install.sh | sh
 
 ```bash
 k8sclaw install          # CRDs, controllers, webhook, NATS, RBAC, network policies
+k8sclaw onboard          # interactive setup wizard — instance, provider, channel
 k8sclaw uninstall        # clean removal
 ```
 

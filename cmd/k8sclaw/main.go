@@ -2,6 +2,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -43,7 +44,7 @@ SkillPacks, and feature gates in your Kubernetes cluster.`,
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 			// Skip K8s client init for commands that don't need it.
 			switch cmd.Name() {
-			case "version", "install", "uninstall":
+			case "version", "install", "uninstall", "onboard":
 				return nil
 			}
 			return initClient()
@@ -56,6 +57,7 @@ SkillPacks, and feature gates in your Kubernetes cluster.`,
 	rootCmd.AddCommand(
 		newInstallCmd(),
 		newUninstallCmd(),
+		newOnboardCmd(),
 		newInstancesCmd(),
 		newRunsCmd(),
 		newPoliciesCmd(),
@@ -403,6 +405,327 @@ const (
 	ghRepo         = "AlexsJones/k8sclaw"
 	manifestAsset  = "k8sclaw-manifests.tar.gz"
 )
+
+// ── Onboard ──────────────────────────────────────────────────────────────────
+
+func newOnboardCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "onboard",
+		Short: "Interactive setup wizard for K8sClaw",
+		Long: `Walks you through creating your first ClawInstance, connecting a
+channel (Telegram, Slack, Discord, or WhatsApp), setting up your AI provider
+credentials, and optionally applying a default ClawPolicy.`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runOnboard()
+		},
+	}
+}
+
+func runOnboard() error {
+	reader := bufio.NewReader(os.Stdin)
+
+	printBanner()
+
+	// ── Step 1: Check K8sClaw is installed ───────────────────────────────
+	fmt.Println("\n📋 Step 1/5 — Checking cluster...")
+	if err := initClient(); err != nil {
+		fmt.Println("\n  ❌ Cannot connect to your cluster.")
+		fmt.Println("  Make sure kubectl is configured and run: k8sclaw install")
+		return err
+	}
+
+	// Quick health check: can we list CRDs?
+	ctx := context.Background()
+	var instances k8sclawv1alpha1.ClawInstanceList
+	if err := k8sClient.List(ctx, &instances, client.InNamespace(namespace)); err != nil {
+		fmt.Println("\n  ❌ K8sClaw CRDs not found. Run 'k8sclaw install' first.")
+		return fmt.Errorf("CRDs not installed: %w", err)
+	}
+	fmt.Println("  ✅ K8sClaw is installed and CRDs are available.")
+
+	// ── Step 2: Instance name ────────────────────────────────────────────
+	fmt.Println("\n📋 Step 2/5 — Create your ClawInstance")
+	fmt.Println("  An instance represents you (or a tenant) in the system.")
+	instanceName := prompt(reader, "  Instance name", "my-agent")
+
+	// ── Step 3: AI provider ──────────────────────────────────────────────
+	fmt.Println("\n📋 Step 3/5 — AI Provider")
+	fmt.Println("  Which model provider do you want to use?")
+	fmt.Println("    1) OpenAI")
+	fmt.Println("    2) Anthropic")
+	fmt.Println("    3) Other / bring-your-own")
+	providerChoice := prompt(reader, "  Choice [1-3]", "1")
+
+	var providerName, secretEnvKey, modelName string
+	switch providerChoice {
+	case "2":
+		providerName = "anthropic"
+		secretEnvKey = "ANTHROPIC_API_KEY"
+		modelName = prompt(reader, "  Model name", "claude-sonnet-4-20250514")
+	case "3":
+		providerName = prompt(reader, "  Provider name", "custom")
+		secretEnvKey = prompt(reader, "  API key env var name", "API_KEY")
+		modelName = prompt(reader, "  Model name", "")
+	default:
+		providerName = "openai"
+		secretEnvKey = "OPENAI_API_KEY"
+		modelName = prompt(reader, "  Model name", "gpt-4o")
+	}
+
+	apiKey := promptSecret(reader, fmt.Sprintf("  %s", secretEnvKey))
+	if apiKey == "" {
+		fmt.Println("  ⚠  No API key provided — you can add it later:")
+		fmt.Printf("  kubectl create secret generic %s-%s-key --from-literal=%s=<key>\n",
+			instanceName, providerName, secretEnvKey)
+	}
+
+	providerSecretName := fmt.Sprintf("%s-%s-key", instanceName, providerName)
+
+	// ── Step 4: Channel ──────────────────────────────────────────────────
+	fmt.Println("\n📋 Step 4/5 — Connect a Channel (optional)")
+	fmt.Println("  Channels let your agent receive messages from external platforms.")
+	fmt.Println("    1) Telegram  — easiest, just talk to @BotFather")
+	fmt.Println("    2) Slack")
+	fmt.Println("    3) Discord")
+	fmt.Println("    4) WhatsApp")
+	fmt.Println("    5) Skip — I'll add a channel later")
+	channelChoice := prompt(reader, "  Choice [1-5]", "5")
+
+	var channelType, channelTokenKey, channelToken string
+	switch channelChoice {
+	case "1":
+		channelType = "telegram"
+		channelTokenKey = "TELEGRAM_BOT_TOKEN"
+		fmt.Println("\n  💡 Get a bot token from https://t.me/BotFather")
+		channelToken = promptSecret(reader, "  Bot Token")
+	case "2":
+		channelType = "slack"
+		channelTokenKey = "SLACK_BOT_TOKEN"
+		fmt.Println("\n  💡 Create a Slack app at https://api.slack.com/apps")
+		channelToken = promptSecret(reader, "  Bot OAuth Token")
+	case "3":
+		channelType = "discord"
+		channelTokenKey = "DISCORD_BOT_TOKEN"
+		fmt.Println("\n  💡 Create a Discord app at https://discord.com/developers/applications")
+		channelToken = promptSecret(reader, "  Bot Token")
+	case "4":
+		channelType = "whatsapp"
+		channelTokenKey = "WHATSAPP_ACCESS_TOKEN"
+		fmt.Println("\n  💡 Set up the WhatsApp Cloud API at https://developers.facebook.com")
+		channelToken = promptSecret(reader, "  Access Token")
+	default:
+		channelType = ""
+	}
+
+	channelSecretName := fmt.Sprintf("%s-%s-secret", instanceName, channelType)
+
+	// ── Step 5: Apply default policy? ────────────────────────────────────
+	fmt.Println("\n📋 Step 5/5 — Default Policy")
+	fmt.Println("  A ClawPolicy controls what tools agents can use, sandboxing, etc.")
+	applyPolicy := promptYN(reader, "  Apply the default policy?", true)
+
+	// ── Summary ──────────────────────────────────────────────────────────
+	fmt.Println("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+	fmt.Println("  Summary")
+	fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+	fmt.Printf("  Instance:   %s  (namespace: %s)\n", instanceName, namespace)
+	fmt.Printf("  Provider:   %s  (model: %s)\n", providerName, modelName)
+	if channelType != "" {
+		fmt.Printf("  Channel:    %s\n", channelType)
+	} else {
+		fmt.Println("  Channel:    (none)")
+	}
+	fmt.Printf("  Policy:     %v\n", applyPolicy)
+	fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+
+	if !promptYN(reader, "\n  Proceed?", true) {
+		fmt.Println("  Aborted.")
+		return nil
+	}
+
+	// ── Apply resources ──────────────────────────────────────────────────
+	fmt.Println()
+
+	// 1. Create AI provider secret.
+	if apiKey != "" {
+		fmt.Printf("  Creating secret %s...\n", providerSecretName)
+		// Delete first to allow re-runs.
+		_ = kubectl("delete", "secret", providerSecretName, "-n", namespace, "--ignore-not-found")
+		if err := kubectl("create", "secret", "generic", providerSecretName,
+			"-n", namespace,
+			fmt.Sprintf("--from-literal=%s=%s", secretEnvKey, apiKey)); err != nil {
+			return fmt.Errorf("create provider secret: %w", err)
+		}
+	}
+
+	// 2. Create channel secret.
+	if channelType != "" && channelToken != "" {
+		fmt.Printf("  Creating secret %s...\n", channelSecretName)
+		_ = kubectl("delete", "secret", channelSecretName, "-n", namespace, "--ignore-not-found")
+		if err := kubectl("create", "secret", "generic", channelSecretName,
+			"-n", namespace,
+			fmt.Sprintf("--from-literal=%s=%s", channelTokenKey, channelToken)); err != nil {
+			return fmt.Errorf("create channel secret: %w", err)
+		}
+	}
+
+	// 3. Apply default policy.
+	policyName := "default-policy"
+	if applyPolicy {
+		fmt.Println("  Applying default ClawPolicy...")
+		policyYAML := buildDefaultPolicyYAML(policyName, namespace)
+		if err := kubectlApplyStdin(policyYAML); err != nil {
+			return fmt.Errorf("apply policy: %w", err)
+		}
+	}
+
+	// 4. Create ClawInstance.
+	fmt.Printf("  Creating ClawInstance %s...\n", instanceName)
+	instanceYAML := buildClawInstanceYAML(instanceName, namespace, modelName,
+		providerName, providerSecretName, channelType, channelSecretName,
+		policyName, applyPolicy)
+	if err := kubectlApplyStdin(instanceYAML); err != nil {
+		return fmt.Errorf("apply instance: %w", err)
+	}
+
+	// ── Done ─────────────────────────────────────────────────────────────
+	fmt.Println("\n  ✅ Onboarding complete!")
+	fmt.Println()
+	fmt.Println("  Next steps:")
+	fmt.Println("  ─────────────────────────────────────────────────")
+	fmt.Printf("  • Check your instance:   k8sclaw instances get %s\n", instanceName)
+	if channelType == "telegram" {
+		fmt.Println("  • Send a message to your Telegram bot — it's live!")
+	}
+	fmt.Printf("  • Run an agent:          kubectl apply -f config/samples/agentrun_sample.yaml\n")
+	fmt.Printf("  • View runs:             k8sclaw runs list\n")
+	fmt.Printf("  • Feature gates:         k8sclaw features list --policy %s\n", policyName)
+	fmt.Println()
+	return nil
+}
+
+func printBanner() {
+	fmt.Println()
+	fmt.Println("  ╔═══════════════════════════════════════════╗")
+	fmt.Println("  ║         K8sClaw · Onboarding Wizard       ║")
+	fmt.Println("  ╚═══════════════════════════════════════════╝")
+}
+
+// prompt shows a prompt with an optional default and returns the user's input.
+func prompt(reader *bufio.Reader, label, defaultVal string) string {
+	if defaultVal != "" {
+		fmt.Printf("%s [%s]: ", label, defaultVal)
+	} else {
+		fmt.Printf("%s: ", label)
+	}
+	line, _ := reader.ReadString('\n')
+	line = strings.TrimSpace(line)
+	if line == "" {
+		return defaultVal
+	}
+	return line
+}
+
+// promptSecret reads input without showing a default.
+func promptSecret(reader *bufio.Reader, label string) string {
+	fmt.Printf("%s: ", label)
+	line, _ := reader.ReadString('\n')
+	return strings.TrimSpace(line)
+}
+
+// promptYN asks a yes/no question.
+func promptYN(reader *bufio.Reader, label string, defaultYes bool) bool {
+	hint := "Y/n"
+	if !defaultYes {
+		hint = "y/N"
+	}
+	fmt.Printf("%s [%s]: ", label, hint)
+	line, _ := reader.ReadString('\n')
+	line = strings.TrimSpace(strings.ToLower(line))
+	if line == "" {
+		return defaultYes
+	}
+	return line == "y" || line == "yes"
+}
+
+func buildDefaultPolicyYAML(name, ns string) string {
+	return fmt.Sprintf(`apiVersion: k8sclaw.io/v1alpha1
+kind: ClawPolicy
+metadata:
+  name: %s
+  namespace: %s
+spec:
+  toolGating:
+    defaultAction: allow
+    rules:
+      - tool: exec_command
+        action: ask
+      - tool: write_file
+        action: allow
+        conditions:
+          maxCallsPerRun: 100
+      - tool: network_request
+        action: deny
+  execGating:
+    allowShell: true
+    allowedCommands: [git, npm, go, python, make]
+    deniedCommands: ["rm -rf /", curl, wget]
+    maxExecTime: "30s"
+  subagentPolicy:
+    maxDepth: 3
+    maxConcurrent: 5
+    inheritTools: true
+  sandboxPolicy:
+    required: false
+    defaultImage: ghcr.io/alexsjones/k8sclaw/sandbox:latest
+    maxCPU: "4"
+    maxMemory: 8Gi
+  featureGates:
+    browser-automation: false
+    code-execution: true
+    file-access: true
+`, name, ns)
+}
+
+func buildClawInstanceYAML(name, ns, model, provider, providerSecret,
+	channelType, channelSecret, policyName string, hasPolicy bool) string {
+
+	var channelsBlock string
+	if channelType != "" {
+		channelsBlock = fmt.Sprintf(`  channels:
+    - type: %s
+      configRef:
+        secret: %s
+`, channelType, channelSecret)
+	}
+
+	var policyBlock string
+	if hasPolicy {
+		policyBlock = fmt.Sprintf("  policyRef: %s\n", policyName)
+	}
+
+	return fmt.Sprintf(`apiVersion: k8sclaw.io/v1alpha1
+kind: ClawInstance
+metadata:
+  name: %s
+  namespace: %s
+spec:
+%s  agents:
+    default:
+      model: %s
+  authRefs:
+    - provider: %s
+      secret: %s
+%s`, name, ns, channelsBlock, model, provider, providerSecret, policyBlock)
+}
+
+func kubectlApplyStdin(yaml string) error {
+	cmd := exec.Command("kubectl", "apply", "-f", "-")
+	cmd.Stdin = strings.NewReader(yaml)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
+}
 
 func newInstallCmd() *cobra.Command {
 	var manifestVersion string
