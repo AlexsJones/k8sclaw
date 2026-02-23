@@ -2689,11 +2689,19 @@ func (m tuiModel) View() string {
 	}
 
 	// Split pane: show a conversational feed on the right when instances exist
-	// and the terminal is wide enough.
-	showFeed := len(m.instances) > 0 && m.width >= 120
+	// and the terminal is wide enough for the table columns to fit.
+	showFeed := len(m.instances) > 0 && m.width >= 140
 	fullWidth := m.width
 	if showFeed {
-		m.width = fullWidth * 3 / 5 // left pane gets 60%
+		// Give the left pane enough room for table columns (~95 chars).
+		leftW := fullWidth * 2 / 3
+		if leftW < 95 {
+			leftW = 95
+		}
+		if leftW > fullWidth-30 {
+			leftW = fullWidth - 30 // ensure feed gets at least 30 cols
+		}
+		m.width = leftW
 	}
 
 	// Normal layout:
@@ -2756,6 +2764,7 @@ func (m tuiModel) View() string {
 		view.WriteString(m.renderSuggestions())
 	}
 	if m.inputFocused {
+		m.input.Width = m.width - 4 // reserve space for prompt and padding
 		view.WriteString(" " + m.input.View())
 	} else {
 		view.WriteString(tuiDimStyle.Render(" Press / to enter a command"))
@@ -3196,9 +3205,19 @@ func (m tuiModel) renderLog(logH int) string {
 		start = 0
 	}
 	visible := m.logLines[start:]
+	maxW := m.width - 1 // 1 for leading space
+	if maxW < 10 {
+		maxW = 10
+	}
 	for i := 0; i < logH-1; i++ {
 		if i < len(visible) {
-			b.WriteString(" " + visible[i])
+			line := visible[i]
+			// Strip ANSI to measure, then truncate the raw string.
+			plain := stripAnsi(line)
+			if len(plain) > maxW {
+				line = line[:maxW]
+			}
+			b.WriteString(" " + line)
 		}
 		b.WriteString("\n")
 	}
@@ -3372,10 +3391,14 @@ func (m tuiModel) renderStatusBar() string {
 		}
 	}
 
+	// Build key hints, stopping when we'd exceed pane width.
 	var sb strings.Builder
 	for i := 0; i < len(keys)-1; i += 2 {
-		sb.WriteString(tuiStatusKeyStyle.Render(" "+keys[i]+" "))
-		sb.WriteString(tuiStatusBarStyle.Render(keys[i+1]+" "))
+		entry := tuiStatusKeyStyle.Render(" "+keys[i]+" ") + tuiStatusBarStyle.Render(keys[i+1]+" ")
+		if lipgloss.Width(sb.String()+entry) > m.width {
+			break
+		}
+		sb.WriteString(entry)
 	}
 
 	left := sb.String()
@@ -3738,13 +3761,20 @@ func tuiPodLogs(ns, podName string) (string, error) {
 	if lines == "" {
 		return tuiDimStyle.Render(fmt.Sprintf("(no logs for %s)", podName)), nil
 	}
-	// Show last few lines in the log pane.
+	// Show last few lines in the log pane, stripping internal markers.
 	parts := strings.Split(lines, "\n")
-	if len(parts) > 15 {
-		parts = parts[len(parts)-15:]
+	var filtered []string
+	for _, p := range parts {
+		if strings.Contains(p, "__K8SCLAW_RESULT__") || strings.Contains(p, "__K8SCLAW_END__") {
+			continue
+		}
+		filtered = append(filtered, p)
+	}
+	if len(filtered) > 15 {
+		filtered = filtered[len(filtered)-15:]
 	}
 	header := tuiHeaderStyle.Render(fmt.Sprintf("── logs: %s ──", podName))
-	return header + "\n" + strings.Join(parts, "\n"), nil
+	return header + "\n" + strings.Join(filtered, "\n"), nil
 }
 
 func tuiDescribeResource(ns, kind, name string) (string, error) {
@@ -4391,4 +4421,27 @@ func min(a, b int) int {
 		return a
 	}
 	return b
+}
+
+// stripAnsi removes ANSI escape sequences so we can measure visible width.
+func stripAnsi(s string) string {
+	var out strings.Builder
+	i := 0
+	for i < len(s) {
+		if s[i] == '\x1b' && i+1 < len(s) && s[i+1] == '[' {
+			// Skip until we find the terminating letter.
+			j := i + 2
+			for j < len(s) && !((s[j] >= 'A' && s[j] <= 'Z') || (s[j] >= 'a' && s[j] <= 'z')) {
+				j++
+			}
+			if j < len(s) {
+				j++ // skip the terminator
+			}
+			i = j
+		} else {
+			out.WriteByte(s[i])
+			i++
+		}
+	}
+	return out.String()
 }
