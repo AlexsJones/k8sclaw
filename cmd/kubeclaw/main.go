@@ -3997,8 +3997,8 @@ func (m tuiModel) renderFeed(width, height int) string {
 		if maxTaskW < 10 {
 			maxTaskW = 10
 		}
-		if len(task) > maxTaskW {
-			task = task[:maxTaskW-3] + "..."
+		if lipgloss.Width(task) > maxTaskW {
+			task = ansiTruncate(task, maxTaskW-3) + "..."
 		}
 		allLines = append(allLines, tuiFeedPromptStyle.Render(" ▸ "+task))
 
@@ -4020,8 +4020,8 @@ func (m tuiModel) renderFeed(width, height int) string {
 						break
 					}
 					rl = strings.TrimRight(rl, " \t\r")
-					if len(rl) > width-5 {
-						rl = rl[:width-8] + "..."
+					if lipgloss.Width(rl) > width-5 {
+						rl = ansiTruncate(rl, width-8) + "..."
 					}
 					allLines = append(allLines, tuiSuccessStyle.Render("   "+rl))
 					shown++
@@ -4109,8 +4109,8 @@ func (m tuiModel) renderFeedFullscreen() string {
 			if maxTaskW < 10 {
 				maxTaskW = 10
 			}
-			if len(task) > maxTaskW {
-				task = task[:maxTaskW-3] + "..."
+			if lipgloss.Width(task) > maxTaskW {
+				task = ansiTruncate(task, maxTaskW-3) + "..."
 			}
 			allLines = append(allLines, tuiFeedPromptStyle.Render(" ▸ "+task))
 
@@ -4225,6 +4225,10 @@ func padAndJoinLines(lines []string, width int) string {
 	var b strings.Builder
 	for i, line := range lines {
 		w := lipgloss.Width(line)
+		if w > width {
+			line = ansiTruncate(line, width)
+			w = lipgloss.Width(line)
+		}
 		if w < width {
 			line += strings.Repeat(" ", width-w)
 		}
@@ -5482,10 +5486,8 @@ func joinPanesHorizontally(left, right string, leftW, rightW int) string {
 
 	sepStr := lipgloss.NewStyle().Foreground(lipgloss.Color("#313244")).Render("│")
 
+	// Never let the right pane make the output taller than the left.
 	maxLines := len(leftLines)
-	if len(rightLines) > maxLines {
-		maxLines = len(rightLines)
-	}
 
 	var b strings.Builder
 	for i := 0; i < maxLines; i++ {
@@ -5496,8 +5498,7 @@ func joinPanesHorizontally(left, right string, leftW, rightW int) string {
 		if i < len(rightLines) {
 			r = rightLines[i]
 		}
-		// Truncate left line if it exceeds leftW (table rows may be wider),
-		// preserving ANSI escape codes so styles (selected row, etc.) survive.
+		// Truncate left line if it exceeds leftW.
 		lw := lipgloss.Width(l)
 		if lw > leftW {
 			l = ansiTruncate(l, leftW)
@@ -5505,6 +5506,11 @@ func joinPanesHorizontally(left, right string, leftW, rightW int) string {
 		}
 		if lw < leftW {
 			l += strings.Repeat(" ", leftW-lw)
+		}
+		// Truncate right line if it exceeds rightW to prevent terminal wrapping.
+		rw := lipgloss.Width(r)
+		if rw > rightW {
+			r = ansiTruncate(r, rightW)
 		}
 		b.WriteString(l + sepStr + r)
 		if i < maxLines-1 {
