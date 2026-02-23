@@ -7,6 +7,8 @@ on:
 permissions:
   contents: write
   packages: write
+  pages: write
+  id-token: write
 
 env:
   REGISTRY: ghcr.io/alexsjones/k8sclaw
