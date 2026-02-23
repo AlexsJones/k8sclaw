@@ -475,6 +475,35 @@ func runInstall(ver string) error {
 		return err
 	}
 
+	// Create namespace before RBAC (ServiceAccounts reference it).
+	// Ignore AlreadyExists error on re-installs.
+	fmt.Println("  Creating namespace...")
+	_ = kubectl("create", "namespace", "k8sclaw-system")
+
+	// Deploy NATS event bus.
+	fmt.Println("  Deploying NATS event bus...")
+	if err := kubectl("apply", "-f", resolveConfigPath(tmpDir, "config/nats/")); err != nil {
+		return err
+	}
+
+	// Install cert-manager if not present, then apply webhook certificate.
+	fmt.Println("  Checking cert-manager...")
+	if err := kubectl("get", "namespace", "cert-manager"); err != nil {
+		fmt.Println("  Installing cert-manager...")
+		if err := kubectl("apply", "-f",
+			"https://github.com/cert-manager/cert-manager/releases/download/v1.17.1/cert-manager.yaml"); err != nil {
+			return fmt.Errorf("install cert-manager: %w", err)
+		}
+		fmt.Println("  Waiting for cert-manager to be ready...")
+		_ = kubectl("wait", "--for=condition=Available", "deployment/cert-manager-webhook",
+			"-n", "cert-manager", "--timeout=90s")
+	}
+
+	fmt.Println("  Creating webhook certificate...")
+	if err := kubectl("apply", "-f", resolveConfigPath(tmpDir, "config/cert/")); err != nil {
+		return err
+	}
+
 	// Apply RBAC.
 	fmt.Println("  Applying RBAC...")
 	if err := kubectl("apply", "-f", filepath.Join(tmpDir, "config/rbac/")); err != nil {
@@ -500,7 +529,7 @@ func runInstall(ver string) error {
 	}
 
 	fmt.Println("\n  K8sClaw installed successfully!")
-	fmt.Println("  Try: kubectl apply -f https://raw.githubusercontent.com/" + ghRepo + "/main/config/samples/clawinstance_sample.yaml")
+	fmt.Println("  Run: kubectl get pods -n k8sclaw-system")
 	return nil
 }
 
@@ -578,4 +607,19 @@ func kubectl(args ...string) error {
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
+}
+
+// resolveConfigPath checks for a config path in the extracted bundle first,
+// then falls back to the local working tree (for dev builds run from source).
+func resolveConfigPath(bundleDir, relPath string) string {
+	bundled := filepath.Join(bundleDir, relPath)
+	if _, err := os.Stat(bundled); err == nil {
+		return bundled
+	}
+	// Dev fallback: check if we're running from the source tree.
+	if _, err := os.Stat(relPath); err == nil {
+		return relPath
+	}
+	// Return the bundled path anyway; kubectl will report the error.
+	return bundled
 }

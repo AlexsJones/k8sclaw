@@ -31,9 +31,9 @@ func main() {
 	var namespace string
 	var eventBusURL string
 
-	flag.StringVar(&addr, "addr", ":8090", "API server listen address")
+	flag.StringVar(&addr, "addr", ":8080", "API server listen address")
 	flag.StringVar(&namespace, "namespace", "k8sclaw", "K8sClaw namespace")
-	flag.StringVar(&eventBusURL, "event-bus-url", "nats://nats.k8sclaw:4222", "Event bus URL")
+	flag.StringVar(&eventBusURL, "event-bus-url", "nats://nats.k8sclaw-system.svc:4222", "Event bus URL")
 	flag.Parse()
 
 	log := zap.New(zap.UseDevMode(true))
@@ -47,17 +47,19 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Connect to event bus
-	bus, err := eventbus.NewNATSEventBus(eventBusURL)
+	// Connect to event bus (retry in background if unavailable).
+	var bus eventbus.EventBus
+	bus, err = eventbus.NewNATSEventBus(eventBusURL)
 	if err != nil {
-		log.Error(err, "failed to connect to event bus")
-		os.Exit(1)
+		log.Error(err, "event bus not available, starting without streaming support")
 	}
-	defer bus.Close()
 
 	// Create and start API server
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
+	if bus != nil {
+		defer bus.Close()
+	}
 
 	// Start the manager cache in background
 	go func() {

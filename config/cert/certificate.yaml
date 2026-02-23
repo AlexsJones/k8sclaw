@@ -1,0 +1,29 @@
+---
+# Self-signed issuer for K8sClaw webhook TLS
+# Requires cert-manager to be installed:
+#   kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/v1.17.1/cert-manager.yaml
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: k8sclaw-selfsigned
+  namespace: k8sclaw-system
+spec:
+  selfSigned: {}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: k8sclaw-webhook-cert
+  namespace: k8sclaw-system
+spec:
+  secretName: k8sclaw-webhook-cert
+  issuerRef:
+    name: k8sclaw-selfsigned
+    kind: Issuer
+  dnsNames:
+    - k8sclaw-webhook-service
+    - k8sclaw-webhook-service.k8sclaw-system
+    - k8sclaw-webhook-service.k8sclaw-system.svc
+    - k8sclaw-webhook-service.k8sclaw-system.svc.cluster.local
+  duration: 8760h   # 1 year
+  renewBefore: 720h # 30 days

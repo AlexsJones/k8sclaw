@@ -68,7 +68,9 @@ jobs:
             config/manager/ \
             config/rbac/ \
             config/webhook/ \
-            config/network/
+            config/network/ \
+            config/nats/ \
+            config/cert/
 
       - name: Upload manifests
         uses: softprops/action-gh-release@v2
@@ -134,13 +136,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Prepare site
+        run: |
+          mkdir -p _site
+          cp index.html install.sh CNAME icon.svg _site/
+
       - name: Setup Pages
         uses: actions/configure-pages@v5
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: .
+          path: _site
 
       - name: Deploy to GitHub Pages
         id: deployment
