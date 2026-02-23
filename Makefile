@@ -1,8 +1,8 @@
 # K8sClaw Makefile
 # Kubernetes-native agent orchestration platform
 
-# Image registry
-REGISTRY ?= ghcr.io/k8sclaw
+# Image registry — matches ghcr.io/<owner>/<repo>/<image>
+REGISTRY ?= ghcr.io/alexsjones/k8sclaw
 TAG ?= latest
 
 # Go parameters
@@ -82,6 +82,14 @@ docker-push: $(addprefix docker-push-,$(IMAGES)) ## Push all Docker images
 
 docker-push-%: ## Push a specific Docker image
 	docker push $(REGISTRY)/$*:$(TAG)
+
+set-images: ## Stamp REGISTRY/TAG into K8s manifests
+	cd config/manager && kustomize edit set image \
+		controller=$(REGISTRY)/controller:$(TAG) \
+		apiserver=$(REGISTRY)/apiserver:$(TAG)
+	cd config/webhook && kustomize edit set image \
+		webhook=$(REGISTRY)/webhook:$(TAG)
+	@echo "Images set to $(REGISTRY)/*:$(TAG)"
 
 ##@ Deployment
 

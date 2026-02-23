@@ -36,7 +36,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: manager
-          image: ghcr.io/k8sclaw/controller:latest
+          image: ghcr.io/alexsjones/k8sclaw/controller:latest
           args:
             - --leader-elect
             - --event-bus-url=nats://nats.k8sclaw-system.svc:4222
@@ -96,7 +96,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: apiserver
-          image: ghcr.io/k8sclaw/apiserver:latest
+          image: ghcr.io/alexsjones/k8sclaw/apiserver:latest
           args:
             - --event-bus-url=nats://nats.k8sclaw-system.svc:4222
           ports:

@@ -317,7 +317,7 @@ func (r *AgentRunReconciler) buildContainers(agentRun *k8sclawv1alpha1.AgentRun)
 		// Main agent container
 		{
 			Name:  "agent",
-			Image: "ghcr.io/k8sclaw/agent-runner:latest",
+			Image: "ghcr.io/alexsjones/k8sclaw/agent-runner:latest",
 			SecurityContext: &corev1.SecurityContext{
 				ReadOnlyRootFilesystem:   &readOnly,
 				AllowPrivilegeEscalation: &noPrivEsc,
@@ -362,7 +362,7 @@ func (r *AgentRunReconciler) buildContainers(agentRun *k8sclawv1alpha1.AgentRun)
 		// IPC bridge sidecar
 		{
 			Name:  "ipc-bridge",
-			Image: "ghcr.io/k8sclaw/ipc-bridge:latest",
+			Image: "ghcr.io/alexsjones/k8sclaw/ipc-bridge:latest",
 			Env: []corev1.EnvVar{
 				{Name: "AGENT_RUN_ID", Value: agentRun.Name},
 				{Name: "INSTANCE_NAME", Value: agentRun.Spec.InstanceRef},
@@ -386,7 +386,7 @@ func (r *AgentRunReconciler) buildContainers(agentRun *k8sclawv1alpha1.AgentRun)
 
 	// Add sandbox sidecar if enabled
 	if agentRun.Spec.Sandbox != nil && agentRun.Spec.Sandbox.Enabled {
-		sandboxImage := "ghcr.io/k8sclaw/sandbox:latest"
+		sandboxImage := "ghcr.io/alexsjones/k8sclaw/sandbox:latest"
 		if agentRun.Spec.Sandbox.Image != "" {
 			sandboxImage = agentRun.Spec.Sandbox.Image
 		}

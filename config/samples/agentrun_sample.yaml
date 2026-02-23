@@ -16,7 +16,7 @@ spec:
     maxTokens: 128000
   sandbox:
     enabled: true
-    image: ghcr.io/k8sclaw/sandbox:latest
+    image: ghcr.io/alexsjones/k8sclaw/sandbox:latest
   skills:
     - code-review
   toolPolicy:

@@ -36,7 +36,7 @@ spec:
     inheritTools: true
   sandboxPolicy:
     required: false
-    defaultImage: ghcr.io/k8sclaw/sandbox:latest
+    defaultImage: ghcr.io/alexsjones/k8sclaw/sandbox:latest
     maxCPU: "4"
     maxMemory: 8Gi
   mountPolicy:

@@ -27,9 +27,9 @@ type PodBuilder struct {
 // NewPodBuilder creates a PodBuilder with default settings.
 func NewPodBuilder() *PodBuilder {
 	return &PodBuilder{
-		DefaultAgentImage:     "ghcr.io/k8sclaw/agent-runner:latest",
-		DefaultIPCBridgeImage: "ghcr.io/k8sclaw/ipc-bridge:latest",
-		DefaultSandboxImage:   "ghcr.io/k8sclaw/sandbox:latest",
+		DefaultAgentImage:     "ghcr.io/alexsjones/k8sclaw/agent-runner:latest",
+		DefaultIPCBridgeImage: "ghcr.io/alexsjones/k8sclaw/ipc-bridge:latest",
+		DefaultSandboxImage:   "ghcr.io/alexsjones/k8sclaw/sandbox:latest",
 		EventBusURL:           "nats://nats.k8sclaw:4222",
 	}
 }

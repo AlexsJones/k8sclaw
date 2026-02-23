@@ -146,7 +146,7 @@ func (r *ClawInstanceReconciler) buildChannelDeployment(
 	name string,
 ) *appsv1.Deployment {
 	replicas := int32(1)
-	image := fmt.Sprintf("ghcr.io/k8sclaw/channel-%s:latest", ch.Type)
+	image := fmt.Sprintf("ghcr.io/alexsjones/k8sclaw/channel-%s:latest", ch.Type)
 
 	return &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
