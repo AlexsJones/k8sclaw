@@ -39,7 +39,6 @@ spec:
           image: ghcr.io/alexsjones/k8sclaw/controller:latest
           args:
             - --leader-elect
-            - --event-bus-url=nats://nats.k8sclaw-system.svc:4222
           ports:
             - containerPort: 8081
               name: health
