@@ -184,6 +184,27 @@ spec:
                   - secret
                   type: object
                 type: array
+              memory:
+                description: |-
+                  Memory configures persistent memory for this instance.
+                  When enabled, a MEMORY.md ConfigMap is managed and mounted into agent pods.
+                properties:
+                  enabled:
+                    default: true
+                    description: Enabled indicates whether persistent memory is active.
+                    type: boolean
+                  maxSizeKB:
+                    default: 256
+                    description: MaxSizeKB caps the memory ConfigMap size in kilobytes.
+                    type: integer
+                  systemPrompt:
+                    description: |-
+                      SystemPrompt is injected into every agent run for this instance
+                      to instruct the agent on how to use memory.
+                    type: string
+                required:
+                - enabled
+                type: object
               channels:
                 description: Channels this instance connects to.
                 items:
@@ -212,6 +233,27 @@ spec:
                 description: PolicyRef references the ClawPolicy that applies to this
                   instance.
                 type: string
+              memory:
+                description: |-
+                  Memory configures persistent memory for this instance.
+                  When enabled, a MEMORY.md ConfigMap is managed and mounted into agent pods.
+                properties:
+                  enabled:
+                    description: Enabled indicates whether persistent memory is active.
+                    default: true
+                    type: boolean
+                  maxSizeKB:
+                    description: MaxSizeKB caps the memory ConfigMap size in kilobytes.
+                    default: 256
+                    type: integer
+                  systemPrompt:
+                    description: |-
+                      SystemPrompt is injected into every agent run for this instance
+                      to instruct the agent on how to use memory.
+                    type: string
+                required:
+                - enabled
+                type: object
               skills:
                 description: Skills to mount (from SkillPack CRDs or ConfigMaps).
                 items:

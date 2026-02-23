@@ -27,6 +27,28 @@ type ClawInstanceSpec struct {
 	// AuthRefs references secrets containing AI provider credentials.
 	// +optional
 	AuthRefs []SecretRef `json:"authRefs,omitempty"`
+
+	// Memory configures persistent memory for this instance.
+	// When enabled, a MEMORY.md ConfigMap is managed and mounted into agent pods.
+	// +optional
+	Memory *MemorySpec `json:"memory,omitempty"`
+}
+
+// MemorySpec configures persistent memory for a ClawInstance.
+type MemorySpec struct {
+	// Enabled indicates whether persistent memory is active.
+	// +kubebuilder:default=true
+	Enabled bool `json:"enabled"`
+
+	// MaxSizeKB caps the memory ConfigMap size in kilobytes.
+	// +kubebuilder:default=256
+	// +optional
+	MaxSizeKB int `json:"maxSizeKB,omitempty"`
+
+	// SystemPrompt is injected into every agent run for this instance
+	// to instruct the agent on how to use memory.
+	// +optional
+	SystemPrompt string `json:"systemPrompt,omitempty"`
 }
 
 // ChannelSpec defines a channel connection.

@@ -1039,9 +1039,10 @@ const (
 	viewSkills
 	viewChannels
 	viewPods
+	viewSchedules
 )
 
-var viewNames = []string{"Instances", "Runs", "Policies", "Skills", "Channels", "Pods"}
+var viewNames = []string{"Instances", "Runs", "Policies", "Skills", "Channels", "Pods", "Schedules"}
 
 // ── Styles ───────────────────────────────────────────────────────────────────
 
@@ -1204,6 +1205,7 @@ type dataRefreshMsg struct {
 	skills    *[]k8sclawv1alpha1.SkillPack
 	channels  *[]channelRow
 	pods      *[]podRow
+	schedules *[]k8sclawv1alpha1.ClawSchedule
 	fetchErr  string
 }
 
@@ -1229,6 +1231,9 @@ var slashCommandSuggestions = []suggestion{
 	{"/skills", "List SkillPacks"},
 	{"/features", "Feature gates: /features <policy>"},
 	{"/delete", "Delete: /delete <type> <name>"},
+	{"/schedule", "Create schedule: /schedule <inst> <cron> <task>"},
+	{"/schedules", "View schedules"},
+	{"/memory", "View memory: /memory <inst>"},
 	{"/ns", "Switch namespace: /ns <name>"},
 	{"/onboard", "Interactive setup wizard"},
 	{"/help", "Show help modal"},
@@ -1239,6 +1244,7 @@ var deleteTypeSuggestions = []suggestion{
 	{"instance", "Delete a ClawInstance"},
 	{"run", "Delete an AgentRun"},
 	{"policy", "Delete a ClawPolicy"},
+	{"schedule", "Delete a ClawSchedule"},
 	{"channel", "Remove a channel from instance"},
 }
 
@@ -1381,6 +1387,7 @@ type tuiModel struct {
 	skills    []k8sclawv1alpha1.SkillPack
 	channels  []channelRow
 	pods      []podRow
+	schedules []k8sclawv1alpha1.ClawSchedule
 
 	// Input
 	input        textinput.Model
@@ -1557,6 +1564,15 @@ func refreshDataCmd() tea.Cmd {
 		} else {
 			msg.skills = &skls.Items
 		}
+
+		// Fetch schedules.
+		var scheds k8sclawv1alpha1.ClawScheduleList
+		if err := k8sClient.List(ctx, &scheds); err != nil {
+			errs = append(errs, fmt.Sprintf("schedules: %v", err))
+		} else {
+			msg.schedules = &scheds.Items
+		}
+
 		if len(errs) > 0 {
 			msg.fetchErr = strings.Join(errs, "; ")
 		}
@@ -1917,6 +1933,11 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.tableScroll = 0
 			m.drillInstance = ""
 			return m, nil
+		case "7":
+			m.activeView = viewSchedules
+			m.selectedRow = 0
+			m.tableScroll = 0
+			return m, nil
 		case "tab":
 			// Cycle forward through views.
 			next := int(m.activeView) + 1
@@ -2011,6 +2032,9 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.pods != nil {
 			m.pods = *msg.pods
 		}
+		if msg.schedules != nil {
+			m.schedules = *msg.schedules
+		}
 		if msg.fetchErr != "" {
 			m.addLog(tuiErrorStyle.Render("✗ Fetch error: " + msg.fetchErr))
 			m.connected = false
@@ -2077,6 +2101,8 @@ func (m tuiModel) activeViewCount() int {
 		return len(m.filteredChannels())
 	case viewPods:
 		return len(m.filteredPods())
+	case viewSchedules:
+		return len(m.schedules)
 	}
 	return 0
 }
@@ -2172,6 +2198,16 @@ func (m tuiModel) handleRowAction() (tea.Model, tea.Cmd) {
 			m.addLog(fmt.Sprintf("%s │ inst:%s phase:%s node:%s ip:%s restarts:%d",
 				p.Name, p.Instance, p.Phase, p.Node, p.IP, p.Restarts))
 		}
+	case viewSchedules:
+		if m.selectedRow < len(m.schedules) {
+			s := m.schedules[m.selectedRow]
+			nextRun := "?"
+			if s.Status.NextRunTime != nil {
+				nextRun = shortDuration(time.Until(s.Status.NextRunTime.Time))
+			}
+			m.addLog(fmt.Sprintf("%s │ inst:%s cron:%s type:%s phase:%s runs:%d next:%s",
+				s.Name, s.Spec.InstanceRef, s.Spec.Schedule, s.Spec.Type, s.Status.Phase, s.Status.TotalRuns, nextRun))
+		}
 	}
 	return m, nil
 }
@@ -2226,6 +2262,13 @@ func (m tuiModel) handleRowLogs() (tea.Model, tea.Cmd) {
 				return tuiResourceEvents(m.namespace, "ClawInstance", ch.InstanceName)
 			})
 		}
+	case viewSchedules:
+		if m.selectedRow < len(m.schedules) {
+			name := m.schedules[m.selectedRow].Name
+			return m, m.asyncCmd(func() (string, error) {
+				return tuiResourceEvents(m.namespace, "ClawSchedule", name)
+			})
+		}
 	default:
 		m.addLog(tuiDimStyle.Render("Logs not available for this view"))
 	}
@@ -2277,6 +2320,13 @@ func (m tuiModel) handleRowDescribe() (tea.Model, tea.Cmd) {
 			// Describe the parent instance for the channel.
 			return m, m.asyncCmd(func() (string, error) {
 				return tuiDescribeResource(m.namespace, "clawinstance", ch.InstanceName)
+			})
+		}
+	case viewSchedules:
+		if m.selectedRow < len(m.schedules) {
+			name := m.schedules[m.selectedRow].Name
+			return m, m.asyncCmd(func() (string, error) {
+				return tuiDescribeResource(m.namespace, "clawschedule", name)
 			})
 		}
 	}
@@ -2333,6 +2383,15 @@ func (m tuiModel) handleRowDelete() (tea.Model, tea.Cmd) {
 			m.deleteResourceName = podName
 			ns := m.namespace
 			m.deleteFunc = func() (string, error) { return tuiDeletePod(ns, podName) }
+		}
+	case viewSchedules:
+		if m.selectedRow < len(m.schedules) {
+			name := m.schedules[m.selectedRow].Name
+			m.confirmDelete = true
+			m.deleteResourceKind = "schedule"
+			m.deleteResourceName = name
+			ns := m.namespace
+			m.deleteFunc = func() (string, error) { return tuiDelete(ns, "schedule", name) }
 		}
 	}
 	return m, nil
@@ -2708,6 +2767,31 @@ func (m tuiModel) handleCommand(input string) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case "/schedules", "/sched":
+		m.activeView = viewSchedules
+		m.selectedRow = 0
+		m.tableScroll = 0
+		m.addLog("Switched to Schedules view")
+		return m, nil
+
+	case "/schedule":
+		if len(args) < 3 {
+			m.addLog(tuiErrorStyle.Render("Usage: /schedule <instance> <cron> <task>"))
+			return m, nil
+		}
+		inst := args[0]
+		cronExpr := args[1]
+		task := strings.Join(args[2:], " ")
+		return m, m.asyncCmd(func() (string, error) { return tuiCreateSchedule(m.namespace, inst, cronExpr, task) })
+
+	case "/memory":
+		if len(args) < 1 {
+			m.addLog(tuiErrorStyle.Render("Usage: /memory <instance>"))
+			return m, nil
+		}
+		inst := args[0]
+		return m, m.asyncCmd(func() (string, error) { return tuiShowMemory(m.namespace, inst) })
+
 	case "/channel":
 		if len(args) < 3 {
 			m.addLog(tuiErrorStyle.Render("Usage: /channel <instance> <type> <secret-name>"))
@@ -3030,6 +3114,8 @@ func (m tuiModel) renderTable(tableH int) string {
 		b.WriteString(m.renderChannelsTable(tableH))
 	case viewPods:
 		b.WriteString(m.renderPodsTable(tableH))
+	case viewSchedules:
+		b.WriteString(m.renderSchedulesTable(tableH))
 	}
 
 	return b.String()
@@ -3323,6 +3409,68 @@ func (m tuiModel) renderPodsTable(tableH int) string {
 			}
 			b.WriteString(style.Render(nameCol) + phaseCol + style.Render(restCol))
 			renderedW := lipgloss.Width(style.Render(nameCol)) + lipgloss.Width(phaseCol) + lipgloss.Width(style.Render(restCol))
+			if m.width > renderedW {
+				b.WriteString(style.Render(strings.Repeat(" ", m.width-renderedW)))
+			}
+		}
+		b.WriteString("\n")
+	}
+	return b.String()
+}
+
+func (m tuiModel) renderSchedulesTable(tableH int) string {
+	var b strings.Builder
+
+	header := fmt.Sprintf(" %-24s %-18s %-18s %-12s %-10s %-10s %-8s", "NAME", "INSTANCE", "SCHEDULE", "TYPE", "PHASE", "RUNS", "AGE")
+	b.WriteString(tuiColHeaderStyle.Render(padRight(header, m.width)))
+	b.WriteString("\n")
+
+	if len(m.schedules) == 0 {
+		b.WriteString(m.renderEmptyTable(tableH-1, "No schedules — try: /schedule <instance> <cron> <task>"))
+		return b.String()
+	}
+
+	for i := 0; i < tableH-1; i++ {
+		idx := i + m.tableScroll
+		if idx >= len(m.schedules) {
+			b.WriteString(strings.Repeat(" ", m.width) + "\n")
+			continue
+		}
+		s := m.schedules[idx]
+		age := shortDuration(time.Since(s.CreationTimestamp.Time))
+		phase := s.Status.Phase
+		if phase == "" {
+			phase = "Pending"
+		}
+		schedType := s.Spec.Type
+		if schedType == "" {
+			schedType = "scheduled"
+		}
+
+		nameCol := fmt.Sprintf(" %-24s %-18s %-18s ", truncate(s.Name, 24), truncate(s.Spec.InstanceRef, 18), truncate(s.Spec.Schedule, 18))
+		typeCol := fmt.Sprintf("%-12s ", schedType)
+		phaseCol := fmt.Sprintf("%-10s ", phase)
+		restCol := fmt.Sprintf("%-10d %-8s", s.Status.TotalRuns, age)
+
+		if idx == m.selectedRow {
+			b.WriteString(tuiRowSelectedStyle.Render(padRight(nameCol+typeCol+phaseCol+restCol, m.width)))
+		} else {
+			style := tuiRowStyle
+			if idx%2 == 1 {
+				style = tuiRowAltStyle
+			}
+			switch phase {
+			case "Active":
+				phaseCol = tuiRunningStyle.Render(fmt.Sprintf("%-10s ", phase))
+			case "Suspended":
+				phaseCol = tuiDimStyle.Render(fmt.Sprintf("%-10s ", phase))
+			case "Error":
+				phaseCol = tuiErrorStyle.Render(fmt.Sprintf("%-10s ", phase))
+			default:
+				phaseCol = tuiDimStyle.Render(fmt.Sprintf("%-10s ", phase))
+			}
+			b.WriteString(style.Render(nameCol+typeCol) + phaseCol + style.Render(restCol))
+			renderedW := lipgloss.Width(style.Render(nameCol+typeCol)) + lipgloss.Width(phaseCol) + lipgloss.Width(style.Render(restCol))
 			if m.width > renderedW {
 				b.WriteString(style.Render(strings.Repeat(" ", m.width-renderedW)))
 			}
@@ -3991,8 +4139,14 @@ func tuiDelete(ns, resourceType, name string) (string, error) {
 			return "", fmt.Errorf("delete policy: %w", err)
 		}
 		return tuiSuccessStyle.Render(fmt.Sprintf("✓ Deleted policy: %s", name)), nil
+	case "schedule", "sched":
+		obj := &k8sclawv1alpha1.ClawSchedule{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns}}
+		if err := k8sClient.Delete(ctx, obj); err != nil {
+			return "", fmt.Errorf("delete schedule: %w", err)
+		}
+		return tuiSuccessStyle.Render(fmt.Sprintf("✓ Deleted schedule: %s", name)), nil
 	default:
-		return "", fmt.Errorf("unknown type: %s (use: instance, run, policy, channel)", resourceType)
+		return "", fmt.Errorf("unknown type: %s (use: instance, run, policy, schedule, channel)", resourceType)
 	}
 }
 
@@ -4067,6 +4221,58 @@ func tuiSetProvider(ns, instanceName, provider, model string) (string, error) {
 		return "", fmt.Errorf("update instance: %w", err)
 	}
 	return tuiSuccessStyle.Render(fmt.Sprintf("✓ Set %s provider=%s model=%s (was: %s)", instanceName, provider, model, old)), nil
+}
+
+func tuiCreateSchedule(ns, instanceName, cronExpr, task string) (string, error) {
+	ctx := context.Background()
+
+	// Verify instance exists.
+	var inst k8sclawv1alpha1.ClawInstance
+	if err := k8sClient.Get(ctx, types.NamespacedName{Name: instanceName, Namespace: ns}, &inst); err != nil {
+		return "", fmt.Errorf("instance %q not found: %w", instanceName, err)
+	}
+
+	name := fmt.Sprintf("%s-sched-%d", instanceName, time.Now().Unix())
+	sched := &k8sclawv1alpha1.ClawSchedule{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: ns,
+		},
+		Spec: k8sclawv1alpha1.ClawScheduleSpec{
+			InstanceRef:   instanceName,
+			Schedule:      cronExpr,
+			Task:          task,
+			Type:          "scheduled",
+			IncludeMemory: true,
+		},
+	}
+	if err := k8sClient.Create(ctx, sched); err != nil {
+		return "", fmt.Errorf("create schedule: %w", err)
+	}
+	return tuiSuccessStyle.Render(fmt.Sprintf("✓ Created schedule %s (%s)", name, cronExpr)), nil
+}
+
+func tuiShowMemory(ns, instanceName string) (string, error) {
+	ctx := context.Background()
+
+	cmName := fmt.Sprintf("%s-memory", instanceName)
+	var cm corev1.ConfigMap
+	if err := k8sClient.Get(ctx, types.NamespacedName{Name: cmName, Namespace: ns}, &cm); err != nil {
+		return "", fmt.Errorf("memory ConfigMap %q not found (is memory enabled?): %w", cmName, err)
+	}
+
+	content := cm.Data["MEMORY.md"]
+	if content == "" {
+		return tuiDimStyle.Render(fmt.Sprintf("Memory for %s: (empty)", instanceName)), nil
+	}
+
+	// Show a preview in the log pane.
+	lines := strings.Split(content, "\n")
+	preview := content
+	if len(lines) > 20 {
+		preview = strings.Join(lines[:20], "\n") + "\n... (truncated)"
+	}
+	return fmt.Sprintf("Memory for %s:\n%s", instanceName, preview), nil
 }
 
 func tuiSetBaseURL(ns, instanceName, baseURL string) (string, error) {

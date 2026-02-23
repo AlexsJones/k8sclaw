@@ -104,8 +104,20 @@ func (r *AgentRunReconciler) reconcilePending(ctx context.Context, log logr.Logg
 		return ctrl.Result{}, fmt.Errorf("creating input ConfigMap: %w", err)
 	}
 
+	// Look up the ClawInstance to check for memory configuration.
+	instance := &k8sclawv1alpha1.ClawInstance{}
+	memoryEnabled := false
+	if err := r.Get(ctx, client.ObjectKey{
+		Namespace: agentRun.Namespace,
+		Name:      agentRun.Spec.InstanceRef,
+	}, instance); err == nil {
+		if instance.Spec.Memory != nil && instance.Spec.Memory.Enabled {
+			memoryEnabled = true
+		}
+	}
+
 	// Build and create the Job
-	job := r.buildJob(agentRun)
+	job := r.buildJob(agentRun, memoryEnabled)
 	if err := controllerutil.SetControllerReference(agentRun, job, r.Scheme); err != nil {
 		return ctrl.Result{}, fmt.Errorf("setting owner reference: %w", err)
 	}
@@ -163,6 +175,8 @@ func (r *AgentRunReconciler) reconcileRunning(ctx context.Context, log logr.Logg
 	if job.Status.Succeeded > 0 {
 		// Extract the LLM response from pod logs before the pod is gone.
 		result := r.extractResultFromPod(ctx, log, agentRun)
+		// Extract and persist memory updates if applicable.
+		r.extractAndPersistMemory(ctx, log, agentRun)
 		return r.succeedRun(ctx, agentRun, result)
 	}
 	if job.Status.Failed > 0 {
@@ -300,7 +314,7 @@ func (r *AgentRunReconciler) ensureAgentServiceAccount(ctx context.Context, name
 }
 
 // buildJob constructs the Kubernetes Job for an AgentRun.
-func (r *AgentRunReconciler) buildJob(agentRun *k8sclawv1alpha1.AgentRun) *batchv1.Job {
+func (r *AgentRunReconciler) buildJob(agentRun *k8sclawv1alpha1.AgentRun, memoryEnabled bool) *batchv1.Job {
 	labels := map[string]string{
 		"k8sclaw.io/agent-run": agentRun.Name,
 		"k8sclaw.io/instance":  agentRun.Spec.InstanceRef,
@@ -315,8 +329,8 @@ func (r *AgentRunReconciler) buildJob(agentRun *k8sclawv1alpha1.AgentRun) *batch
 	backoffLimit := int32(0)
 
 	// Build containers
-	containers := r.buildContainers(agentRun)
-	volumes := r.buildVolumes(agentRun)
+	containers := r.buildContainers(agentRun, memoryEnabled)
+	volumes := r.buildVolumes(agentRun, memoryEnabled)
 
 	runAsNonRoot := true
 	runAsUser := int64(1000)
@@ -353,7 +367,7 @@ func (r *AgentRunReconciler) buildJob(agentRun *k8sclawv1alpha1.AgentRun) *batch
 }
 
 // buildContainers constructs the container list for an agent pod.
-func (r *AgentRunReconciler) buildContainers(agentRun *k8sclawv1alpha1.AgentRun) []corev1.Container {
+func (r *AgentRunReconciler) buildContainers(agentRun *k8sclawv1alpha1.AgentRun, memoryEnabled bool) []corev1.Container {
 	readOnly := true
 	noPrivEsc := false
 
@@ -437,6 +451,16 @@ func (r *AgentRunReconciler) buildContainers(agentRun *k8sclawv1alpha1.AgentRun)
 		}
 	}
 
+	// Add memory volume mount if memory is enabled.
+	if memoryEnabled {
+		containers[0].VolumeMounts = append(containers[0].VolumeMounts,
+			corev1.VolumeMount{Name: "memory", MountPath: "/memory", ReadOnly: true},
+		)
+		containers[0].Env = append(containers[0].Env,
+			corev1.EnvVar{Name: "MEMORY_ENABLED", Value: "true"},
+		)
+	}
+
 	// Add sandbox sidecar if enabled
 	if agentRun.Spec.Sandbox != nil && agentRun.Spec.Sandbox.Enabled {
 		sandboxImage := "ghcr.io/alexsjones/k8sclaw/sandbox:latest"
@@ -476,7 +500,7 @@ func (r *AgentRunReconciler) buildContainers(agentRun *k8sclawv1alpha1.AgentRun)
 }
 
 // buildVolumes constructs the volume list for an agent pod.
-func (r *AgentRunReconciler) buildVolumes(agentRun *k8sclawv1alpha1.AgentRun) []corev1.Volume {
+func (r *AgentRunReconciler) buildVolumes(agentRun *k8sclawv1alpha1.AgentRun, memoryEnabled bool) []corev1.Volume {
 	workspaceSizeLimit := resource.MustParse("1Gi")
 	ipcSizeLimit := resource.MustParse("64Mi")
 	tmpSizeLimit := resource.MustParse("256Mi")
@@ -552,8 +576,27 @@ func (r *AgentRunReconciler) buildVolumes(agentRun *k8sclawv1alpha1.AgentRun) []
 		})
 	}
 
+	// Add memory ConfigMap volume if memory is enabled.
+	if memoryEnabled {
+		cmName := fmt.Sprintf("%s-memory", agentRun.Spec.InstanceRef)
+		volumes = append(volumes, corev1.Volume{
+			Name: "memory",
+			VolumeSource: corev1.VolumeSource{
+				ConfigMap: &corev1.ConfigMapVolumeSource{
+					LocalObjectReference: corev1.LocalObjectReference{
+						Name: cmName,
+					},
+					Optional: boolPtr(true),
+				},
+			},
+		})
+	}
+
 	return volumes
 }
+
+// boolPtr returns a pointer to a bool.
+func boolPtr(b bool) *bool { return &b }
 
 // createInputConfigMap creates a ConfigMap with the agent's task input.
 func (r *AgentRunReconciler) createInputConfigMap(ctx context.Context, agentRun *k8sclawv1alpha1.AgentRun) error {
@@ -651,6 +694,69 @@ func (r *AgentRunReconciler) extractResultFromPod(ctx context.Context, log logr.
 		return ""
 	}
 	return parsed.Response
+}
+
+const (
+	memoryMarkerStart = "__K8SCLAW_MEMORY__"
+	memoryMarkerEnd   = "__K8SCLAW_MEMORY_END__"
+)
+
+// extractAndPersistMemory reads the agent container logs for a memory update
+// marker and patches the instance's memory ConfigMap with the new content.
+func (r *AgentRunReconciler) extractAndPersistMemory(ctx context.Context, log logr.Logger, agentRun *k8sclawv1alpha1.AgentRun) {
+	if r.Clientset == nil || agentRun.Status.PodName == "" {
+		return
+	}
+
+	tailLines := int64(100)
+	opts := &corev1.PodLogOptions{
+		Container: "agent",
+		TailLines: &tailLines,
+	}
+	req := r.Clientset.CoreV1().Pods(agentRun.Namespace).GetLogs(agentRun.Status.PodName, opts)
+	stream, err := req.Stream(ctx)
+	if err != nil {
+		return
+	}
+	defer stream.Close()
+
+	raw, err := io.ReadAll(stream)
+	if err != nil {
+		return
+	}
+
+	logs := string(raw)
+	startIdx := strings.LastIndex(logs, memoryMarkerStart)
+	if startIdx < 0 {
+		return
+	}
+	payload := logs[startIdx+len(memoryMarkerStart):]
+	endIdx := strings.Index(payload, memoryMarkerEnd)
+	if endIdx < 0 {
+		return
+	}
+	memoryContent := strings.TrimSpace(payload[:endIdx])
+	if memoryContent == "" {
+		return
+	}
+
+	// Patch the memory ConfigMap.
+	cmName := fmt.Sprintf("%s-memory", agentRun.Spec.InstanceRef)
+	var cm corev1.ConfigMap
+	if err := r.Get(ctx, client.ObjectKey{
+		Namespace: agentRun.Namespace,
+		Name:      cmName,
+	}, &cm); err != nil {
+		log.V(1).Info("memory ConfigMap not found, skipping memory update", "err", err)
+		return
+	}
+
+	cm.Data["MEMORY.md"] = memoryContent
+	if err := r.Update(ctx, &cm); err != nil {
+		log.V(1).Info("failed to update memory ConfigMap", "err", err)
+		return
+	}
+	log.Info("Updated memory ConfigMap", "configmap", cmName, "bytes", len(memoryContent))
 }
 
 // failRun marks an AgentRun as failed.

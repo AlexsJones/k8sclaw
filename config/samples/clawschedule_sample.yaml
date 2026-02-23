@@ -1,0 +1,11 @@
+apiVersion: k8sclaw.io/v1alpha1
+kind: ClawSchedule
+metadata:
+  name: demo-heartbeat
+spec:
+  instanceRef: demo
+  schedule: "*/5 * * * *"
+  task: "Check in: summarize what you remember about the user and note any pending tasks."
+  type: heartbeat
+  includeMemory: true
+  concurrencyPolicy: Forbid

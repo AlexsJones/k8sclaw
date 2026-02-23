@@ -34,7 +34,7 @@ type ClawInstanceReconciler struct {
 // +kubebuilder:rbac:groups=k8sclaw.io,resources=clawinstances/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=k8sclaw.io,resources=clawinstances/finalizers,verbs=update
 // +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups="",resources=secrets;configmaps;services,verbs=get;list;watch
+// +kubebuilder:rbac:groups="",resources=secrets;configmaps;services,verbs=get;list;watch;create;update;patch;delete
 
 // Reconcile handles ClawInstance reconciliation.
 func (r *ClawInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -54,6 +54,9 @@ func (r *ClawInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Request
 			log.Info("Cleaning up instance resources")
 			if err := r.cleanupChannelDeployments(ctx, &instance); err != nil {
 				return ctrl.Result{}, err
+			}
+			if err := r.cleanupMemoryConfigMap(ctx, &instance); err != nil {
+				log.Error(err, "failed to cleanup memory ConfigMap")
 			}
 			controllerutil.RemoveFinalizer(&instance, clawInstanceFinalizer)
 			if err := r.Update(ctx, &instance); err != nil {
@@ -77,6 +80,11 @@ func (r *ClawInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		instance.Status.Phase = "Error"
 		_ = r.Status().Update(ctx, &instance)
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, err
+	}
+
+	// Reconcile memory ConfigMap
+	if err := r.reconcileMemoryConfigMap(ctx, log, &instance); err != nil {
+		log.Error(err, "failed to reconcile memory ConfigMap")
 	}
 
 	// Count active agent pods
@@ -238,6 +246,63 @@ func (r *ClawInstanceReconciler) countActiveAgentPods(ctx context.Context, insta
 		}
 	}
 	return count, nil
+}
+
+// reconcileMemoryConfigMap ensures the memory ConfigMap exists when memory is
+// enabled for the instance. The ConfigMap is named "<instance>-memory" and
+// contains a single key "MEMORY.md".
+func (r *ClawInstanceReconciler) reconcileMemoryConfigMap(ctx context.Context, log logr.Logger, instance *k8sclawv1alpha1.ClawInstance) error {
+	if instance.Spec.Memory == nil || !instance.Spec.Memory.Enabled {
+		return nil
+	}
+
+	cmName := fmt.Sprintf("%s-memory", instance.Name)
+	var cm corev1.ConfigMap
+	err := r.Get(ctx, types.NamespacedName{Name: cmName, Namespace: instance.Namespace}, &cm)
+	if err == nil {
+		return nil // Already exists.
+	}
+	if !errors.IsNotFound(err) {
+		return err
+	}
+
+	// Create the memory ConfigMap with initial content.
+	initialContent := "# Agent Memory\n\nNo memories recorded yet.\n"
+	cm = corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      cmName,
+			Namespace: instance.Namespace,
+			Labels: map[string]string{
+				"k8sclaw.io/instance":  instance.Name,
+				"k8sclaw.io/component": "memory",
+			},
+		},
+		Data: map[string]string{
+			"MEMORY.md": initialContent,
+		},
+	}
+
+	if err := controllerutil.SetControllerReference(instance, &cm, r.Scheme); err != nil {
+		return err
+	}
+
+	log.Info("Creating memory ConfigMap", "name", cmName)
+	return r.Create(ctx, &cm)
+}
+
+// cleanupMemoryConfigMap deletes the memory ConfigMap for an instance.
+func (r *ClawInstanceReconciler) cleanupMemoryConfigMap(ctx context.Context, instance *k8sclawv1alpha1.ClawInstance) error {
+	cmName := fmt.Sprintf("%s-memory", instance.Name)
+	cm := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      cmName,
+			Namespace: instance.Namespace,
+		},
+	}
+	if err := r.Delete(ctx, cm); err != nil && !errors.IsNotFound(err) {
+		return err
+	}
+	return nil
 }
 
 // SetupWithManager sets up the controller with the Manager.

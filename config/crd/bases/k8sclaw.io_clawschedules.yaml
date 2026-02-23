@@ -1,0 +1,129 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: clawschedules.k8sclaw.io
+  labels:
+    app.kubernetes.io/name: k8sclaw
+spec:
+  group: k8sclaw.io
+  names:
+    kind: ClawSchedule
+    listKind: ClawScheduleList
+    plural: clawschedules
+    singular: clawschedule
+    shortNames:
+      - cs
+      - sched
+  scope: Namespaced
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: Instance
+          type: string
+          jsonPath: .spec.instanceRef
+        - name: Schedule
+          type: string
+          jsonPath: .spec.schedule
+        - name: Type
+          type: string
+          jsonPath: .spec.type
+        - name: Phase
+          type: string
+          jsonPath: .status.phase
+        - name: Last Run
+          type: date
+          jsonPath: .status.lastRunTime
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp
+      schema:
+        openAPIV3Schema:
+          type: object
+          description: ClawSchedule defines recurring tasks for a ClawInstance.
+          properties:
+            apiVersion:
+              type: string
+            kind:
+              type: string
+            metadata:
+              type: object
+            spec:
+              type: object
+              required:
+                - instanceRef
+                - schedule
+                - task
+              properties:
+                instanceRef:
+                  type: string
+                  description: Name of the ClawInstance this schedule belongs to.
+                schedule:
+                  type: string
+                  description: Cron expression (e.g. "*/5 * * * *").
+                task:
+                  type: string
+                  description: Task description sent to the agent on each trigger.
+                type:
+                  type: string
+                  description: Schedule type.
+                  enum:
+                    - heartbeat
+                    - scheduled
+                    - sweep
+                  default: scheduled
+                suspend:
+                  type: boolean
+                  description: Pauses scheduling when true.
+                concurrencyPolicy:
+                  type: string
+                  description: What happens when a trigger fires while the previous run is active.
+                  enum:
+                    - Forbid
+                    - Allow
+                    - Replace
+                  default: Forbid
+                includeMemory:
+                  type: boolean
+                  description: Inject MEMORY.md as context for each run.
+                  default: true
+            status:
+              type: object
+              properties:
+                phase:
+                  type: string
+                lastRunTime:
+                  type: string
+                  format: date-time
+                nextRunTime:
+                  type: string
+                  format: date-time
+                lastRunName:
+                  type: string
+                totalRuns:
+                  type: integer
+                  format: int64
+                conditions:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      type:
+                        type: string
+                      status:
+                        type: string
+                      lastTransitionTime:
+                        type: string
+                        format: date-time
+                      reason:
+                        type: string
+                      message:
+                        type: string
+                    required:
+                      - type
+                      - status
+                      - lastTransitionTime

@@ -58,6 +58,31 @@ func main() {
 	provider := strings.ToLower(getEnv("MODEL_PROVIDER", "openai"))
 	modelName := getEnv("MODEL_NAME", "gpt-4o-mini")
 	baseURL := strings.TrimRight(getEnv("MODEL_BASE_URL", ""), "/")
+	memoryEnabled := getEnv("MEMORY_ENABLED", "") == "true"
+
+	// Read existing memory if available.
+	var memoryContent string
+	if memoryEnabled {
+		if b, err := os.ReadFile("/memory/MEMORY.md"); err == nil {
+			memoryContent = strings.TrimSpace(string(b))
+			log.Printf("loaded memory (%d bytes)", len(memoryContent))
+		}
+	}
+
+	// Prepend memory context to the task if present.
+	if memoryContent != "" && memoryContent != "# Agent Memory\n\nNo memories recorded yet." {
+		task = fmt.Sprintf("## Your Memory\nThe following is your persistent memory from prior interactions:\n\n%s\n\n## Current Task\n%s", memoryContent, task)
+	}
+
+	// If memory is enabled, add memory instructions to system prompt.
+	if memoryEnabled {
+		memoryInstruction := "\n\nYou have persistent memory. After completing your task, " +
+			"output a memory update block wrapped in markers like this:\n" +
+			"__K8SCLAW_MEMORY__\n<your updated MEMORY.md content>\n__K8SCLAW_MEMORY_END__\n" +
+			"Include key facts, preferences, and context from this and past interactions. " +
+			"Keep it concise (under 256KB). Use markdown format."
+		systemPrompt += memoryInstruction
+	}
 
 	apiKey := firstNonEmpty(
 		os.Getenv("API_KEY"),
@@ -121,6 +146,14 @@ func main() {
 	// the result from pod logs even after the IPC volume is gone.
 	if markerBytes, err := json.Marshal(res); err == nil {
 		fmt.Fprintf(os.Stdout, "\n__K8SCLAW_RESULT__%s__K8SCLAW_END__\n", string(markerBytes))
+	}
+
+	// Extract and emit memory update if the LLM produced one.
+	if memoryEnabled && res.Response != "" {
+		if memUpdate := extractMemoryUpdate(res.Response); memUpdate != "" {
+			fmt.Fprintf(os.Stdout, "\n__K8SCLAW_MEMORY__%s__K8SCLAW_MEMORY_END__\n", memUpdate)
+			log.Printf("emitted memory update (%d bytes)", len(memUpdate))
+		}
 	}
 
 	if res.Status == "error" {
@@ -268,4 +301,26 @@ func fatal(msg string) {
 		Error:  msg,
 	})
 	os.Exit(1)
+}
+
+// extractMemoryUpdate looks for a memory update block in the LLM response.
+// The agent is instructed to wrap its memory updates in:
+//
+//	__K8SCLAW_MEMORY__
+//	<content>
+//	__K8SCLAW_MEMORY_END__
+func extractMemoryUpdate(response string) string {
+	const startMarker = "__K8SCLAW_MEMORY__"
+	const endMarker = "__K8SCLAW_MEMORY_END__"
+
+	startIdx := strings.LastIndex(response, startMarker)
+	if startIdx < 0 {
+		return ""
+	}
+	payload := response[startIdx+len(startMarker):]
+	endIdx := strings.Index(payload, endMarker)
+	if endIdx < 0 {
+		return ""
+	}
+	return strings.TrimSpace(payload[:endIdx])
 }

@@ -1,11 +1,11 @@
 # Binaries
 bin/
-agent-runner
-apiserver
-controller
-ipc-bridge
-webhook
-k8sclaw
+/agent-runner
+/apiserver
+/controller
+/ipc-bridge
+/webhook
+/k8sclaw
 *.exe
 *.dll
 *.so

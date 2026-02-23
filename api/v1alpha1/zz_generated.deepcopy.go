@@ -363,6 +363,11 @@ func (in *ClawInstanceSpec) DeepCopyInto(out *ClawInstanceSpec) {
 		*out = make([]SecretRef, len(*in))
 		copy(*out, *in)
 	}
+	if in.Memory != nil {
+		in, out := &in.Memory, &out.Memory
+		*out = new(MemorySpec)
+		**out = **in
+	}
 }
 
 func (in *ClawInstanceSpec) DeepCopy() *ClawInstanceSpec {
@@ -869,6 +874,117 @@ func (in *RuntimeRequirements) DeepCopy() *RuntimeRequirements {
 		return nil
 	}
 	out := new(RuntimeRequirements)
+	in.DeepCopyInto(out)
+	return out
+}
+
+// --- ClawSchedule ---
+
+func (in *ClawSchedule) DeepCopyInto(out *ClawSchedule) {
+	*out = *in
+	out.TypeMeta = in.TypeMeta
+	in.ObjectMeta.DeepCopyInto(&out.ObjectMeta)
+	out.Spec = in.Spec
+	in.Status.DeepCopyInto(&out.Status)
+}
+
+func (in *ClawSchedule) DeepCopy() *ClawSchedule {
+	if in == nil {
+		return nil
+	}
+	out := new(ClawSchedule)
+	in.DeepCopyInto(out)
+	return out
+}
+
+func (in *ClawSchedule) DeepCopyObject() runtime.Object {
+	if c := in.DeepCopy(); c != nil {
+		return c
+	}
+	return nil
+}
+
+func (in *ClawScheduleList) DeepCopyInto(out *ClawScheduleList) {
+	*out = *in
+	out.TypeMeta = in.TypeMeta
+	in.ListMeta.DeepCopyInto(&out.ListMeta)
+	if in.Items != nil {
+		in, out := &in.Items, &out.Items
+		*out = make([]ClawSchedule, len(*in))
+		for i := range *in {
+			(*in)[i].DeepCopyInto(&(*out)[i])
+		}
+	}
+}
+
+func (in *ClawScheduleList) DeepCopy() *ClawScheduleList {
+	if in == nil {
+		return nil
+	}
+	out := new(ClawScheduleList)
+	in.DeepCopyInto(out)
+	return out
+}
+
+func (in *ClawScheduleList) DeepCopyObject() runtime.Object {
+	if c := in.DeepCopy(); c != nil {
+		return c
+	}
+	return nil
+}
+
+func (in *ClawScheduleSpec) DeepCopyInto(out *ClawScheduleSpec) {
+	*out = *in
+}
+
+func (in *ClawScheduleSpec) DeepCopy() *ClawScheduleSpec {
+	if in == nil {
+		return nil
+	}
+	out := new(ClawScheduleSpec)
+	in.DeepCopyInto(out)
+	return out
+}
+
+func (in *ClawScheduleStatus) DeepCopyInto(out *ClawScheduleStatus) {
+	*out = *in
+	if in.LastRunTime != nil {
+		in, out := &in.LastRunTime, &out.LastRunTime
+		*out = (*in).DeepCopy()
+	}
+	if in.NextRunTime != nil {
+		in, out := &in.NextRunTime, &out.NextRunTime
+		*out = (*in).DeepCopy()
+	}
+	if in.Conditions != nil {
+		in, out := &in.Conditions, &out.Conditions
+		*out = make([]metav1.Condition, len(*in))
+		for i := range *in {
+			(*in)[i].DeepCopyInto(&(*out)[i])
+		}
+	}
+}
+
+func (in *ClawScheduleStatus) DeepCopy() *ClawScheduleStatus {
+	if in == nil {
+		return nil
+	}
+	out := new(ClawScheduleStatus)
+	in.DeepCopyInto(out)
+	return out
+}
+
+// --- MemorySpec ---
+
+func (in *MemorySpec) DeepCopyInto(out *MemorySpec) {
+	*out = *in
+}
+
+func (in *MemorySpec) DeepCopy() *MemorySpec {
+	if in == nil {
+		return nil
+	}
+	out := new(MemorySpec)
 	in.DeepCopyInto(out)
 	return out
 }
