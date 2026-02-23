@@ -44,7 +44,7 @@ SkillPacks, and feature gates in your Kubernetes cluster.`,
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 			// Skip K8s client init for commands that don't need it.
 			switch cmd.Name() {
-			case "version", "install", "uninstall", "onboard":
+			case "version", "install", "uninstall", "onboard", "tui":
 				return nil
 			}
 			return initClient()
@@ -64,6 +64,7 @@ SkillPacks, and feature gates in your Kubernetes cluster.`,
 		newSkillsCmd(),
 		newFeaturesCmd(),
 		newVersionCmd(),
+		newTUICmd(),
 	)
 
 	if err := rootCmd.Execute(); err != nil {
