@@ -116,30 +116,66 @@ k8sclaw/
 └── README.md
 ```
 
-## Prerequisites
+## Getting Started
 
-- Kubernetes cluster (v1.28+)
-- `kubectl` configured to your cluster
-
-> NATS and cert-manager are installed automatically by `k8sclaw install`.
-
-## Quick Start
+### 1. Install the CLI
 
 ```bash
-# Install the CLI
 curl -fsSL https://deploy.k8sclaw.ai/install.sh | sh
-
-# Deploy to your cluster
-k8sclaw install
-
-# Or install a specific version
-k8sclaw install --version v0.1.0
-
-# Create a sample ClawInstance
-kubectl apply -f https://raw.githubusercontent.com/AlexsJones/k8sclaw/main/config/samples/clawinstance_sample.yaml
 ```
 
-### CLI Usage
+This detects your OS and architecture, downloads the latest release binary, and installs it to `/usr/local/bin` (or `~/.local/bin`).
+
+### 2. Deploy K8sClaw to your cluster
+
+```bash
+k8sclaw install
+```
+
+This applies CRDs, RBAC, the controller manager, API server, admission webhook, NATS event bus,
+cert-manager (if not present), and network policies to your current `kubectl` context.
+
+To install a specific version:
+
+```bash
+k8sclaw install --version v0.0.8
+```
+
+### 3. Onboard — interactive setup wizard
+
+```bash
+k8sclaw onboard
+```
+
+The wizard walks you through five steps:
+
+```
+  ╔═══════════════════════════════════════════╗
+  ║         K8sClaw · Onboarding Wizard       ║
+  ╚═══════════════════════════════════════════╝
+
+  📋 Step 1/5 — Cluster check
+  📋 Step 2/5 — Name your ClawInstance
+  📋 Step 3/5 — Choose your AI provider
+  📋 Step 4/5 — Connect a channel (optional)
+  📋 Step 5/5 — Apply default policy
+```
+
+**Step 3** supports any GenAI provider:
+
+| Provider | Base URL | API Key |
+|----------|----------|---------|
+| OpenAI | (default) | `OPENAI_API_KEY` |
+| Anthropic | (default) | `ANTHROPIC_API_KEY` |
+| GitHub Copilot | `https://api.githubcopilot.com` | `GITHUB_TOKEN` (PAT with `copilot` scope) |
+| Azure OpenAI | your endpoint | `AZURE_OPENAI_API_KEY` |
+| Ollama | `http://ollama:11434/v1` | none |
+| Any OpenAI-compatible | custom URL | custom |
+
+**Step 4** connects a messaging channel — Telegram (easiest), Slack, Discord, or WhatsApp.
+The wizard creates the K8s Secrets, ClawPolicy, and ClawInstance for you.
+
+### 4. Use the CLI
 
 ```bash
 k8sclaw instances list                              # list instances
@@ -147,6 +183,12 @@ k8sclaw runs list                                   # list agent runs
 k8sclaw features enable browser-automation \
   --policy default-policy                           # enable a feature gate
 k8sclaw features list --policy default-policy       # list feature gates
+```
+
+### 5. Remove K8sClaw
+
+```bash
+k8sclaw uninstall
 ```
 
 ## Development
