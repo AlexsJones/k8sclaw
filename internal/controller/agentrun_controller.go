@@ -116,6 +116,12 @@ func (r *AgentRunReconciler) reconcilePending(ctx context.Context, log logr.Logg
 		if instance.Spec.Memory != nil && instance.Spec.Memory.Enabled {
 			memoryEnabled = true
 		}
+		// If the AgentRun has no skills, inherit from the ClawInstance.
+		// This is a safety net — tuiCreateRun and the schedule controller
+		// should already copy skills, but older runs or manual CRs may not.
+		if len(agentRun.Spec.Skills) == 0 && len(instance.Spec.Skills) > 0 {
+			agentRun.Spec.Skills = instance.Spec.Skills
+		}
 	}
 
 	// Resolve skill sidecars from SkillPack CRDs.

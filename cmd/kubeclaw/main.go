@@ -839,9 +839,9 @@ func runInstall(ver string) error {
 		return fmt.Errorf("extract manifests: %w", err)
 	}
 
-	// Apply CRDs first.
+	// Apply CRDs first (server-side apply to handle schema updates cleanly).
 	fmt.Println("  Applying CRDs...")
-	if err := kubectl("apply", "-f", filepath.Join(tmpDir, "config/crd/bases/")); err != nil {
+	if err := kubectl("apply", "--server-side", "--force-conflicts", "-f", filepath.Join(tmpDir, "config/crd/bases/")); err != nil {
 		return err
 	}
 
@@ -916,6 +916,11 @@ func runInstall(ver string) error {
 func runUninstall() error {
 	fmt.Println("  Removing KubeClaw...")
 
+	// Delete default SkillPacks from kubeclaw-system first (before CRDs go away).
+	fmt.Println("  Removing default SkillPacks...")
+	_ = kubectl("delete", "skillpacks.kubeclaw.io", "--ignore-not-found",
+		"-n", "kubeclaw-system", "-l", "kubeclaw.io/builtin=true")
+
 	// Delete in reverse order.
 	manifests := []string{
 		"https://raw.githubusercontent.com/" + ghRepo + "/main/config/network/policies.yaml",
@@ -930,7 +935,7 @@ func runUninstall() error {
 	// Strip finalizers from all KubeClaw CRD instances so CRD deletion doesn't
 	// hang waiting for the (now-deleted) controller to reconcile them.
 	fmt.Println("  Removing finalizers from KubeClaw resources...")
-	for _, res := range []string{"agentruns", "clawinstances", "clawpolicies", "skillpacks"} {
+	for _, res := range []string{"agentruns", "clawinstances", "clawpolicies", "skillpacks", "clawschedules"} {
 		stripFinalizers(res)
 	}
 
@@ -941,6 +946,7 @@ func runUninstall() error {
 		"kubeclaw.io_agentruns.yaml",
 		"kubeclaw.io_clawpolicies.yaml",
 		"kubeclaw.io_skillpacks.yaml",
+		"kubeclaw.io_clawschedules.yaml",
 	}
 	for _, c := range crds {
 		_ = kubectl("delete", "--ignore-not-found", "-f", crdBase+c)
@@ -4606,6 +4612,7 @@ func tuiCreateRun(ns, instance, task string) (string, error) {
 				BaseURL:       inst.Spec.Agents.Default.BaseURL,
 				AuthSecretRef: authSecret,
 			},
+			Skills:  inst.Spec.Skills,
 			Timeout: &metav1.Duration{Duration: 10 * time.Minute},
 		},
 	}
