@@ -36,7 +36,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: manager
-          image: ghcr.io/alexsjones/kubeclaw/controller:v0.0.28
+          image: ghcr.io/alexsjones/kubeclaw/controller:v0.0.29
           imagePullPolicy: IfNotPresent
           args:
             - --leader-elect
@@ -99,7 +99,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: apiserver
-          image: ghcr.io/alexsjones/kubeclaw/apiserver:v0.0.28
+          image: ghcr.io/alexsjones/kubeclaw/apiserver:v0.0.29
           imagePullPolicy: IfNotPresent
           args:
             - --event-bus-url=nats://nats.kubeclaw-system.svc:4222
