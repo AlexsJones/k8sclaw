@@ -18,7 +18,7 @@ spec:
     maxTokens: 128000
   sandbox:
     enabled: true
-    image: ghcr.io/alexsjones/kubeclaw/sandbox:v0.0.26
+    image: ghcr.io/alexsjones/kubeclaw/sandbox:v0.0.28
   skills:
     - code-review
   toolPolicy:

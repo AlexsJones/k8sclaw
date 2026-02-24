@@ -20,7 +20,7 @@ spec:
     maxConcurrent: 5
   sandboxPolicy:
     required: false
-    defaultImage: ghcr.io/alexsjones/kubeclaw/sandbox:v0.0.26
+    defaultImage: ghcr.io/alexsjones/kubeclaw/sandbox:v0.0.28
     maxCPU: "4"
     maxMemory: 8Gi
   featureGates:
