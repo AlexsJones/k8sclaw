@@ -5127,7 +5127,13 @@ func tuiCreateRun(ns, instance, task string) (string, error) {
 
 	runName := fmt.Sprintf("%s-run-%d", instance, time.Now().Unix())
 	run := &kubeclawv1alpha1.AgentRun{
-		ObjectMeta: metav1.ObjectMeta{Name: runName, Namespace: ns},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      runName,
+			Namespace: ns,
+			Labels: map[string]string{
+				"kubeclaw.io/instance": instance,
+			},
+		},
 		Spec: kubeclawv1alpha1.AgentRunSpec{
 			InstanceRef: instance,
 			Task:        task,
