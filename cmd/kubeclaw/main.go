@@ -865,13 +865,31 @@ func runInstall(ver string) error {
 			return fmt.Errorf("install cert-manager: %w", err)
 		}
 		fmt.Println("  Waiting for cert-manager to be ready...")
+		_ = kubectl("wait", "--for=condition=Available", "deployment/cert-manager",
+			"-n", "cert-manager", "--timeout=120s")
 		_ = kubectl("wait", "--for=condition=Available", "deployment/cert-manager-webhook",
-			"-n", "cert-manager", "--timeout=90s")
+			"-n", "cert-manager", "--timeout=120s")
+		_ = kubectl("wait", "--for=condition=Available", "deployment/cert-manager-cainjector",
+			"-n", "cert-manager", "--timeout=120s")
+		// The webhook needs a few extra seconds after the Deployment is Available
+		// to finish TLS bootstrapping. Retry the certificate creation.
+		fmt.Println("  Waiting for cert-manager webhook TLS to bootstrap...")
+		time.Sleep(10 * time.Second)
 	}
 
 	fmt.Println("  Creating webhook certificate...")
-	if err := kubectl("apply", "-f", resolveConfigPath(tmpDir, "config/cert/")); err != nil {
-		return err
+	// Retry with backoff — cert-manager's webhook may still be bootstrapping TLS.
+	var certErr error
+	for attempt := 0; attempt < 5; attempt++ {
+		if certErr = kubectl("apply", "-f", resolveConfigPath(tmpDir, "config/cert/")); certErr == nil {
+			break
+		}
+		wait := time.Duration(5*(attempt+1)) * time.Second
+		fmt.Printf("  Cert-manager webhook not ready, retrying in %s...\n", wait)
+		time.Sleep(wait)
+	}
+	if certErr != nil {
+		return fmt.Errorf("creating webhook certificate (cert-manager webhook may not be ready): %w", certErr)
 	}
 
 	// Apply RBAC.
@@ -902,7 +920,7 @@ func runInstall(ver string) error {
 	skillsDir := filepath.Join(tmpDir, "config/skills/")
 	if _, err := os.Stat(skillsDir); err == nil {
 		fmt.Println("  Installing default SkillPacks...")
-		if err := kubectl("apply", "-f", skillsDir); err != nil {
+		if err := kubectl("apply", "--server-side", "--force-conflicts", "-f", skillsDir); err != nil {
 			// Non-fatal — skills are optional.
 			fmt.Printf("  Warning: failed to install default skills: %v\n", err)
 		}
@@ -1319,6 +1337,114 @@ var modelSuggestions = map[string][]suggestion{
 	},
 }
 
+// fetchProviderModels calls the provider's model-list API and returns model IDs.
+// Supports OpenAI-compatible APIs (OpenAI, Azure OpenAI, any /v1/models endpoint).
+// Returns nil on any error — the wizard falls back to the static suggestions.
+func fetchProviderModels(provider, apiKey, baseURL string) ([]string, error) {
+	if apiKey == "" {
+		return nil, fmt.Errorf("no API key")
+	}
+
+	endpoint := ""
+	authHeader := "Bearer " + apiKey
+	switch provider {
+	case "openai":
+		endpoint = "https://api.openai.com/v1/models"
+	case "azure-openai":
+		if baseURL == "" {
+			return nil, fmt.Errorf("no base URL for azure-openai")
+		}
+		// Azure: GET {endpoint}/openai/models?api-version=2024-06-01
+		endpoint = strings.TrimRight(baseURL, "/") + "/openai/models?api-version=2024-06-01"
+		authHeader = "" // Azure uses api-key header
+	case "anthropic":
+		endpoint = "https://api.anthropic.com/v1/models"
+		authHeader = "" // Anthropic uses x-api-key
+	default:
+		if baseURL != "" {
+			endpoint = strings.TrimRight(baseURL, "/") + "/v1/models"
+		} else {
+			return nil, fmt.Errorf("unsupported provider for model listing: %s", provider)
+		}
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, "GET", endpoint, nil)
+	if err != nil {
+		return nil, err
+	}
+	if authHeader != "" {
+		req.Header.Set("Authorization", authHeader)
+	}
+	if provider == "azure-openai" {
+		req.Header.Set("api-key", apiKey)
+	}
+	if provider == "anthropic" {
+		req.Header.Set("x-api-key", apiKey)
+		req.Header.Set("anthropic-version", "2023-06-01")
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("API returned %d", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	// OpenAI/Anthropic response: {"data": [{"id": "gpt-4o", ...}, ...]}
+	var parsed struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		return nil, err
+	}
+
+	var models []string
+	for _, m := range parsed.Data {
+		if m.ID != "" {
+			models = append(models, m.ID)
+		}
+	}
+	sort.Strings(models)
+	return models, nil
+}
+
+// filterChatModels keeps only models likely useful for chat/completion tasks.
+// Strips embedding, tts, whisper, dall-e, moderation, and other non-chat models.
+func filterChatModels(models []string) []string {
+	var filtered []string
+	for _, m := range models {
+		lower := strings.ToLower(m)
+		skip := false
+		for _, exclude := range []string{
+			"embed", "tts", "whisper", "dall-e", "davinci", "babbage",
+			"moderation", "realtime", "audio", "search", "similarity",
+			"code-", "text-", "curie", "ada",
+		} {
+			if strings.Contains(lower, exclude) {
+				skip = true
+				break
+			}
+		}
+		if !skip {
+			filtered = append(filtered, m)
+		}
+	}
+	return filtered
+}
+
 var tuiCommands = []struct{ cmd, desc string }{
 	{"/instances", "List ClawInstances"},
 	{"/runs", "List AgentRuns"},
@@ -1415,6 +1541,13 @@ type wizardState struct {
 	channelTokenKey  string
 	channelToken     string
 	applyPolicy      bool
+
+	// Dynamic model list (fetched from provider API when key is supplied).
+	fetchedModels []string // model IDs fetched from the API
+	modelFetchErr string   // non-fatal error message if fetch failed
+
+	// Wizard panel scroll offset for long content (e.g. model lists).
+	scrollOffset int
 }
 
 func (w *wizardState) reset() {
@@ -1478,6 +1611,7 @@ type tuiModel struct {
 	editHeartbeat    editHeartbeatForm
 	editTaskInput    bool           // sub-modal for task text entry
 	editTaskTI       textinput.Model // text input for task sub-modal
+	editSkills       []editSkillItem // toggleable skills list
 
 	// Feed
 	feedExpanded     bool // fullscreen feed mode
@@ -1503,11 +1637,18 @@ type editHeartbeatForm struct {
 	suspend           bool
 }
 
+// editSkillItem represents a toggleable skill in the edit modal.
+type editSkillItem struct {
+	name     string // SkillPack name
+	enabled  bool   // whether it's in the instance's Skills list
+	category string // e.g. "kubernetes"
+}
+
 var editScheduleTypes = []string{"heartbeat", "scheduled", "sweep"}
 var editConcurrencyPolicies = []string{"Forbid", "Allow", "Replace"}
 var editMemoryFieldCount = 3  // enabled, maxSizeKB, systemPrompt
 var editHeartbeatFieldCount = 6 // schedule, task, type, concurrencyPolicy, includeMemory, suspend
-var editTabNames = []string{"Memory", "Heartbeat"}
+var editTabNames = []string{"Memory", "Heartbeat", "Skills"}
 
 const maxLogLines = 200
 
@@ -1820,6 +1961,8 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				max := editMemoryFieldCount
 				if m.editTab == 1 {
 					max = editHeartbeatFieldCount
+				} else if m.editTab == 2 {
+					max = len(m.editSkills)
 				}
 				if m.editField < max-1 {
 					m.editField++
@@ -1836,12 +1979,16 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					if m.editField == 0 {
 						m.editMemory.enabled = !m.editMemory.enabled
 					}
-				} else {
+				} else if m.editTab == 1 {
 					switch m.editField {
 					case 4:
 						m.editHeartbeat.includeMemory = !m.editHeartbeat.includeMemory
 					case 5:
 						m.editHeartbeat.suspend = !m.editHeartbeat.suspend
+					}
+				} else if m.editTab == 2 {
+					if m.editField >= 0 && m.editField < len(m.editSkills) {
+						m.editSkills[m.editField].enabled = !m.editSkills[m.editField].enabled
 					}
 				}
 				return m, nil
@@ -1895,7 +2042,7 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					if m.editField == 0 {
 						m.editMemory.enabled = !m.editMemory.enabled
 					}
-				} else {
+				} else if m.editTab == 1 {
 					switch m.editField {
 					case 1:
 						// Open task sub-modal
@@ -1910,6 +2057,10 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						m.editHeartbeat.includeMemory = !m.editHeartbeat.includeMemory
 					case 5:
 						m.editHeartbeat.suspend = !m.editHeartbeat.suspend
+					}
+				} else if m.editTab == 2 {
+					if m.editField >= 0 && m.editField < len(m.editSkills) {
+						m.editSkills[m.editField].enabled = !m.editSkills[m.editField].enabled
 					}
 				}
 				return m, nil
@@ -2024,6 +2175,29 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.suggestions = nil
 					m.addLog(tuiDimStyle.Render("Wizard cancelled"))
 					return m, nil
+				case tea.KeyUp:
+					if m.wizard.step == wizStepModel && m.wizard.scrollOffset > 0 {
+						m.wizard.scrollOffset--
+						return m, nil
+					}
+				case tea.KeyDown:
+					if m.wizard.step == wizStepModel {
+						m.wizard.scrollOffset++
+						return m, nil
+					}
+				case tea.KeyPgUp:
+					if m.wizard.step == wizStepModel && m.wizard.scrollOffset > 0 {
+						m.wizard.scrollOffset -= 5
+						if m.wizard.scrollOffset < 0 {
+							m.wizard.scrollOffset = 0
+						}
+						return m, nil
+					}
+				case tea.KeyPgDown:
+					if m.wizard.step == wizStepModel {
+						m.wizard.scrollOffset += 5
+						return m, nil
+					}
 				case tea.KeyEnter:
 					val := strings.TrimSpace(m.input.Value())
 					m.input.SetValue("")
@@ -2713,6 +2887,21 @@ func (m tuiModel) handleRowEdit() (tea.Model, tea.Cmd) {
 				break
 			}
 		}
+		// Populate skills tab: list all available SkillPacks, mark those enabled on this instance.
+		enabledSkills := make(map[string]bool)
+		for _, sr := range inst.Spec.Skills {
+			if sr.SkillPackRef != "" {
+				enabledSkills[sr.SkillPackRef] = true
+			}
+		}
+		m.editSkills = nil
+		for _, sp := range m.skills {
+			m.editSkills = append(m.editSkills, editSkillItem{
+				name:     sp.Name,
+				enabled:  enabledSkills[sp.Name],
+				category: sp.Spec.Category,
+			})
+		}
 		m.showEditModal = true
 	case viewSchedules:
 		if m.selectedRow >= len(m.schedules) {
@@ -2741,8 +2930,9 @@ func (m tuiModel) handleRowEdit() (tea.Model, tea.Cmd) {
 				break
 			}
 		}
-		// Also populate memory from instance if found.
+		// Also populate memory and skills from instance if found.
 		m.editMemory = editMemoryForm{maxSizeKB: "256"}
+		m.editSkills = nil
 		for _, inst := range m.instances {
 			if inst.Name == sched.Spec.InstanceRef {
 				if inst.Spec.Memory != nil {
@@ -2751,6 +2941,19 @@ func (m tuiModel) handleRowEdit() (tea.Model, tea.Cmd) {
 						maxSizeKB:    fmt.Sprintf("%d", inst.Spec.Memory.MaxSizeKB),
 						systemPrompt: inst.Spec.Memory.SystemPrompt,
 					}
+				}
+				enabledSkills := make(map[string]bool)
+				for _, sr := range inst.Spec.Skills {
+					if sr.SkillPackRef != "" {
+						enabledSkills[sr.SkillPackRef] = true
+					}
+				}
+				for _, sp := range m.skills {
+					m.editSkills = append(m.editSkills, editSkillItem{
+						name:     sp.Name,
+						enabled:  enabledSkills[sp.Name],
+						category: sp.Spec.Category,
+					})
 				}
 				break
 			}
@@ -2768,6 +2971,8 @@ func (m tuiModel) applyEditModal() tea.Cmd {
 	schedName := m.editScheduleName
 	mem := m.editMemory
 	hb := m.editHeartbeat
+	skills := make([]editSkillItem, len(m.editSkills))
+	copy(skills, m.editSkills)
 	return func() tea.Msg {
 		ctx := context.Background()
 		var msgs []string
@@ -2787,10 +2992,32 @@ func (m tuiModel) applyEditModal() tea.Cmd {
 				MaxSizeKB:    maxKB,
 				SystemPrompt: mem.systemPrompt,
 			}
-			if err := k8sClient.Update(ctx, &inst); err != nil {
-				return cmdResultMsg{err: fmt.Errorf("update instance %q memory: %w", instName, err)}
+
+			// Apply skill toggles to instance.
+			var skillRefs []kubeclawv1alpha1.SkillRef
+			for _, sk := range skills {
+				if sk.enabled {
+					skillRefs = append(skillRefs, kubeclawv1alpha1.SkillRef{
+						SkillPackRef: sk.name,
+					})
+				}
 			}
-			msgs = append(msgs, fmt.Sprintf("memory updated on %s", instName))
+			inst.Spec.Skills = skillRefs
+
+			if err := k8sClient.Update(ctx, &inst); err != nil {
+				return cmdResultMsg{err: fmt.Errorf("update instance %q: %w", instName, err)}
+			}
+			updateParts := []string{"memory"}
+			if len(skills) > 0 {
+				enabled := 0
+				for _, sk := range skills {
+					if sk.enabled {
+						enabled++
+					}
+				}
+				updateParts = append(updateParts, fmt.Sprintf("%d skill(s)", enabled))
+			}
+			msgs = append(msgs, fmt.Sprintf("%s updated on %s", strings.Join(updateParts, " + "), instName))
 		}
 
 		// Apply heartbeat/schedule changes.
@@ -4518,7 +4745,7 @@ func (m tuiModel) renderEditModal(base string) string {
 		renderBool(0, "Enabled", m.editMemory.enabled)
 		renderField(1, "MaxSizeKB", m.editMemory.maxSizeKB)
 		renderField(2, "SystemPrompt", m.editMemory.systemPrompt)
-	} else {
+	} else if m.editTab == 1 {
 		// Heartbeat tab
 		renderField(0, "Schedule", m.editHeartbeat.schedule)
 		taskDisplay := m.editHeartbeat.task
@@ -4532,6 +4759,31 @@ func (m tuiModel) renderEditModal(base string) string {
 		renderField(3, "Concurrency", "◀ "+editConcurrencyPolicies[m.editHeartbeat.concurrencyPolicy]+" ▶")
 		renderBool(4, "IncludeMemory", m.editHeartbeat.includeMemory)
 		renderBool(5, "Suspend", m.editHeartbeat.suspend)
+	} else {
+		// Skills tab
+		if len(m.editSkills) == 0 {
+			content.WriteString(tuiDimStyle.Render("  No SkillPacks found in the cluster.") + "\n")
+			content.WriteString(tuiDimStyle.Render("  Run 'kubeclaw install' to install built-in skills.") + "\n")
+		} else {
+			content.WriteString(tuiDimStyle.Render("  Toggle skills on/off with space or enter:") + "\n\n")
+			for i, sk := range m.editSkills {
+				tog := "○"
+				if sk.enabled {
+					tog = "●"
+				}
+				cat := ""
+				if sk.category != "" {
+					cat = " (" + sk.category + ")"
+				}
+				lbl := fmt.Sprintf("  %s %s%s", tog, sk.name, cat)
+				if m.editField == i {
+					lbl = highlight.Render(fmt.Sprintf("▸ %s %s%s", tog, sk.name, cat))
+				} else {
+					lbl = value.Render(lbl)
+				}
+				content.WriteString("  " + lbl + "\n")
+			}
+		}
 	}
 
 	// Task sub-modal overlay
@@ -5016,6 +5268,7 @@ func tuiResourceEvents(ns, kind, name string) (string, error) {
 // moves to the next step. It is the state-machine core of the TUI wizard.
 func (m tuiModel) advanceWizard(val string) (tea.Model, tea.Cmd) {
 	w := &m.wizard
+	w.scrollOffset = 0 // reset scroll when advancing steps
 
 	switch w.step {
 	case wizStepCheckCluster:
@@ -5055,7 +5308,10 @@ func (m tuiModel) advanceWizard(val string) (tea.Model, tea.Cmd) {
 		case "2":
 			w.providerName = "anthropic"
 			w.secretEnvKey = "ANTHROPIC_API_KEY"
-			m.input.Placeholder = "Model name (default: claude-sonnet-4-20250514)"
+			// Collect API key before model so we can fetch models.
+			w.step = wizStepAPIKey
+			m.input.Placeholder = fmt.Sprintf("%s (paste key, Enter to skip)", w.secretEnvKey)
+			return m, nil
 		case "3":
 			w.providerName = "azure-openai"
 			w.secretEnvKey = "AZURE_OPENAI_API_KEY"
@@ -5077,24 +5333,58 @@ func (m tuiModel) advanceWizard(val string) (tea.Model, tea.Cmd) {
 		default:
 			w.providerName = "openai"
 			w.secretEnvKey = "OPENAI_API_KEY"
-			m.input.Placeholder = "Model name (default: gpt-4o)"
+			// Collect API key before model so we can fetch models.
+			w.step = wizStepAPIKey
+			m.input.Placeholder = fmt.Sprintf("%s (paste key, Enter to skip)", w.secretEnvKey)
+			return m, nil
 		}
-		w.step = wizStepModel
-		return m, nil
 
 	case wizStepBaseURL:
 		if val == "" && w.providerName == "ollama" {
 			val = "http://ollama.default.svc:11434/v1"
 		}
 		w.baseURL = val
-		w.step = wizStepModel
-		switch w.providerName {
-		case "ollama":
+		if w.secretEnvKey == "" {
+			// Ollama — no API key, go straight to model.
+			w.step = wizStepModel
 			m.input.Placeholder = "Model name (default: llama3)"
-		case "azure-openai":
-			m.input.Placeholder = "Deployment name (default: gpt-4o)"
-		default:
-			m.input.Placeholder = "Model name"
+			return m, nil
+		}
+		// Providers that need a key after base URL (azure, custom).
+		w.step = wizStepAPIKey
+		m.input.Placeholder = fmt.Sprintf("%s (paste key, Enter to skip)", w.secretEnvKey)
+		return m, nil
+
+	case wizStepAPIKey:
+		w.apiKey = val
+		// Try to fetch models from the provider API.
+		w.fetchedModels = nil
+		w.modelFetchErr = ""
+		if w.apiKey != "" {
+			models, err := fetchProviderModels(w.providerName, w.apiKey, w.baseURL)
+			if err != nil {
+				w.modelFetchErr = err.Error()
+			} else {
+				filtered := filterChatModels(models)
+				if len(filtered) > 0 {
+					w.fetchedModels = filtered
+				} else {
+					w.fetchedModels = models
+				}
+			}
+		}
+		w.step = wizStepModel
+		if len(w.fetchedModels) > 0 {
+			m.input.Placeholder = "Choose a model [number] or type a name"
+		} else {
+			switch w.providerName {
+			case "anthropic":
+				m.input.Placeholder = "Model name (default: claude-sonnet-4-20250514)"
+			case "azure-openai":
+				m.input.Placeholder = "Deployment name (default: gpt-4o)"
+			default:
+				m.input.Placeholder = "Model name (default: gpt-4o)"
+			}
 		}
 		return m, nil
 
@@ -5108,20 +5398,27 @@ func (m tuiModel) advanceWizard(val string) (tea.Model, tea.Cmd) {
 			default:
 				val = "gpt-4o"
 			}
+		} else if len(w.fetchedModels) > 0 {
+			// If the user entered a number, resolve it from the fetched list.
+			if idx, err := strconv.Atoi(val); err == nil && idx >= 1 && idx <= len(w.fetchedModels) {
+				val = w.fetchedModels[idx-1]
+			}
+		} else {
+			// No fetched models — try resolving number from static suggestions.
+			if suggestions, ok := modelSuggestions[w.providerName]; ok {
+				if idx, err := strconv.Atoi(val); err == nil && idx >= 1 && idx <= len(suggestions) {
+					val = suggestions[idx-1].text
+				}
+			}
 		}
 		w.modelName = val
-		if w.secretEnvKey == "" {
-			// No API key needed (ollama).
+		if w.secretEnvKey == "" || w.apiKey != "" {
+			// Already have the key (or don't need one) — skip to channel.
 			w.step = wizStepChannel
 			m.input.Placeholder = "Channel [1-5] (default: 5 — skip)"
 			return m, nil
 		}
-		w.step = wizStepAPIKey
-		m.input.Placeholder = fmt.Sprintf("%s (paste key, Enter to skip)", w.secretEnvKey)
-		return m, nil
-
-	case wizStepAPIKey:
-		w.apiKey = val
+		// Edge case: key was skipped — already handled above.
 		w.step = wizStepChannel
 		m.input.Placeholder = "Channel [1-5] (default: 5 — skip)"
 		return m, nil
@@ -5233,14 +5530,17 @@ func (m tuiModel) renderWizardPanel(h int) string {
 		stepNum = 2
 		lines = append(lines, hintStyle.Render("  Instance: ")+valueStyle.Render(w.instanceName))
 	}
-	if w.step > wizStepModel && w.step > wizStepProvider {
+	if w.providerName != "" && w.step > wizStepProvider {
 		stepNum = 3
-		lines = append(lines, hintStyle.Render("  Provider: ")+valueStyle.Render(w.providerName)+
-			hintStyle.Render("  Model: ")+valueStyle.Render(w.modelName))
+		provLine := hintStyle.Render("  Provider: ") + valueStyle.Render(w.providerName)
+		if w.modelName != "" {
+			provLine += hintStyle.Render("  Model: ") + valueStyle.Render(w.modelName)
+		}
+		lines = append(lines, provLine)
 		if w.baseURL != "" {
 			lines = append(lines, hintStyle.Render("  Base URL: ")+valueStyle.Render(w.baseURL))
 		}
-		if w.apiKey != "" {
+		if w.apiKey != "" && w.step > wizStepAPIKey {
 			lines = append(lines, hintStyle.Render("  API Key:  ")+valueStyle.Render("••••••••"))
 		}
 	}
@@ -5290,14 +5590,76 @@ func (m tuiModel) renderWizardPanel(h int) string {
 		lines = append(lines, stepStyle.Render("  📋 Step 2/5 — AI Provider (continued)"))
 		lines = append(lines, labelStyle.Render("  Enter base URL:"))
 
-	case wizStepModel:
-		lines = append(lines, stepStyle.Render("  📋 Step 2/5 — AI Provider (continued)"))
-		lines = append(lines, labelStyle.Render("  Enter model name:"))
-
 	case wizStepAPIKey:
 		lines = append(lines, stepStyle.Render("  📋 Step 2/5 — AI Provider (continued)"))
 		lines = append(lines, labelStyle.Render(fmt.Sprintf("  Paste your %s:", w.secretEnvKey)))
 		lines = append(lines, hintStyle.Render("  Press Enter to skip — you can add it later."))
+		lines = append(lines, hintStyle.Render("  (providing a key lets us fetch your available models)"))
+
+	case wizStepModel:
+		lines = append(lines, stepStyle.Render("  📋 Step 2/5 — Select Model"))
+		if len(w.fetchedModels) > 0 {
+			lines = append(lines, menuStyle.Render(fmt.Sprintf("  Found %d models from your %s account:", len(w.fetchedModels), w.providerName)))
+			lines = append(lines, "")
+
+			// Render models in columns to fit the panel.
+			models := w.fetchedModels
+			colWidth := 30 // characters per column
+			// Determine how many columns fit (panel is ~56 chars wide, indent is 4).
+			usableWidth := 52
+			numCols := usableWidth / colWidth
+			if numCols < 2 {
+				numCols = 2
+			}
+			if numCols > 3 {
+				numCols = 3
+			}
+			numRows := (len(models) + numCols - 1) / numCols
+			for row := 0; row < numRows; row++ {
+				line := "  "
+				for col := 0; col < numCols; col++ {
+					idx := col*numRows + row
+					if idx >= len(models) {
+						break
+					}
+					num := fmt.Sprintf("%2d) ", idx+1)
+					name := models[idx]
+					if len(name) > colWidth-5 {
+						name = name[:colWidth-5]
+					}
+					cell := num + name
+					// Pad to column width.
+					for len(cell) < colWidth {
+						cell += " "
+					}
+					line += menuNumStyle.Render(num) + menuStyle.Render(name)
+					// Add spacing between columns.
+					if col < numCols-1 {
+						padding := colWidth - len(num) - len(name)
+						if padding > 0 {
+							line += strings.Repeat(" ", padding)
+						}
+					}
+				}
+				lines = append(lines, line)
+			}
+
+			lines = append(lines, "")
+			lines = append(lines, labelStyle.Render("  Enter number or model name:"))
+		} else {
+			if w.modelFetchErr != "" {
+				lines = append(lines, hintStyle.Render(fmt.Sprintf("  (could not fetch models: %s)", w.modelFetchErr)))
+			}
+			// Show static suggestions as fallback.
+			if suggestions, ok := modelSuggestions[w.providerName]; ok {
+				lines = append(lines, "")
+				for i, s := range suggestions {
+					lines = append(lines, menuNumStyle.Render(fmt.Sprintf("  %d)", i+1))+menuStyle.Render(fmt.Sprintf(" %s  ", s.text))+hintStyle.Render(s.desc))
+				}
+				lines = append(lines, "")
+			}
+			lines = append(lines, labelStyle.Render("  Enter model name:"))
+		}
 
 	case wizStepChannel:
 		lines = append(lines, stepStyle.Render("  📋 Step 3/5 — Connect a Channel (optional)"))
@@ -5361,6 +5723,15 @@ func (m tuiModel) renderWizardPanel(h int) string {
 	if w.err != "" {
 		lines = append(lines, "")
 		lines = append(lines, tuiErrorStyle.Render("  ✗ "+w.err))
+	}
+
+	// Apply scroll offset for long content (e.g. model lists).
+	if w.scrollOffset > 0 && len(lines) > h {
+		maxOffset := len(lines) - h
+		if w.scrollOffset > maxOffset {
+			w.scrollOffset = maxOffset
+		}
+		lines = lines[w.scrollOffset:]
 	}
 
 	// Pad to fill available height.

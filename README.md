@@ -19,6 +19,11 @@
 </p>
 
 ---
+### Quick Install (macOS / Linux)
+
+```bash
+curl -fsSL https://deploy.k8sclaw.ai/install.sh | sh
+```
 
 ## Why KubeClaw?
 
@@ -61,12 +66,6 @@ This means you can give an agent full `kubectl` access for a troubleshooting run
 The result: every concept that OpenClaw manages in application code, KubeClaw expresses as a Kubernetes resource — declarative, reconcilable, observable, and scalable.
 
 ---
-
-### Quick Install (macOS / Linux)
-
-```bash
-curl -fsSL https://deploy.kubeclaw.ai/install.sh | sh
-```
 
 ### Deploy to Your Cluster
 
@@ -289,7 +288,7 @@ Running `kubeclaw` with no arguments launches a **k9s-style interactive terminal
 ### 1. Install the CLI
 
 ```bash
-curl -fsSL https://deploy.kubeclaw.ai/install.sh | sh
+curl -fsSL https://deploy.k8sclaw.ai/install.sh | sh
 ```
 
 Detects your OS and architecture, downloads the latest release binary, and installs to `/usr/local/bin` (or `~/.local/bin`).
