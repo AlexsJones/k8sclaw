@@ -6,9 +6,10 @@
 
 <p align="center">
   <strong>The Kubernetes-Native Agentic Control Plane</strong><br>
-  <em>What OpenClaw does in-process, KubeClaw does with Kubernetes primitives.<br>
+  <em>Run a fleet of AI agents on Kubernetes. Administer your cluster agentically.<br>
   Every agent is an ephemeral Pod. Every policy is a CRD. Every execution is a Job.<br>
-  Multi-tenant, horizontally scalable, and cloud-native from the ground up.</em><br><br>
+  Orchestrate multi-agent workflows <b>and</b> let agents diagnose, scale, and remediate your infrastructure.<br>
+  Multi-tenant. Horizontally scalable. Safe by design.</em><br><br>
   From the creator of <a href="https://github.com/k8sgpt-ai/k8sgpt">k8sgpt</a> and <a href="https://github.com/AlexsJones/llmfit">llmfit</a>
 </p>
 
@@ -27,6 +28,11 @@ curl -fsSL https://deploy.k8sclaw.ai/install.sh | sh
 
 ## Why KubeClaw?
 
+KubeClaw serves **two powerful use cases** on one Kubernetes-native platform:
+
+1. **Orchestrate fleets of AI agents** — customer support, code review, data pipelines, or any domain-specific workflow. Each agent gets its own pod, RBAC, and network policy with proper tenant isolation.
+2. **Administer the cluster itself agentically** — point agents inward to diagnose failures, scale deployments, triage alerts, and remediate issues, all with Kubernetes-native isolation, RBAC, and audit trails.
+
 Agentic frameworks like OpenClaw pioneered rich agent orchestration — sub-agent registries, tool pipelines, channel integrations, and sandbox execution. But they run as **in-process monoliths** with file-based state, single-instance locks, and tightly coupled plugin systems.
 
 KubeClaw takes the same agentic control model and rebuilds it on Kubernetes primitives:
@@ -35,7 +41,7 @@ KubeClaw takes the same agentic control model and rebuilds it on Kubernetes prim
 
 Most agent frameworks dump every tool into one shared process. One bad `kubectl delete` and your whole agent environment is toast. KubeClaw does this completely differently:
 
-**Every skill runs in its own sidecar container** — a separate, isolated process injected into the agent pod at runtime. Toggle a skill on, and the controller automatically:
+**Every skill runs in its own sidecar container** — a separate, isolated process injected into the agent pod at runtime. Use skills to give agents cluster-admin capabilities (`kubectl`, `helm`, scaling) or domain-specific tools — each with ephemeral least-privilege RBAC that's garbage-collected when the run finishes. Toggle a skill on, and the controller automatically:
 
 - Injects a dedicated sidecar container with only the binaries that skill needs (`kubectl`, `helm`, `terraform`, etc.)
 - Provisions **ephemeral, least-privilege RBAC** scoped to that single agent run — no standing permissions, no god-roles
@@ -44,7 +50,7 @@ Most agent frameworks dump every tool into one shared process. One bad `kubectl 
 
 This means you can give an agent full `kubectl` access for a troubleshooting run without worrying about leftover permissions. Skills are declared as CRDs, toggled per-instance in the TUI with a single keypress, and their containers are built and shipped alongside the rest of KubeClaw. No plugins to install, no runtime to configure — just Kubernetes-native isolation that scales.
 
-> _"Give the agent tools, not trust."_ — Skills get exactly the permissions they declare, for exactly as long as the run lasts, and not a second longer.
+> _"Give the agent tools, not trust."_ — Whether it's orchestrating a fleet or administering the cluster, skills get exactly the permissions they declare, for exactly as long as the run lasts, and not a second longer.
 
 ### How it compares
 
@@ -63,7 +69,7 @@ This means you can give an agent full `kubectl` access for a troubleshooting run
 | **Channel connections** | In-process per channel | Dedicated **Deployment** per channel type |
 | **Observability** | Application logs | `kubectl logs`, events, conditions, **k9s-style TUI** |
 
-The result: every concept that OpenClaw manages in application code, KubeClaw expresses as a Kubernetes resource — declarative, reconcilable, observable, and scalable.
+The result: every concept that OpenClaw manages in application code, KubeClaw expresses as a Kubernetes resource — then adds the ability to point agents at the cluster itself. Declarative, reconcilable, observable, and scalable.
 
 ---
 
@@ -174,7 +180,7 @@ KubeClaw models every agentic concept as a Kubernetes Custom Resource:
 | `ClawInstance` | Namespace / Tenant | Per-user gateway — channels, provider config, memory settings, skill bindings |
 | `AgentRun` | Job | Single agent execution — task, model, result capture, memory extraction |
 | `ClawPolicy` | NetworkPolicy | Feature and tool gating — what an agent can and cannot do |
-| `SkillPack` | ConfigMap | Portable skill bundles — mounted into agent pods as files, with optional sidecar containers |
+| `SkillPack` | ConfigMap | Portable skill bundles — kubectl, Helm, or custom tools — mounted into agent pods as files, with optional sidecar containers for cluster ops |
 | `ClawSchedule` | CronJob | Recurring tasks — heartbeats, sweeps, scheduled runs with cron expressions |
 
 ### Skill Sidecars
@@ -228,7 +234,7 @@ This gives agents **continuity across runs** without external databases or file 
 
 ### Scheduled Tasks (Heartbeats)
 
-`ClawSchedule` resources define cron-based recurring agent runs — the Kubernetes-native equivalent of OpenClaw's heartbeat system:
+`ClawSchedule` resources define cron-based recurring agent runs — perfect for automated cluster health checks, overnight alert reviews, resource right-sizing sweeps, or any domain-specific task:
 
 ```yaml
 apiVersion: kubeclaw.io/v1alpha1
