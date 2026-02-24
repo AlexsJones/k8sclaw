@@ -559,7 +559,7 @@ func (r *AgentRunReconciler) buildContainers(agentRun *kubeclawv1alpha1.AgentRun
 		container := corev1.Container{
 			Name:            fmt.Sprintf("skill-%s", sc.skillPackName),
 			Image:           sc.sidecar.Image,
-			ImagePullPolicy: corev1.PullIfNotPresent,
+			ImagePullPolicy: corev1.PullAlways,
 			Env:             envVars,
 			VolumeMounts:    mounts,
 			Resources: corev1.ResourceRequirements{
