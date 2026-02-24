@@ -1,4 +1,5 @@
 // Package main is the entry point for the Discord channel pod.
+// Uses discordgo for the Discord Gateway WebSocket connection.
 package main
 
 import (
@@ -12,28 +13,30 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/bwmarrin/discordgo"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 
 	"github.com/kubeclaw/kubeclaw/internal/channel"
 	"github.com/kubeclaw/kubeclaw/internal/eventbus"
 )
 
-// DiscordChannel implements the Discord Gateway channel.
+// DiscordChannel implements the Discord Gateway channel via discordgo.
 type DiscordChannel struct {
 	channel.BaseChannel
-	BotToken string
-	client   *http.Client
-	healthy  bool
+	session *discordgo.Session
+	healthy bool
 }
 
 func main() {
 	var instanceName string
 	var eventBusURL string
 	var botToken string
+	var listenAddr string
 
 	flag.StringVar(&instanceName, "instance", os.Getenv("INSTANCE_NAME"), "ClawInstance name")
 	flag.StringVar(&eventBusURL, "event-bus-url", os.Getenv("EVENT_BUS_URL"), "Event bus URL")
 	flag.StringVar(&botToken, "bot-token", os.Getenv("DISCORD_BOT_TOKEN"), "Discord bot token")
+	flag.StringVar(&listenAddr, "addr", ":8080", "Listen address for health endpoint")
 	flag.Parse()
 
 	if botToken == "" {
@@ -50,61 +53,106 @@ func main() {
 	}
 	defer bus.Close()
 
-	ch := &DiscordChannel{
+	// Create Discord session
+	dg, err := discordgo.New("Bot " + botToken)
+	if err != nil {
+		log.Error(err, "failed to create discord session")
+		os.Exit(1)
+	}
+
+	dc := &DiscordChannel{
 		BaseChannel: channel.BaseChannel{
 			ChannelType:  "discord",
 			InstanceName: instanceName,
 			EventBus:     bus,
 		},
-		BotToken: botToken,
-		client:   &http.Client{Timeout: 30 * time.Second},
+		session: dg,
 	}
+
+	// Set intents — we need guild messages and DMs
+	dg.Identify.Intents = discordgo.IntentsGuildMessages | discordgo.IntentsDirectMessages | discordgo.IntentMessageContent
+
+	// Register message handler
+	dg.AddHandler(dc.messageCreate)
+
+	// Open WebSocket connection
+	if err := dg.Open(); err != nil {
+		log.Error(err, "failed to open discord gateway")
+		os.Exit(1)
+	}
+	defer dg.Close()
+
+	dc.healthy = true
+	log.Info("Discord channel connected", "instance", instanceName, "user", dg.State.User.Username)
+	_ = dc.PublishHealth(context.Background(), channel.HealthStatus{Connected: true})
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
+	go dc.handleOutbound(ctx)
+
 	// Health server
+	mux := http.NewServeMux()
+	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
+		if dc.healthy {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte("ok"))
+		} else {
+			w.WriteHeader(http.StatusServiceUnavailable)
+		}
+	})
+
+	server := &http.Server{
+		Addr:              listenAddr,
+		Handler:           mux,
+		ReadHeaderTimeout: 10 * time.Second,
+	}
+
 	go func() {
-		mux := http.NewServeMux()
-		mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
-			if ch.healthy {
-				w.WriteHeader(http.StatusOK)
-			} else {
-				w.WriteHeader(http.StatusServiceUnavailable)
-			}
-		})
-		_ = http.ListenAndServe(":8080", mux)
+		<-ctx.Done()
+		shutdownCtx, c := context.WithTimeout(context.Background(), 5*time.Second)
+		defer c()
+		_ = server.Shutdown(shutdownCtx)
 	}()
 
-	go ch.handleOutbound(ctx)
-
-	log.Info("Starting Discord channel", "instance", instanceName)
-	if err := ch.connectGateway(ctx); err != nil {
-		log.Error(err, "discord gateway failed")
+	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		log.Error(err, "health server failed")
 	}
 }
 
-// connectGateway connects to the Discord WebSocket Gateway.
-// This is a simplified placeholder — full implementation would use the
-// Discord Gateway API with heartbeats, resume, and intent-based events.
-func (dc *DiscordChannel) connectGateway(ctx context.Context) error {
-	dc.healthy = true
-	_ = dc.PublishHealth(ctx, channel.HealthStatus{Connected: true})
+// messageCreate is the discordgo handler for MESSAGE_CREATE events.
+func (dc *DiscordChannel) messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
+	// Ignore messages from the bot itself
+	if m.Author.ID == s.State.User.ID {
+		return
+	}
 
-	// In a full implementation, this would:
-	// 1. GET /api/v10/gateway/bot to get the WebSocket URL
-	// 2. Connect via WebSocket with proper intents
-	// 3. Handle READY, MESSAGE_CREATE, etc. events
-	// 4. Send heartbeats per the hello payload interval
+	// Skip empty messages
+	if m.Content == "" {
+		return
+	}
 
-	<-ctx.Done()
-	return nil
+	msg := channel.InboundMessage{
+		SenderID:   m.Author.ID,
+		SenderName: m.Author.Username,
+		ChatID:     m.ChannelID,
+		Text:       m.Content,
+		Metadata: map[string]string{
+			"messageId": m.ID,
+			"guildId":   m.GuildID,
+		},
+	}
+
+	if err := dc.PublishInbound(context.Background(), msg); err != nil {
+		fmt.Fprintf(os.Stderr, "failed to publish inbound: %v\n", err)
+	}
 }
 
-// handleOutbound subscribes to outbound messages and sends them via Discord REST API.
+// handleOutbound subscribes to outbound messages and sends them via Discord.
 func (dc *DiscordChannel) handleOutbound(ctx context.Context) {
 	events, err := dc.SubscribeOutbound(ctx)
 	if err != nil {
+		fmt.Fprintf(os.Stderr, "failed to subscribe to outbound: %v\n", err)
 		return
 	}
 
@@ -120,33 +168,15 @@ func (dc *DiscordChannel) handleOutbound(ctx context.Context) {
 			if msg.Channel != "discord" {
 				continue
 			}
-			_ = dc.sendMessage(ctx, msg)
+			if err := dc.sendMessage(msg); err != nil {
+				fmt.Fprintf(os.Stderr, "failed to send discord message: %v\n", err)
+			}
 		}
 	}
 }
 
-// sendMessage sends a message via the Discord REST API.
-func (dc *DiscordChannel) sendMessage(ctx context.Context, msg channel.OutboundMessage) error {
-	url := fmt.Sprintf("https://discord.com/api/v10/channels/%s/messages", msg.ChatID)
-
-	payload := map[string]interface{}{
-		"content": msg.Text,
-	}
-	body, _ := json.Marshal(payload)
-	_ = body
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, http.NoBody)
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Authorization", "Bot "+dc.BotToken)
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := dc.client.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	return nil
+// sendMessage sends a message to a Discord channel.
+func (dc *DiscordChannel) sendMessage(msg channel.OutboundMessage) error {
+	_, err := dc.session.ChannelMessageSend(msg.ChatID, msg.Text)
+	return err
 }

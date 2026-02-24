@@ -1,5 +1,9 @@
 // Package main is the entry point for the WhatsApp channel pod.
-// WhatsApp uses a StatefulSet for persistent session auth.
+// Uses whatsmeow for WhatsApp Web multi-device protocol.
+// On first run, a QR code is printed to the pod logs — scan it with
+// WhatsApp → Linked Devices → Link a Device.
+// Credentials are stored in an SQLite database on a PVC so the link
+// survives pod restarts.
 package main
 
 import (
@@ -7,7 +11,6 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"io"
 	"net/http"
 	"os"
 	"os/signal"
@@ -15,44 +18,45 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/mdp/qrterminal/v3"
+	"go.mau.fi/whatsmeow"
+	"go.mau.fi/whatsmeow/proto/waE2E"
+	"go.mau.fi/whatsmeow/store/sqlstore"
+	"go.mau.fi/whatsmeow/types"
+	"go.mau.fi/whatsmeow/types/events"
+	waLog "go.mau.fi/whatsmeow/util/log"
+	"google.golang.org/protobuf/proto"
+
+	_ "modernc.org/sqlite" // pure-Go SQLite driver — no CGO required
+
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 
 	"github.com/kubeclaw/kubeclaw/internal/channel"
 	"github.com/kubeclaw/kubeclaw/internal/eventbus"
 )
 
-// WhatsAppChannel implements the WhatsApp Business Cloud API channel.
+// WhatsAppChannel implements the WhatsApp Web channel via whatsmeow.
 type WhatsAppChannel struct {
 	channel.BaseChannel
-	AccessToken   string
-	PhoneNumberID string
-	VerifyToken   string
-	client        *http.Client
-	healthy       bool
+	client  *whatsmeow.Client
+	healthy bool
+	log     waLog.Logger
 }
 
 func main() {
 	var instanceName string
 	var eventBusURL string
-	var accessToken string
-	var phoneNumberID string
-	var verifyToken string
+	var dataDir string
 	var listenAddr string
 
 	flag.StringVar(&instanceName, "instance", os.Getenv("INSTANCE_NAME"), "ClawInstance name")
 	flag.StringVar(&eventBusURL, "event-bus-url", os.Getenv("EVENT_BUS_URL"), "Event bus URL")
-	flag.StringVar(&accessToken, "access-token", os.Getenv("WHATSAPP_ACCESS_TOKEN"), "WhatsApp access token")
-	flag.StringVar(&phoneNumberID, "phone-number-id", os.Getenv("WHATSAPP_PHONE_NUMBER_ID"), "WhatsApp phone number ID")
-	flag.StringVar(&verifyToken, "verify-token", os.Getenv("WHATSAPP_VERIFY_TOKEN"), "Webhook verify token")
-	flag.StringVar(&listenAddr, "addr", ":3000", "Listen address for webhook")
+	flag.StringVar(&dataDir, "data-dir", envOrDefault("WHATSAPP_DATA_DIR", "/data"), "Directory for SQLite credential store")
+	flag.StringVar(&listenAddr, "addr", ":3000", "Listen address for health endpoint")
 	flag.Parse()
 
-	if accessToken == "" {
-		fmt.Fprintln(os.Stderr, "WHATSAPP_ACCESS_TOKEN is required")
-		os.Exit(1)
-	}
-
 	log := zap.New(zap.UseDevMode(false)).WithName("channel-whatsapp")
+	waLogger := waLog.Stdout("WhatsApp", "INFO", true)
 
 	bus, err := eventbus.NewNATSEventBus(eventBusURL)
 	if err != nil {
@@ -61,32 +65,84 @@ func main() {
 	}
 	defer bus.Close()
 
-	ch := &WhatsAppChannel{
+	// Initialise whatsmeow SQLite store
+	dbPath := fmt.Sprintf("file:%s/whatsapp.db?_pragma=foreign_keys(1)&_pragma=journal_mode(WAL)", dataDir)
+	container, err := sqlstore.New(context.Background(), "sqlite", dbPath, waLogger)
+	if err != nil {
+		log.Error(err, "failed to open credential store", "path", dbPath)
+		os.Exit(1)
+	}
+
+	// Get the first device or create a new one
+	deviceStore, err := container.GetFirstDevice(context.Background())
+	if err != nil {
+		log.Error(err, "failed to get device from store")
+		os.Exit(1)
+	}
+
+	client := whatsmeow.NewClient(deviceStore, waLogger)
+
+	wc := &WhatsAppChannel{
 		BaseChannel: channel.BaseChannel{
 			ChannelType:  "whatsapp",
 			InstanceName: instanceName,
 			EventBus:     bus,
 		},
-		AccessToken:   accessToken,
-		PhoneNumberID: phoneNumberID,
-		VerifyToken:   verifyToken,
-		client:        &http.Client{Timeout: 30 * time.Second},
+		client: client,
+		log:    waLogger,
 	}
+
+	// Register event handler for incoming messages
+	client.AddEventHandler(wc.eventHandler)
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
-	go ch.handleOutbound(ctx)
+	// Connect — if not linked yet, show QR code
+	if client.Store.ID == nil {
+		log.Info("No WhatsApp session found — scan the QR code below to link this device")
+		qrChan, _ := client.GetQRChannel(ctx)
+		if err := client.Connect(); err != nil {
+			log.Error(err, "failed to connect for QR pairing")
+			os.Exit(1)
+		}
+		for evt := range qrChan {
+			switch evt.Event {
+			case "code":
+				fmt.Println("\n╔══════════════════════════════════════════╗")
+				fmt.Println("║  Scan this QR code in WhatsApp:          ║")
+				fmt.Println("║  Settings → Linked Devices → Link Device ║")
+				fmt.Println("╚══════════════════════════════════════════╝")
+				qrterminal.GenerateHalfBlock(evt.Code, qrterminal.L, os.Stdout)
+				fmt.Println()
+			case "success":
+				log.Info("WhatsApp device linked successfully!")
+			case "timeout":
+				log.Error(nil, "QR code timed out — restart the pod to try again")
+				os.Exit(1)
+			}
+		}
+	} else {
+		if err := client.Connect(); err != nil {
+			log.Error(err, "failed to connect")
+			os.Exit(1)
+		}
+		log.Info("WhatsApp connected with existing session")
+	}
 
-	log.Info("Starting WhatsApp channel", "instance", instanceName, "addr", listenAddr)
-	ch.healthy = true
-	_ = ch.PublishHealth(ctx, channel.HealthStatus{Connected: true})
+	wc.healthy = true
+	_ = wc.PublishHealth(ctx, channel.HealthStatus{Connected: true})
 
+	go wc.handleOutbound(ctx)
+
+	log.Info("WhatsApp channel running", "instance", instanceName, "addr", listenAddr)
+
+	// Health & readiness server
 	mux := http.NewServeMux()
-	mux.HandleFunc("/webhook", ch.handleWebhook)
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
-		if ch.healthy {
+		if wc.healthy && client.IsConnected() {
 			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte("ok"))
 		} else {
 			w.WriteHeader(http.StatusServiceUnavailable)
 		}
@@ -102,107 +158,76 @@ func main() {
 		<-ctx.Done()
 		shutdownCtx, c := context.WithTimeout(context.Background(), 5*time.Second)
 		defer c()
+		client.Disconnect()
 		_ = server.Shutdown(shutdownCtx)
 	}()
 
 	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-		log.Error(err, "whatsapp server failed")
+		log.Error(err, "health server failed")
 	}
 }
 
-// handleWebhook processes WhatsApp Cloud API webhooks.
-func (wc *WhatsAppChannel) handleWebhook(w http.ResponseWriter, r *http.Request) {
-	// Verification challenge (GET)
-	if r.Method == http.MethodGet {
-		mode := r.URL.Query().Get("hub.mode")
-		token := r.URL.Query().Get("hub.verify_token")
-		challenge := r.URL.Query().Get("hub.challenge")
-
-		if mode == "subscribe" && token == wc.VerifyToken {
-			fmt.Fprint(w, challenge)
-			return
-		}
-		http.Error(w, "forbidden", http.StatusForbidden)
-		return
+// eventHandler processes whatsmeow events.
+func (wc *WhatsAppChannel) eventHandler(evt interface{}) {
+	switch v := evt.(type) {
+	case *events.Message:
+		wc.handleInboundMessage(v)
+	case *events.Connected:
+		wc.healthy = true
+		_ = wc.PublishHealth(context.Background(), channel.HealthStatus{Connected: true})
+	case *events.Disconnected:
+		wc.healthy = false
+		_ = wc.PublishHealth(context.Background(), channel.HealthStatus{Connected: false, Message: "disconnected"})
+	case *events.LoggedOut:
+		wc.healthy = false
+		fmt.Fprintln(os.Stderr, "WhatsApp session logged out — restart the pod and scan a new QR code")
+		_ = wc.PublishHealth(context.Background(), channel.HealthStatus{Connected: false, Message: "logged out"})
 	}
-
-	// Process incoming messages (POST)
-	body, err := io.ReadAll(r.Body)
-	if err != nil {
-		http.Error(w, "error", http.StatusBadRequest)
-		return
-	}
-	defer r.Body.Close()
-
-	var payload struct {
-		Entry []struct {
-			Changes []struct {
-				Value struct {
-					Messages []struct {
-						From string `json:"from"`
-						Type string `json:"type"`
-						Text struct {
-							Body string `json:"body"`
-						} `json:"text"`
-						Timestamp string `json:"timestamp"`
-						ID        string `json:"id"`
-					} `json:"messages"`
-					Contacts []struct {
-						Profile struct {
-							Name string `json:"name"`
-						} `json:"profile"`
-						WaID string `json:"wa_id"`
-					} `json:"contacts"`
-				} `json:"value"`
-			} `json:"changes"`
-		} `json:"entry"`
-	}
-
-	if err := json.Unmarshal(body, &payload); err != nil {
-		http.Error(w, "invalid JSON", http.StatusBadRequest)
-		return
-	}
-
-	for _, entry := range payload.Entry {
-		for _, change := range entry.Changes {
-			for _, message := range change.Value.Messages {
-				if message.Type != "text" {
-					continue
-				}
-
-				senderName := message.From
-				for _, contact := range change.Value.Contacts {
-					if contact.WaID == message.From {
-						senderName = contact.Profile.Name
-						break
-					}
-				}
-
-				msg := channel.InboundMessage{
-					SenderID:   message.From,
-					SenderName: senderName,
-					ChatID:     message.From,
-					Text:       message.Text.Body,
-					Metadata: map[string]string{
-						"messageId": message.ID,
-						"timestamp": message.Timestamp,
-					},
-				}
-
-				if err := wc.PublishInbound(r.Context(), msg); err != nil {
-					fmt.Fprintf(os.Stderr, "failed to publish inbound: %v\n", err)
-				}
-			}
-		}
-	}
-
-	w.WriteHeader(http.StatusOK)
 }
 
-// handleOutbound subscribes to outbound messages.
+// handleInboundMessage processes a received WhatsApp message.
+func (wc *WhatsAppChannel) handleInboundMessage(evt *events.Message) {
+	// Skip status broadcasts and own messages
+	if evt.Info.Chat.Server == "broadcast" || evt.Info.IsFromMe {
+		return
+	}
+
+	text := extractText(evt.Message)
+	if text == "" {
+		return // skip non-text messages for now
+	}
+
+	senderName := evt.Info.PushName
+	senderID := evt.Info.Sender.User
+	chatID := evt.Info.Chat.User
+
+	// For group chats, include group JID as chatID
+	if evt.Info.IsGroup {
+		chatID = evt.Info.Chat.String()
+	}
+
+	msg := channel.InboundMessage{
+		SenderID:   senderID,
+		SenderName: senderName,
+		ChatID:     chatID,
+		Text:       text,
+		Metadata: map[string]string{
+			"messageId": evt.Info.ID,
+			"timestamp": fmt.Sprintf("%d", evt.Info.Timestamp.Unix()),
+			"isGroup":   fmt.Sprintf("%t", evt.Info.IsGroup),
+		},
+	}
+
+	if err := wc.PublishInbound(context.Background(), msg); err != nil {
+		fmt.Fprintf(os.Stderr, "failed to publish inbound: %v\n", err)
+	}
+}
+
+// handleOutbound subscribes to outbound messages and sends via WhatsApp.
 func (wc *WhatsAppChannel) handleOutbound(ctx context.Context) {
 	events, err := wc.SubscribeOutbound(ctx)
 	if err != nil {
+		fmt.Fprintf(os.Stderr, "failed to subscribe to outbound: %v\n", err)
 		return
 	}
 
@@ -218,37 +243,61 @@ func (wc *WhatsAppChannel) handleOutbound(ctx context.Context) {
 			if msg.Channel != "whatsapp" {
 				continue
 			}
-			_ = wc.sendMessage(ctx, msg)
+			if err := wc.sendMessage(ctx, msg); err != nil {
+				fmt.Fprintf(os.Stderr, "failed to send whatsapp message: %v\n", err)
+			}
 		}
 	}
 }
 
-// sendMessage sends a message via the WhatsApp Cloud API.
+// sendMessage sends a text message via WhatsApp.
 func (wc *WhatsAppChannel) sendMessage(ctx context.Context, msg channel.OutboundMessage) error {
-	url := fmt.Sprintf("https://graph.facebook.com/v18.0/%s/messages", wc.PhoneNumberID)
+	jid := resolveJID(msg.ChatID)
 
-	payload := map[string]interface{}{
-		"messaging_product": "whatsapp",
-		"to":                msg.ChatID,
-		"type":              "text",
-		"text": map[string]string{
-			"body": msg.Text,
-		},
+	_, err := wc.client.SendMessage(ctx, jid, &waE2E.Message{
+		Conversation: proto.String(msg.Text),
+	})
+	return err
+}
+
+// resolveJID converts a chat ID string to a WhatsApp JID.
+// If the ID already contains an @, assume it's a full JID.
+// Otherwise treat it as a phone number (user JID).
+func resolveJID(chatID string) types.JID {
+	if strings.Contains(chatID, "@") {
+		jid, _ := types.ParseJID(chatID)
+		return jid
 	}
+	return types.NewJID(chatID, types.DefaultUserServer)
+}
 
-	body, _ := json.Marshal(payload)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, strings.NewReader(string(body)))
-	if err != nil {
-		return err
+// extractText pulls the text content from a WhatsApp message proto.
+func extractText(msg *waE2E.Message) string {
+	if msg == nil {
+		return ""
 	}
-	req.Header.Set("Authorization", "Bearer "+wc.AccessToken)
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := wc.client.Do(req)
-	if err != nil {
-		return err
+	if msg.Conversation != nil {
+		return *msg.Conversation
 	}
-	defer resp.Body.Close()
+	if msg.ExtendedTextMessage != nil && msg.ExtendedTextMessage.Text != nil {
+		return *msg.ExtendedTextMessage.Text
+	}
+	// Image/video/document captions
+	if msg.ImageMessage != nil && msg.ImageMessage.Caption != nil {
+		return *msg.ImageMessage.Caption
+	}
+	if msg.VideoMessage != nil && msg.VideoMessage.Caption != nil {
+		return *msg.VideoMessage.Caption
+	}
+	if msg.DocumentMessage != nil && msg.DocumentMessage.Caption != nil {
+		return *msg.DocumentMessage.Caption
+	}
+	return ""
+}
 
-	return nil
+func envOrDefault(key, fallback string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return fallback
 }

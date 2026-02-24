@@ -204,7 +204,6 @@ spec:
                         slack).
                       type: string
                   required:
-                  - configRef
                   - type
                   type: object
                 type: array

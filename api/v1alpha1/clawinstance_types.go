@@ -57,7 +57,8 @@ type ChannelSpec struct {
 	Type string `json:"type"`
 
 	// ConfigRef references the secret containing channel credentials.
-	ConfigRef SecretRef `json:"configRef"`
+	// Optional for channels that use alternative authentication (e.g. WhatsApp QR pairing).
+	ConfigRef SecretRef `json:"configRef,omitempty"`
 }
 
 // AgentsSpec defines agent configuration.

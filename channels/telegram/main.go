@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -208,8 +209,7 @@ func (tc *TelegramChannel) sendMessage(ctx context.Context, msg channel.Outbound
 
 	body, _ := json.Marshal(payload)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url,
-		http.NoBody) // Placeholder — real impl uses bytes.NewReader(body)
-	_ = body
+		strings.NewReader(string(body)))
 	if err != nil {
 		return err
 	}

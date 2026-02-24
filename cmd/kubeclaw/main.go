@@ -554,9 +554,10 @@ func runOnboard() error {
 		channelToken = promptSecret(reader, "  Bot Token")
 	case "4":
 		channelType = "whatsapp"
-		channelTokenKey = "WHATSAPP_ACCESS_TOKEN"
-		fmt.Println("\n  💡 Set up the WhatsApp Cloud API at https://developers.facebook.com")
-		channelToken = promptSecret(reader, "  Access Token")
+		channelTokenKey = "" // WhatsApp uses QR pairing, no token needed
+		fmt.Println("\n  📱 WhatsApp uses QR code pairing — no API token needed!")
+		fmt.Println("  After setup, a QR code will appear. Scan it with your phone:")
+		fmt.Println("  WhatsApp → Settings → Linked Devices → Link a Device")
 	default:
 		channelType = ""
 	}
@@ -633,11 +634,29 @@ func runOnboard() error {
 	if apiKey == "" {
 		instanceSecret = ""
 	}
+	// WhatsApp doesn't need a channel secret (QR pairing)
+	chSecret := channelSecretName
+	if channelType == "whatsapp" {
+		chSecret = ""
+	}
 	instanceYAML := buildClawInstanceYAML(instanceName, namespace, modelName, baseURL,
-		providerName, instanceSecret, channelType, channelSecretName,
+		providerName, instanceSecret, channelType, chSecret,
 		policyName, applyPolicy)
 	if err := kubectlApplyStdin(instanceYAML); err != nil {
 		return fmt.Errorf("apply instance: %w", err)
+	}
+
+	// ── WhatsApp QR pairing ──────────────────────────────────────────────
+	if channelType == "whatsapp" {
+		fmt.Println("\n  📱 Waiting for WhatsApp channel pod to start...")
+		fmt.Println("  (this may take a moment on first deploy)")
+		fmt.Println()
+
+		if err := streamWhatsAppQR(namespace, instanceName); err != nil {
+			fmt.Printf("\n  ⚠  Could not stream QR automatically: %s\n", err)
+			fmt.Printf("  You can scan later: kubectl logs -l kubeclaw.io/channel=whatsapp,kubeclaw.io/instance=%s -n %s\n",
+				instanceName, namespace)
+		}
 	}
 
 	// ── Done ─────────────────────────────────────────────────────────────
@@ -649,11 +668,98 @@ func runOnboard() error {
 	if channelType == "telegram" {
 		fmt.Println("  • Send a message to your Telegram bot — it's live!")
 	}
+	if channelType == "whatsapp" {
+		fmt.Println("  • Send a WhatsApp message to your linked number — it's live!")
+	}
 	fmt.Printf("  • Run an agent:          kubectl apply -f config/samples/agentrun_sample.yaml\n")
 	fmt.Printf("  • View runs:             kubeclaw runs list\n")
 	fmt.Printf("  • Feature gates:         kubeclaw features list --policy %s\n", policyName)
 	fmt.Println()
 	return nil
+}
+
+// streamWhatsAppQR polls the WhatsApp channel pod until a QR code appears,
+// prints it to stdout, and waits for the device to be linked.
+func streamWhatsAppQR(ns, instanceName string) error {
+	selector := fmt.Sprintf("kubeclaw.io/instance=%s,kubeclaw.io/channel=whatsapp,kubeclaw.io/component=channel", instanceName)
+	timeout := 3 * time.Minute
+	deadline := time.Now().Add(timeout)
+
+	// Phase 1: Wait for pod to be Running
+	for time.Now().Before(deadline) {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		cmd := exec.CommandContext(ctx, "kubectl", "get", "pods", "-l", selector, "-n", ns,
+			"-o", "jsonpath={.items[0].status.phase}")
+		out, err := cmd.CombinedOutput()
+		cancel()
+
+		phase := strings.TrimSpace(string(out))
+		if err == nil && phase == "Running" {
+			fmt.Println("  ✓ Pod is running")
+			break
+		}
+		if phase != "" {
+			fmt.Printf("\r  ⏳ Pod status: %s...", phase)
+		}
+		time.Sleep(3 * time.Second)
+	}
+
+	// Phase 2: Stream logs looking for QR code
+	lastQR := ""
+	for time.Now().Before(deadline) {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		cmd := exec.CommandContext(ctx, "kubectl", "logs", "-l", selector, "-n", ns, "--tail=80")
+		out, err := cmd.CombinedOutput()
+		cancel()
+
+		if err != nil {
+			time.Sleep(3 * time.Second)
+			continue
+		}
+
+		logStr := string(out)
+
+		// Check if already linked
+		if strings.Contains(logStr, "linked successfully") || strings.Contains(logStr, "connected with existing session") {
+			fmt.Println("\n  ✅ WhatsApp device linked successfully!")
+			return nil
+		}
+
+		// Extract QR code block
+		lines := strings.Split(logStr, "\n")
+		var qrBlock []string
+		inQR := false
+		for _, line := range lines {
+			if strings.Contains(line, "Scan this QR code") {
+				inQR = true
+				qrBlock = append(qrBlock, line)
+				continue
+			}
+			if inQR {
+				qrBlock = append(qrBlock, line)
+				if strings.TrimSpace(line) == "" && len(qrBlock) > 5 {
+					break
+				}
+			}
+		}
+
+		if len(qrBlock) > 0 {
+			qrStr := strings.Join(qrBlock, "\n")
+			if qrStr != lastQR {
+				lastQR = qrStr
+				fmt.Println()
+				for _, l := range qrBlock {
+					fmt.Println("  " + l)
+				}
+				fmt.Println("\n  Open WhatsApp → Settings → Linked Devices → Link a Device")
+				fmt.Println("  Waiting for you to scan...")
+			}
+		}
+
+		time.Sleep(3 * time.Second)
+	}
+
+	return fmt.Errorf("timed out after %s waiting for WhatsApp pairing", timeout)
 }
 
 func printBanner() {
@@ -736,11 +842,18 @@ func buildClawInstanceYAML(name, ns, model, baseURL, provider, providerSecret,
 
 	var channelsBlock string
 	if channelType != "" {
-		channelsBlock = fmt.Sprintf(`  channels:
+		if channelSecret != "" {
+			channelsBlock = fmt.Sprintf(`  channels:
     - type: %s
       configRef:
         secret: %s
 `, channelType, channelSecret)
+		} else {
+			// WhatsApp and other QR-paired channels don't need a secret
+			channelsBlock = fmt.Sprintf(`  channels:
+    - type: %s
+`, channelType)
+		}
 	}
 
 	var policyBlock string
@@ -1242,6 +1355,12 @@ type cmdResultMsg struct {
 	output string
 	err    error
 }
+type whatsappQRPollMsg struct {
+	qrLines []string // QR code lines to display (empty if not ready)
+	linked  bool     // true when pairing succeeded
+	status  string   // human-readable status
+	err     error
+}
 type suggestionsMsg struct {
 	items []suggestion
 }
@@ -1531,6 +1650,7 @@ const (
 	wizStepPolicy                  // y/n: apply default policy
 	wizStepConfirm                 // y/n: confirm summary
 	wizStepApplying                // auto — create resources
+	wizStepWhatsAppQR              // auto — stream QR from pod logs
 	wizStepDone                    // auto — show result
 )
 
@@ -1557,6 +1677,11 @@ type wizardState struct {
 	// Dynamic model list (fetched from provider API when key is supplied).
 	fetchedModels []string // model IDs fetched from the API
 	modelFetchErr string   // non-fatal error message if fetch failed
+
+	// WhatsApp QR pairing state
+	qrLines  []string // QR code lines from pod logs
+	qrStatus string   // "waiting", "scanning", "linked", "error"
+	qrErr    string   // error message if QR polling failed
 
 	// Wizard panel scroll offset for long content (e.g. model lists).
 	scrollOffset int
@@ -2205,6 +2330,14 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.quitting = true
 					return m, tea.Quit
 				case tea.KeyEsc:
+					// During WhatsApp QR step, Esc skips pairing but keeps results
+					if m.wizard.step == wizStepWhatsAppQR {
+						m.wizard.step = wizStepDone
+						m.wizard.resultMsgs = append(m.wizard.resultMsgs,
+							tuiDimStyle.Render("⚠ WhatsApp QR pairing skipped — scan later via: kubectl logs -l kubeclaw.io/channel=whatsapp,kubeclaw.io/instance="+m.wizard.instanceName+" -n "+m.namespace))
+						m.input.Placeholder = "Press Enter to return"
+						return m, nil
+					}
 					m.wizard.reset()
 					m.inputFocused = false
 					m.input.Blur()
@@ -2525,14 +2658,25 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case cmdResultMsg:
 		if m.wizard.active && m.wizard.step == wizStepApplying {
-			m.wizard.step = wizStepDone
 			if msg.err != nil {
+				m.wizard.step = wizStepDone
 				m.wizard.err = msg.err.Error()
 				m.wizard.resultMsgs = []string{tuiErrorStyle.Render("✗ " + msg.err.Error())}
-			} else {
-				// Parse result messages from output (newline-separated).
-				m.wizard.resultMsgs = strings.Split(msg.output, "\n")
+				m.input.Placeholder = "Press Enter to return"
+				return m, nil
 			}
+			// Parse result messages from output (newline-separated).
+			m.wizard.resultMsgs = strings.Split(msg.output, "\n")
+
+			// If WhatsApp channel, transition to QR pairing step
+			if m.wizard.channelType == "whatsapp" {
+				m.wizard.step = wizStepWhatsAppQR
+				m.wizard.qrStatus = "waiting"
+				m.input.Placeholder = "Waiting for WhatsApp pod... (press Esc to skip)"
+				return m, pollWhatsAppQRCmd(m.namespace, m.wizard.instanceName)
+			}
+
+			m.wizard.step = wizStepDone
 			m.input.Placeholder = "Press Enter to return"
 			return m, nil
 		}
@@ -2542,6 +2686,31 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.addLog(msg.output)
 		}
 		return m, refreshDataCmd()
+
+	case whatsappQRPollMsg:
+		if m.wizard.active && m.wizard.step == wizStepWhatsAppQR {
+			if msg.err != nil {
+				m.wizard.qrErr = msg.err.Error()
+				m.wizard.qrStatus = "error"
+				// Retry despite error
+				return m, pollWhatsAppQRCmd(m.namespace, m.wizard.instanceName)
+			}
+			m.wizard.qrStatus = msg.status
+			if len(msg.qrLines) > 0 {
+				m.wizard.qrLines = msg.qrLines
+			}
+			if msg.linked {
+				// Pairing complete — move to done
+				m.wizard.step = wizStepDone
+				m.wizard.resultMsgs = append(m.wizard.resultMsgs,
+					tuiSuccessStyle.Render("✓ WhatsApp device linked successfully!"))
+				m.input.Placeholder = "Press Enter to return"
+				return m, nil
+			}
+			// Keep polling
+			return m, pollWhatsAppQRCmd(m.namespace, m.wizard.instanceName)
+		}
+		return m, nil
 
 	case suggestionsMsg:
 		m.suggestions = msg.items
@@ -5275,6 +5444,76 @@ func tuiPodLogs(ns, podName string) (string, error) {
 	return header + "\n" + strings.Join(filtered, "\n"), nil
 }
 
+// pollWhatsAppQRCmd returns a tea.Cmd that polls for the WhatsApp channel pod
+// and extracts the QR code from its logs. It sleeps between polls.
+func pollWhatsAppQRCmd(ns, instanceName string) tea.Cmd {
+	return func() tea.Msg {
+		time.Sleep(3 * time.Second)
+
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		// Find the WhatsApp channel pod by labels
+		selector := fmt.Sprintf("kubeclaw.io/instance=%s,kubeclaw.io/channel=whatsapp,kubeclaw.io/component=channel", instanceName)
+		cmd := exec.CommandContext(ctx, "kubectl", "get", "pods", "-l", selector, "-n", ns,
+			"-o", "jsonpath={.items[0].metadata.name},{.items[0].status.phase}")
+		out, err := cmd.CombinedOutput()
+		if err != nil || strings.TrimSpace(string(out)) == "" {
+			return whatsappQRPollMsg{status: "waiting", err: nil}
+		}
+
+		parts := strings.SplitN(strings.TrimSpace(string(out)), ",", 2)
+		podName := parts[0]
+		phase := ""
+		if len(parts) > 1 {
+			phase = parts[1]
+		}
+
+		if phase != "Running" {
+			return whatsappQRPollMsg{status: fmt.Sprintf("waiting (pod %s)", phase)}
+		}
+
+		// Get pod logs
+		logCmd := exec.CommandContext(ctx, "kubectl", "logs", podName, "-n", ns, "--tail=80")
+		logOut, err := logCmd.CombinedOutput()
+		if err != nil {
+			return whatsappQRPollMsg{status: "waiting (reading logs...)", err: nil}
+		}
+
+		logStr := string(logOut)
+
+		// Check if already linked
+		if strings.Contains(logStr, "linked successfully") || strings.Contains(logStr, "connected with existing session") {
+			return whatsappQRPollMsg{linked: true, status: "linked"}
+		}
+
+		// Extract QR code block — look for the box header and the QR block characters
+		lines := strings.Split(logStr, "\n")
+		var qrLines []string
+		inQR := false
+		for _, line := range lines {
+			if strings.Contains(line, "Scan this QR code") {
+				inQR = true
+				qrLines = append(qrLines, line)
+				continue
+			}
+			if inQR {
+				qrLines = append(qrLines, line)
+				// End of QR block — look for empty line after block chars
+				if strings.TrimSpace(line) == "" && len(qrLines) > 5 {
+					break
+				}
+			}
+		}
+
+		if len(qrLines) > 0 {
+			return whatsappQRPollMsg{qrLines: qrLines, status: "scanning"}
+		}
+
+		return whatsappQRPollMsg{status: "waiting (initializing...)"}
+	}
+}
+
 func tuiDescribeResource(ns, kind, name string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -5513,9 +5752,10 @@ func (m tuiModel) advanceWizard(val string) (tea.Model, tea.Cmd) {
 			return m, nil
 		case "4":
 			w.channelType = "whatsapp"
-			w.channelTokenKey = "WHATSAPP_ACCESS_TOKEN"
-			w.step = wizStepChannelToken
-			m.input.Placeholder = "WhatsApp Access Token"
+			w.channelTokenKey = "" // WhatsApp uses QR pairing, no token needed
+			// Skip token step — go straight to policy
+			w.step = wizStepPolicy
+			m.input.Placeholder = "Apply default policy? [Y/n]"
 			return m, nil
 		default:
 			w.channelType = ""
@@ -5737,7 +5977,7 @@ func (m tuiModel) renderWizardPanel(h int) string {
 		lines = append(lines, menuNumStyle.Render("  1)")+menuStyle.Render(" Telegram  — easiest, just talk to @BotFather"))
 		lines = append(lines, menuNumStyle.Render("  2)")+menuStyle.Render(" Slack"))
 		lines = append(lines, menuNumStyle.Render("  3)")+menuStyle.Render(" Discord"))
-		lines = append(lines, menuNumStyle.Render("  4)")+menuStyle.Render(" WhatsApp"))
+		lines = append(lines, menuNumStyle.Render("  4)")+menuStyle.Render(" WhatsApp  — scan a QR code to link"))
 		lines = append(lines, menuNumStyle.Render("  5)")+menuStyle.Render(" Skip — I'll add a channel later"))
 
 	case wizStepChannelToken:
@@ -5778,6 +6018,34 @@ func (m tuiModel) renderWizardPanel(h int) string {
 
 	case wizStepApplying:
 		lines = append(lines, stepStyle.Render("  ⏳ Applying resources..."))
+
+	case wizStepWhatsAppQR:
+		lines = append(lines, stepStyle.Render("  📱 WhatsApp QR Pairing"))
+		lines = append(lines, "")
+		// Show apply results first
+		for _, msg := range w.resultMsgs {
+			lines = append(lines, "  "+msg)
+		}
+		lines = append(lines, "")
+		switch w.qrStatus {
+		case "waiting":
+			lines = append(lines, menuStyle.Render("  ⏳ Waiting for WhatsApp channel pod to start..."))
+			lines = append(lines, hintStyle.Render("  (this may take a moment on first deploy)"))
+		case "scanning":
+			lines = append(lines, menuStyle.Render("  Open WhatsApp on your phone:"))
+			lines = append(lines, menuStyle.Render("  Settings → Linked Devices → Link a Device"))
+			lines = append(lines, "")
+			for _, qrLine := range w.qrLines {
+				lines = append(lines, "  "+qrLine)
+			}
+		case "error":
+			lines = append(lines, menuStyle.Render("  ⏳ Waiting for pod... (retrying)"))
+			if w.qrErr != "" {
+				lines = append(lines, hintStyle.Render("  "+w.qrErr))
+			}
+		}
+		lines = append(lines, "")
+		lines = append(lines, hintStyle.Render("  Press Esc to skip — you can scan later via kubectl logs"))
 
 	case wizStepDone:
 		lines = append(lines, "")
@@ -5934,14 +6202,16 @@ func tuiOnboardApply(ns string, w *wizardState) (string, error) {
 	}
 
 	if w.channelType != "" {
-		inst.Spec.Channels = []kubeclawv1alpha1.ChannelSpec{
-			{
-				Type: w.channelType,
-				ConfigRef: kubeclawv1alpha1.SecretRef{
-					Secret: channelSecretName,
-				},
-			},
+		chSpec := kubeclawv1alpha1.ChannelSpec{
+			Type: w.channelType,
 		}
+		// WhatsApp uses QR pairing — no secret needed
+		if w.channelType != "whatsapp" && channelSecretName != "" {
+			chSpec.ConfigRef = kubeclawv1alpha1.SecretRef{
+				Secret: channelSecretName,
+			}
+		}
+		inst.Spec.Channels = []kubeclawv1alpha1.ChannelSpec{chSpec}
 	}
 	if w.applyPolicy {
 		inst.Spec.PolicyRef = policyName

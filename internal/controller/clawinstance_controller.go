@@ -11,6 +11,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -111,6 +112,13 @@ func (r *ClawInstanceReconciler) reconcileChannels(ctx context.Context, instance
 	for _, ch := range instance.Spec.Channels {
 		deployName := fmt.Sprintf("%s-channel-%s", instance.Name, ch.Type)
 
+		// WhatsApp channels need a PVC for credential persistence (QR link survives restarts)
+		if ch.Type == "whatsapp" {
+			if err := r.ensureWhatsAppPVC(ctx, instance, deployName); err != nil {
+				return err
+			}
+		}
+
 		var deploy appsv1.Deployment
 		err := r.Get(ctx, types.NamespacedName{
 			Name:      deployName,
@@ -161,7 +169,7 @@ func (r *ClawInstanceReconciler) buildChannelDeployment(
 	}
 	image := fmt.Sprintf("ghcr.io/alexsjones/kubeclaw/channel-%s:%s", ch.Type, tag)
 
-	return &appsv1.Deployment{
+	deploy := &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
 			Namespace: instance.Namespace,
@@ -194,18 +202,9 @@ func (r *ClawInstanceReconciler) buildChannelDeployment(
 							Name:            "channel",
 							Image:           image,
 							ImagePullPolicy: corev1.PullIfNotPresent,
-							EnvFrom: []corev1.EnvFromSource{
-								{
-									SecretRef: &corev1.SecretEnvSource{
-										LocalObjectReference: corev1.LocalObjectReference{
-											Name: ch.ConfigRef.Secret,
-										},
-									},
-								},
-							},
 							Env: []corev1.EnvVar{
 								{Name: "INSTANCE_NAME", Value: instance.Name},
-									{Name: "EVENT_BUS_URL", Value: "nats://nats.kubeclaw-system.svc:4222"},
+								{Name: "EVENT_BUS_URL", Value: "nats://nats.kubeclaw-system.svc:4222"},
 							},
 						},
 					},
@@ -213,6 +212,85 @@ func (r *ClawInstanceReconciler) buildChannelDeployment(
 			},
 		},
 	}
+
+	// Inject channel credentials from secret (if referenced)
+	if ch.ConfigRef.Secret != "" {
+		deploy.Spec.Template.Spec.Containers[0].EnvFrom = []corev1.EnvFromSource{
+			{
+				SecretRef: &corev1.SecretEnvSource{
+					LocalObjectReference: corev1.LocalObjectReference{
+						Name: ch.ConfigRef.Secret,
+					},
+				},
+			},
+		}
+	}
+
+	// WhatsApp channels need a persistent volume for credential storage
+	if ch.Type == "whatsapp" {
+		pvcName := fmt.Sprintf("%s-data", name)
+		deploy.Spec.Strategy = appsv1.DeploymentStrategy{
+			Type: appsv1.RecreateDeploymentStrategyType, // prevent two pods mounting the same PVC
+		}
+		deploy.Spec.Template.Spec.Volumes = []corev1.Volume{
+			{
+				Name: "whatsapp-data",
+				VolumeSource: corev1.VolumeSource{
+					PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+						ClaimName: pvcName,
+					},
+				},
+			},
+		}
+		deploy.Spec.Template.Spec.Containers[0].VolumeMounts = []corev1.VolumeMount{
+			{
+				Name:      "whatsapp-data",
+				MountPath: "/data",
+			},
+		}
+	}
+
+	return deploy
+}
+
+// ensureWhatsAppPVC creates a PVC for the WhatsApp credential store if it doesn't exist.
+func (r *ClawInstanceReconciler) ensureWhatsAppPVC(ctx context.Context, instance *kubeclawv1alpha1.ClawInstance, deployName string) error {
+	pvcName := fmt.Sprintf("%s-data", deployName)
+	var pvc corev1.PersistentVolumeClaim
+	err := r.Get(ctx, types.NamespacedName{Name: pvcName, Namespace: instance.Namespace}, &pvc)
+	if err == nil {
+		return nil // already exists
+	}
+	if !errors.IsNotFound(err) {
+		return err
+	}
+
+	pvc = corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      pvcName,
+			Namespace: instance.Namespace,
+			Labels: map[string]string{
+				"kubeclaw.io/component": "channel",
+				"kubeclaw.io/channel":   "whatsapp",
+				"kubeclaw.io/instance":  instance.Name,
+			},
+		},
+		Spec: corev1.PersistentVolumeClaimSpec{
+			AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+			Resources: corev1.VolumeResourceRequirements{
+				Requests: corev1.ResourceList{
+					corev1.ResourceStorage: resource.MustParse("256Mi"),
+				},
+			},
+		},
+	}
+
+	if err := controllerutil.SetControllerReference(instance, &pvc, r.Scheme); err != nil {
+		return err
+	}
+
+	r.Log.Info("Creating WhatsApp credential PVC", "name", pvcName)
+	return r.Create(ctx, &pvc)
 }
 
 // cleanupChannelDeployments removes channel deployments owned by the instance.
