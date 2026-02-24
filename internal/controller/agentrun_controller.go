@@ -920,15 +920,6 @@ func (r *AgentRunReconciler) mirrorSkillConfigMaps(ctx context.Context, log logr
 			continue
 		}
 
-		// Check if ConfigMap already exists in the agent namespace.
-		existing := &corev1.ConfigMap{}
-		if err := r.Get(ctx, client.ObjectKey{
-			Namespace: agentRun.Namespace,
-			Name:      cmName,
-		}, existing); err == nil {
-			continue // already present
-		}
-
 		// Look for the ConfigMap in kubeclaw-system.
 		source := &corev1.ConfigMap{}
 		if err := r.Get(ctx, client.ObjectKey{
@@ -936,6 +927,22 @@ func (r *AgentRunReconciler) mirrorSkillConfigMaps(ctx context.Context, log logr
 			Name:      cmName,
 		}, source); err != nil {
 			log.V(1).Info("Skill ConfigMap not found in kubeclaw-system, skipping mirror", "configmap", cmName)
+			continue
+		}
+
+		// Check if ConfigMap already exists in the agent namespace.
+		existing := &corev1.ConfigMap{}
+		if err := r.Get(ctx, client.ObjectKey{
+			Namespace: agentRun.Namespace,
+			Name:      cmName,
+		}, existing); err == nil {
+			// Already present — update data to ensure we have the latest skills.
+			existing.Data = source.Data
+			if err := r.Update(ctx, existing); err != nil {
+				log.Error(err, "Failed to update mirrored skill ConfigMap", "configmap", cmName)
+			} else {
+				log.V(1).Info("Updated mirrored skill ConfigMap with latest data", "configmap", cmName)
+			}
 			continue
 		}
 
