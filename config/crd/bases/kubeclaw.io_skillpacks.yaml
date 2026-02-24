@@ -53,6 +53,10 @@ spec:
               SkillPackSpec defines the desired state of SkillPack.
               Skills are Markdown-based instruction bundles mounted into agent pods.
             properties:
+              category:
+                description: Category classifies this skill pack (e.g. "kubernetes",
+                  "security", "devops").
+                type: string
               runtimeRequirements:
                 description: RuntimeRequirements defines container image requirements
                   for this skill pack.
@@ -61,6 +65,127 @@ spec:
                     description: Image is the container image that satisfies these
                       requirements.
                     type: string
+                  minCPU:
+                    description: MinCPU is the minimum CPU requirement (e.g. "100m").
+                    type: string
+                  minMemory:
+                    description: MinMemory is the minimum memory requirement (e.g.
+                      "256Mi").
+                    type: string
+                  sandbox:
+                    description: Sandbox indicates whether this skill requires a sandbox.
+                    type: boolean
+                type: object
+              sidecar:
+                description: |-
+                  Sidecar defines a container that is injected into the agent pod when this
+                  SkillPack is active. The sidecar provides tools (kubectl, helm, etc.) and
+                  the controller creates scoped RBAC automatically.
+                properties:
+                  clusterRBAC:
+                    description: |-
+                      ClusterRBAC defines cluster-scoped RBAC rules (ClusterRole + ClusterRoleBinding).
+                      Use for read-only cluster-wide access (e.g. listing nodes, namespaces).
+                    items:
+                      description: RBACRule defines a single Kubernetes RBAC policy
+                        rule.
+                      properties:
+                        apiGroups:
+                          description: APIGroups is the list of API groups (e.g. "",
+                            "apps", "batch").
+                          items:
+                            type: string
+                          type: array
+                        resources:
+                          description: Resources is the list of resources (e.g. "pods",
+                            "deployments").
+                          items:
+                            type: string
+                          type: array
+                        verbs:
+                          description: Verbs is the list of allowed verbs (e.g. "get",
+                            "list", "watch").
+                          items:
+                            type: string
+                          type: array
+                      required:
+                      - apiGroups
+                      - resources
+                      - verbs
+                      type: object
+                    type: array
+                  command:
+                    description: |-
+                      Command overrides the container entrypoint.
+                      Defaults to ["sleep", "infinity"] to keep the sidecar alive.
+                    items:
+                      type: string
+                    type: array
+                  env:
+                    description: Env is a list of environment variables for the sidecar.
+                    items:
+                      description: EnvVar is a simplified environment variable (name
+                        + value).
+                      properties:
+                        name:
+                          type: string
+                        value:
+                          type: string
+                      required:
+                      - name
+                      - value
+                      type: object
+                    type: array
+                  image:
+                    description: Image is the container image for this skill sidecar.
+                    type: string
+                  mountWorkspace:
+                    default: true
+                    description: MountWorkspace controls whether /workspace is mounted
+                      into the sidecar.
+                    type: boolean
+                  rbac:
+                    description: |-
+                      RBAC defines Kubernetes RBAC rules that this sidecar needs.
+                      The controller creates a Role + RoleBinding scoped to the run namespace.
+                    items:
+                      description: RBACRule defines a single Kubernetes RBAC policy
+                        rule.
+                      properties:
+                        apiGroups:
+                          description: APIGroups is the list of API groups (e.g. "",
+                            "apps", "batch").
+                          items:
+                            type: string
+                          type: array
+                        resources:
+                          description: Resources is the list of resources (e.g. "pods",
+                            "deployments").
+                          items:
+                            type: string
+                          type: array
+                        verbs:
+                          description: Verbs is the list of allowed verbs (e.g. "get",
+                            "list", "watch").
+                          items:
+                            type: string
+                          type: array
+                      required:
+                      - apiGroups
+                      - resources
+                      - verbs
+                      type: object
+                    type: array
+                  resources:
+                    description: Resources for the sidecar container.
+                    properties:
+                      cpu:
+                        description: CPU request (e.g. "100m").
+                        type: string
+                      memory:
+                        description: Memory request (e.g. "128Mi").
+                        type: string
+                    type: object
                 required:
                 - image
                 type: object
@@ -87,12 +212,24 @@ spec:
                           items:
                             type: string
                           type: array
+                        tools:
+                          description: Tools lists tools this skill expects the agent
+                            to have.
+                          items:
+                            type: string
+                          type: array
                       type: object
                   required:
                   - content
                   - name
                   type: object
                 type: array
+              source:
+                description: Source records where this skill pack was imported from.
+                type: string
+              version:
+                description: Version is the skill pack version.
+                type: string
             required:
             - skills
             type: object
