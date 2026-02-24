@@ -158,6 +158,8 @@ func main() {
 	res.Metrics.DurationMs = elapsed.Milliseconds()
 	res.Metrics.ToolCalls = toolCalls
 
+	debugMode := getEnv("DEBUG", "") == "true"
+
 	if err != nil {
 		log.Printf("LLM call failed: %v", err)
 		res.Status = "error"
@@ -168,6 +170,20 @@ func main() {
 		res.Response = responseText
 		res.Metrics.InputTokens = inputTokens
 		res.Metrics.OutputTokens = outputTokens
+	}
+
+	// Extract and emit memory update before stripping markers from the response.
+	if memoryEnabled && res.Response != "" {
+		if memUpdate := extractMemoryUpdate(res.Response); memUpdate != "" {
+			fmt.Fprintf(os.Stdout, "\n__KUBECLAW_MEMORY__%s__KUBECLAW_MEMORY_END__\n", memUpdate)
+			log.Printf("emitted memory update (%d bytes)", len(memUpdate))
+		}
+	}
+
+	// Strip memory markers from the response so they don't appear in the
+	// TUI feed or channel messages. Keep them only if DEBUG is enabled.
+	if !debugMode && res.Response != "" {
+		res.Response = stripMemoryMarkers(res.Response)
 	}
 
 	if res.Response != "" {
@@ -187,14 +203,6 @@ func main() {
 	// the result from pod logs even after the IPC volume is gone.
 	if markerBytes, err := json.Marshal(res); err == nil {
 		fmt.Fprintf(os.Stdout, "\n__KUBECLAW_RESULT__%s__KUBECLAW_END__\n", string(markerBytes))
-	}
-
-	// Extract and emit memory update if the LLM produced one.
-	if memoryEnabled && res.Response != "" {
-		if memUpdate := extractMemoryUpdate(res.Response); memUpdate != "" {
-			fmt.Fprintf(os.Stdout, "\n__KUBECLAW_MEMORY__%s__KUBECLAW_MEMORY_END__\n", memUpdate)
-			log.Printf("emitted memory update (%d bytes)", len(memUpdate))
-		}
 	}
 
 	if res.Status == "error" {
@@ -489,4 +497,27 @@ func extractMemoryUpdate(response string) string {
 		return ""
 	}
 	return strings.TrimSpace(payload[:endIdx])
+}
+
+// stripMemoryMarkers removes all __KUBECLAW_MEMORY__...END__ blocks from the
+// response text so they don't appear in the TUI feed or channel messages.
+func stripMemoryMarkers(response string) string {
+	const startMarker = "__KUBECLAW_MEMORY__"
+	const endMarker = "__KUBECLAW_MEMORY_END__"
+
+	for {
+		startIdx := strings.Index(response, startMarker)
+		if startIdx < 0 {
+			break
+		}
+		endIdx := strings.Index(response[startIdx:], endMarker)
+		if endIdx < 0 {
+			// Unclosed marker — strip from startMarker to end of string.
+			response = strings.TrimSpace(response[:startIdx])
+			break
+		}
+		// Remove the entire marker block.
+		response = response[:startIdx] + response[startIdx+endIdx+len(endMarker):]
+	}
+	return strings.TrimSpace(response)
 }
