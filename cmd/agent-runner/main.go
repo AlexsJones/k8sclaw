@@ -163,6 +163,9 @@ func main() {
 
 	writeJSON("/ipc/output/result.json", res)
 
+	// Signal sidecars (tool-executor, etc.) to exit by writing a done sentinel.
+	_ = os.WriteFile("/ipc/done", []byte("done"), 0o644)
+
 	// Print a structured marker to stdout so the controller can extract
 	// the result from pod logs even after the IPC volume is gone.
 	if markerBytes, err := json.Marshal(res); err == nil {
@@ -441,6 +444,7 @@ func truncate(s string, n int) string {
 func fatal(msg string) {
 	log.Println("FATAL: " + msg)
 	_ = os.MkdirAll("/ipc/output", 0o755)
+	_ = os.WriteFile("/ipc/done", []byte("done"), 0o644)
 	writeJSON("/ipc/output/result.json", agentResult{
 		Status: "error",
 		Error:  msg,

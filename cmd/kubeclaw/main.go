@@ -422,8 +422,8 @@ func newVersionCmd() *cobra.Command {
 }
 
 const (
-	ghRepo         = "AlexsJones/kubeclaw"
-	manifestAsset  = "kubeclaw-manifests.tar.gz"
+	ghRepo        = "AlexsJones/kubeclaw"
+	manifestAsset = "kubeclaw-manifests.tar.gz"
 )
 
 // ── Onboard ──────────────────────────────────────────────────────────────────
@@ -763,7 +763,9 @@ spec:
 %s  agents:
     default:
       model: %s
-%s%s%s  memory:
+%s%s%s  skills:
+    - skillPackRef: k8s-ops
+  memory:
     enabled: true
     maxSizeKB: 256
 `, name, ns, channelsBlock, model, baseURLLine, authRefsBlock, policyBlock)
@@ -1496,13 +1498,13 @@ type channelRow struct {
 
 // podRow is a flattened view of agent pods across instances.
 type podRow struct {
-	Name      string
-	Instance  string
-	Phase     string
-	Node      string
-	IP        string
-	Age       string
-	Restarts  int32
+	Name     string
+	Instance string
+	Phase    string
+	Node     string
+	IP       string
+	Age      string
+	Restarts int32
 }
 
 // ── Onboard Wizard ───────────────────────────────────────────────────────────
@@ -1532,18 +1534,18 @@ type wizardState struct {
 	resultMsgs []string
 
 	// Collected values
-	instanceName     string
-	providerChoice   string // "1"–"6"
-	providerName     string
-	modelName        string
-	baseURL          string
-	secretEnvKey     string
-	apiKey           string
-	channelChoice    string // "1"–"5"
-	channelType      string
-	channelTokenKey  string
-	channelToken     string
-	applyPolicy      bool
+	instanceName    string
+	providerChoice  string // "1"–"6"
+	providerName    string
+	modelName       string
+	baseURL         string
+	secretEnvKey    string
+	apiKey          string
+	channelChoice   string // "1"–"5"
+	channelType     string
+	channelTokenKey string
+	channelToken    string
+	applyPolicy     bool
 
 	// Dynamic model list (fetched from provider API when key is supplied).
 	fetchedModels []string // model IDs fetched from the API
@@ -1599,10 +1601,10 @@ type tuiModel struct {
 	lastInput   string
 
 	// Delete confirmation
-	confirmDelete     bool
+	confirmDelete      bool
 	deleteResourceKind string // e.g. "instance", "run", "pod"
 	deleteResourceName string
-	deleteFunc        func() (string, error) // the actual delete function
+	deleteFunc         func() (string, error) // the actual delete function
 
 	// Edit modal
 	showEditModal    bool
@@ -1612,7 +1614,7 @@ type tuiModel struct {
 	editField        int    // which field is selected in the current tab
 	editMemory       editMemoryForm
 	editHeartbeat    editHeartbeatForm
-	editTaskInput    bool           // sub-modal for task text entry
+	editTaskInput    bool            // sub-modal for task text entry
 	editTaskTI       textinput.Model // text input for task sub-modal
 	editSkills       []editSkillItem // toggleable skills list
 
@@ -1621,6 +1623,7 @@ type tuiModel struct {
 	feedCollapsed    bool // hide feed side pane
 	feedInputFocused bool // typing in the feed chat
 	feedInput        textinput.Model
+	feedScrollOffset int  // 0 = pinned to bottom; >0 = scrolled up N lines
 }
 
 // editMemoryForm holds the editable memory fields for a ClawInstance.
@@ -1634,8 +1637,8 @@ type editMemoryForm struct {
 type editHeartbeatForm struct {
 	schedule          string
 	task              string
-	schedType         int    // index into editScheduleTypes
-	concurrencyPolicy int    // index into editConcurrencyPolicies
+	schedType         int // index into editScheduleTypes
+	concurrencyPolicy int // index into editConcurrencyPolicies
 	includeMemory     bool
 	suspend           bool
 }
@@ -1649,7 +1652,7 @@ type editSkillItem struct {
 
 var editScheduleTypes = []string{"heartbeat", "scheduled", "sweep"}
 var editConcurrencyPolicies = []string{"Forbid", "Allow", "Replace"}
-var editMemoryFieldCount = 3  // enabled, maxSizeKB, systemPrompt
+var editMemoryFieldCount = 3    // enabled, maxSizeKB, systemPrompt
 var editHeartbeatFieldCount = 6 // schedule, task, type, concurrencyPolicy, includeMemory, suspend
 var editTabNames = []string{"Memory", "Heartbeat", "Skills"}
 
@@ -2122,6 +2125,7 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					// Build context from prior runs and create a new chat run
 					context := m.buildConversationContext(inst)
 					ns := m.namespace
+					m.feedScrollOffset = 0 // pin to bottom for new message
 					return m, m.asyncCmd(func() (string, error) {
 						return tuiCreateChatRun(ns, inst, text, context)
 					})
@@ -2147,6 +2151,30 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "ctrl+c":
 				m.quitting = true
 				return m, tea.Quit
+			case "up", "k":
+				m.feedScrollOffset++
+				return m, nil
+			case "down", "j":
+				if m.feedScrollOffset > 0 {
+					m.feedScrollOffset--
+				}
+				return m, nil
+			case "pgup":
+				m.feedScrollOffset += 10
+				return m, nil
+			case "pgdown":
+				m.feedScrollOffset -= 10
+				if m.feedScrollOffset < 0 {
+					m.feedScrollOffset = 0
+				}
+				return m, nil
+			case "G":
+				m.feedScrollOffset = 0
+				return m, nil
+			case "g":
+				// scroll to top — set a large offset, clamped during render
+				m.feedScrollOffset = 999999
+				return m, nil
 			case "i", "/", "enter":
 				// Enter chat input mode
 				inst := m.selectedInstanceForFeed()
@@ -2852,7 +2880,7 @@ func (m tuiModel) handleRowEdit() (tea.Model, tea.Cmd) {
 				maxSizeKB:    fmt.Sprintf("%d", inst.Spec.Memory.MaxSizeKB),
 				systemPrompt: inst.Spec.Memory.SystemPrompt,
 			}
-			} else {
+		} else {
 			m.editMemory = editMemoryForm{
 				enabled:   true,
 				maxSizeKB: "256",
@@ -4310,19 +4338,20 @@ func (m tuiModel) renderFeed(width, height int) string {
 		return padAndJoinLines(allLines, width)
 	}
 
+	// Content width for wrapping (3-char indent + 1 padding).
+	contentW := width - 4
+	if contentW < 10 {
+		contentW = 10
+	}
+
 	// Build feed entries — oldest first.
 	for _, run := range runs {
 
 		// Prompt (task) line — strip conversation context for display
 		task := extractUserMessage(run.Spec.Task)
-		maxTaskW := width - 4
-		if maxTaskW < 10 {
-			maxTaskW = 10
+		for _, wl := range wrapText(task, contentW) {
+			allLines = append(allLines, tuiFeedPromptStyle.Render(" ▸ "+wl))
 		}
-		if lipgloss.Width(task) > maxTaskW {
-			task = ansiTruncate(task, maxTaskW-3) + "..."
-		}
-		allLines = append(allLines, tuiFeedPromptStyle.Render(" ▸ "+task))
 
 		// Meta line (run name + age)
 		age := shortDuration(time.Since(run.CreationTimestamp.Time))
@@ -4342,10 +4371,9 @@ func (m tuiModel) renderFeed(width, height int) string {
 						break
 					}
 					rl = strings.TrimRight(rl, " \t\r")
-					if lipgloss.Width(rl) > width-5 {
-						rl = ansiTruncate(rl, width-8) + "..."
+					for _, wl := range wrapText(rl, contentW) {
+						allLines = append(allLines, tuiSuccessStyle.Render("   "+wl))
 					}
-					allLines = append(allLines, tuiSuccessStyle.Render("   "+rl))
 					shown++
 				}
 			} else {
@@ -4358,10 +4386,9 @@ func (m tuiModel) renderFeed(width, height int) string {
 			if errMsg == "" {
 				errMsg = phase
 			}
-			if len(errMsg) > width-6 {
-				errMsg = errMsg[:width-9] + "..."
+			for _, wl := range wrapText(errMsg, contentW) {
+				allLines = append(allLines, tuiErrorStyle.Render("   ✗ "+wl))
 			}
-			allLines = append(allLines, tuiErrorStyle.Render("   ✗ "+errMsg))
 		default:
 			allLines = append(allLines, tuiDimStyle.Render("   ⏳ Pending..."))
 		}
@@ -4369,17 +4396,26 @@ func (m tuiModel) renderFeed(width, height int) string {
 		allLines = append(allLines, "") // blank separator
 	}
 
-	// Auto-scroll: keep title, then show the last entries that fit.
+	// Scrollable: title stays fixed, content scrolls.
 	available := height - 1
 	if available < 1 {
 		available = 1
 	}
 	feedContent := allLines[1:] // skip title
-	start := len(feedContent) - available
+
+	// Apply scroll offset (0 = bottom, >0 = scrolled up).
+	end := len(feedContent) - m.feedScrollOffset
+	if end < available {
+		end = len(feedContent)
+	}
+	if end < 0 {
+		end = 0
+	}
+	start := end - available
 	if start < 0 {
 		start = 0
 	}
-	visible := feedContent[start:]
+	visible := feedContent[start:end]
 
 	result := []string{allLines[0]}
 	result = append(result, visible...)
@@ -4400,14 +4436,14 @@ func (m tuiModel) renderFeedFullscreen() string {
 
 	var allLines []string
 
-	// Title bar — show instance name
+	// Title bar — show instance name + scroll hints
 	titleLabel := "─── Chat "
 	if inst != "" {
 		titleLabel = fmt.Sprintf("─── Chat: %s ", inst)
 	}
 	title := " " + tuiFeedTitleStyle.Render(titleLabel)
 	titleW := lipgloss.Width(title)
-	hint := tuiDimStyle.Render("  Esc close  i/Enter type")
+	hint := tuiDimStyle.Render("  Esc close  i/Enter type  ↑↓/jk scroll")
 	hintW := lipgloss.Width(hint)
 	if w > titleW+hintW {
 		title += tuiSepStyle.Render(strings.Repeat("─", w-titleW-hintW)) + hint
@@ -4416,6 +4452,12 @@ func (m tuiModel) renderFeedFullscreen() string {
 	}
 	allLines = append(allLines, title)
 
+	// Content width for wrapping (3-char indent + 1 padding).
+	contentW := w - 4
+	if contentW < 10 {
+		contentW = 10
+	}
+
 	runs := m.runsForInstance(inst)
 	if len(runs) == 0 {
 		allLines = append(allLines, "")
@@ -4423,18 +4465,12 @@ func (m tuiModel) renderFeedFullscreen() string {
 		allLines = append(allLines, tuiDimStyle.Render("  Press i or Enter to start chatting"))
 	} else {
 		// Build feed entries — oldest first. In fullscreen, show full results.
-		maxResultLines := 40
 		for _, run := range runs {
 			// Show only the user's actual message, not context preamble
 			task := extractUserMessage(run.Spec.Task)
-			maxTaskW := w - 4
-			if maxTaskW < 10 {
-				maxTaskW = 10
+			for _, wl := range wrapText(task, contentW) {
+				allLines = append(allLines, tuiFeedPromptStyle.Render(" ▸ "+wl))
 			}
-			if lipgloss.Width(task) > maxTaskW {
-				task = ansiTruncate(task, maxTaskW-3) + "..."
-			}
-			allLines = append(allLines, tuiFeedPromptStyle.Render(" ▸ "+task))
 
 			// Meta line
 			age := shortDuration(time.Since(run.CreationTimestamp.Time))
@@ -4447,19 +4483,11 @@ func (m tuiModel) renderFeedFullscreen() string {
 			case "Succeeded", "Completed":
 				if run.Status.Result != "" {
 					resultLines := strings.Split(run.Status.Result, "\n")
-					shown := 0
 					for _, rl := range resultLines {
-						if shown >= maxResultLines {
-							remaining := len(resultLines) - shown
-							allLines = append(allLines, tuiDimStyle.Render(fmt.Sprintf("   ┊ ... %d more lines", remaining)))
-							break
-						}
 						rl = strings.TrimRight(rl, " \t\r")
-						if len(rl) > w-5 {
-							rl = rl[:w-8] + "..."
+						for _, wl := range wrapText(rl, contentW) {
+							allLines = append(allLines, tuiSuccessStyle.Render("   "+wl))
 						}
-						allLines = append(allLines, tuiSuccessStyle.Render("   "+rl))
-						shown++
 					}
 				} else {
 					allLines = append(allLines, tuiSuccessStyle.Render("   ✓ Completed"))
@@ -4471,10 +4499,9 @@ func (m tuiModel) renderFeedFullscreen() string {
 				if errMsg == "" {
 					errMsg = phase
 				}
-				if len(errMsg) > w-6 {
-					errMsg = errMsg[:w-9] + "..."
+				for _, wl := range wrapText(errMsg, contentW) {
+					allLines = append(allLines, tuiErrorStyle.Render("   ✗ "+wl))
 				}
-				allLines = append(allLines, tuiErrorStyle.Render("   ✗ "+errMsg))
 			default:
 				allLines = append(allLines, tuiDimStyle.Render("   ⏳ Pending..."))
 			}
@@ -4490,11 +4517,20 @@ func (m tuiModel) renderFeedFullscreen() string {
 		available = 1
 	}
 	feedContent := allLines[1:]
-	start := len(feedContent) - available
+
+	// Apply scroll offset (0 = bottom, >0 = scrolled up).
+	end := len(feedContent) - m.feedScrollOffset
+	if end < available {
+		end = len(feedContent)
+	}
+	if end < 0 {
+		end = 0
+	}
+	start := end - available
 	if start < 0 {
 		start = 0
 	}
-	visible := feedContent[start:]
+	visible := feedContent[start:end]
 
 	out := []string{allLines[0]}
 	out = append(out, visible...)
@@ -5895,6 +5931,11 @@ func tuiOnboardApply(ns string, w *wizardState) (string, error) {
 		inst.Spec.PolicyRef = policyName
 	}
 
+	// Default skills: k8s-ops.
+	inst.Spec.Skills = []kubeclawv1alpha1.SkillRef{
+		{SkillPackRef: "k8s-ops"},
+	}
+
 	// Memory is on by default.
 	inst.Spec.Memory = &kubeclawv1alpha1.MemorySpec{
 		Enabled:   true,
@@ -6092,4 +6133,51 @@ func ansiTruncate(s string, maxVisible int) string {
 	// Append a reset sequence so truncated styles don't bleed.
 	out.WriteString("\x1b[0m")
 	return out.String()
+}
+
+// wrapText wraps a plain-text string to fit within maxWidth visible characters,
+// breaking at word boundaries where possible. Returns one or more lines.
+// An empty input returns a single empty-string line.
+func wrapText(s string, maxWidth int) []string {
+	if maxWidth < 1 {
+		maxWidth = 1
+	}
+	s = strings.TrimRight(s, " \t\r")
+	if s == "" {
+		return []string{""}
+	}
+
+	var lines []string
+	for _, paragraph := range strings.Split(s, "\n") {
+		paragraph = strings.TrimRight(paragraph, " \t\r")
+		if paragraph == "" {
+			lines = append(lines, "")
+			continue
+		}
+		words := strings.Fields(paragraph)
+		if len(words) == 0 {
+			lines = append(lines, "")
+			continue
+		}
+		current := words[0]
+		for _, word := range words[1:] {
+			if len(current)+1+len(word) <= maxWidth {
+				current += " " + word
+			} else {
+				lines = append(lines, current)
+				current = word
+			}
+		}
+		lines = append(lines, current)
+	}
+	// Hard-wrap any lines that are still too long (e.g. a single long word).
+	var result []string
+	for _, line := range lines {
+		for len(line) > maxWidth {
+			result = append(result, line[:maxWidth])
+			line = line[maxWidth:]
+		}
+		result = append(result, line)
+	}
+	return result
 }

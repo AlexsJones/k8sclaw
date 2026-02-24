@@ -205,11 +205,46 @@ func (r *AgentRunReconciler) reconcileRunning(ctx context.Context, log logr.Logg
 		return ctrl.Result{}, r.failRun(ctx, agentRun, "Job failed")
 	}
 
-	// Check timeout
-	if agentRun.Spec.Timeout != nil && agentRun.Status.StartedAt != nil {
+	// When the pod has skill sidecar containers (3+ containers), those
+	// sidecars may keep the pod alive long after the agent has finished,
+	// preventing the Job from reporting success. Detect agent completion
+	// at the container level and clean up proactively.
+	// For simple 2-container pods (agent + ipc-bridge), skip this check —
+	// the ipc-bridge exits shortly after the agent and the Job completes
+	// naturally.
+	if agentRun.Status.PodName != "" {
+		if done, exitCode, reason, hasSidecars := r.checkAgentContainer(ctx, log, agentRun); done && hasSidecars {
+			if exitCode == 0 {
+				log.Info("Agent container terminated successfully; cleaning up lingering sidecars")
+				result := r.extractResultFromPod(ctx, log, agentRun)
+				r.extractAndPersistMemory(ctx, log, agentRun)
+				// Delete the Job so Kubernetes kills remaining sidecar containers.
+				_ = r.Delete(ctx, job, client.PropagationPolicy(metav1.DeletePropagationBackground))
+				return r.succeedRun(ctx, agentRun, result)
+			}
+			errMsg := fmt.Sprintf("agent container exited with code %d", exitCode)
+			if reason != "" {
+				errMsg = fmt.Sprintf("%s (%s)", errMsg, reason)
+			}
+			log.Info("Agent container terminated with error; cleaning up", "exitCode", exitCode, "reason", reason)
+			// Try to extract the error from pod logs before cleaning up.
+			if logErr := r.extractResultFromPod(ctx, log, agentRun); logErr != "" {
+				errMsg = logErr
+			}
+			_ = r.Delete(ctx, job, client.PropagationPolicy(metav1.DeletePropagationBackground))
+			return ctrl.Result{}, r.failRun(ctx, agentRun, errMsg)
+		}
+	}
+
+	// Check timeout (explicit spec timeout or hard default for scheduled runs).
+	if agentRun.Status.StartedAt != nil {
 		elapsed := time.Since(agentRun.Status.StartedAt.Time)
-		if elapsed > agentRun.Spec.Timeout.Duration {
-			log.Info("AgentRun timed out", "elapsed", elapsed)
+		timeout := 10 * time.Minute // default hard timeout
+		if agentRun.Spec.Timeout != nil {
+			timeout = agentRun.Spec.Timeout.Duration
+		}
+		if elapsed > timeout {
+			log.Info("AgentRun timed out", "elapsed", elapsed, "timeout", timeout)
 			// Delete the Job to kill the pod
 			_ = r.Delete(ctx, job, client.PropagationPolicy(metav1.DeletePropagationForeground))
 			return ctrl.Result{}, r.failRun(ctx, agentRun, "timeout")
@@ -217,6 +252,35 @@ func (r *AgentRunReconciler) reconcileRunning(ctx context.Context, log logr.Logg
 	}
 
 	return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+}
+
+// checkAgentContainer inspects the pod's container statuses and returns:
+//   - done: whether the "agent" container has terminated
+//   - exitCode: the container exit code (only meaningful when done=true)
+//   - reason: the termination reason string (e.g. "OOMKilled", "Error")
+//   - hasSidecars: whether the pod has more than 2 containers (agent + ipc-bridge),
+//     indicating skill sidecars that could keep the pod alive after the agent exits
+func (r *AgentRunReconciler) checkAgentContainer(ctx context.Context, log logr.Logger, agentRun *kubeclawv1alpha1.AgentRun) (done bool, exitCode int32, reason string, hasSidecars bool) {
+	pod := &corev1.Pod{}
+	if err := r.Get(ctx, client.ObjectKey{
+		Namespace: agentRun.Namespace,
+		Name:      agentRun.Status.PodName,
+	}, pod); err != nil {
+		return false, 0, "", false
+	}
+
+	hasSidecars = len(pod.Spec.Containers) > 2
+
+	for _, cs := range pod.Status.ContainerStatuses {
+		if cs.Name != "agent" {
+			continue
+		}
+		if cs.State.Terminated != nil {
+			return true, cs.State.Terminated.ExitCode, cs.State.Terminated.Reason, hasSidecars
+		}
+		return false, 0, "", hasSidecars
+	}
+	return false, 0, "", hasSidecars
 }
 
 // reconcileCompleted handles cleanup of completed AgentRuns.

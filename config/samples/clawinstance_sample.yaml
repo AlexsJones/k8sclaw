@@ -26,6 +26,7 @@ spec:
       maxDepth: 3
       maxConcurrent: 5
   skills:
+    - skillPackRef: k8s-ops
     - name: code-review
     - name: security-audit
   policyRef: default-policy

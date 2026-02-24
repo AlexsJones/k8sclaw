@@ -207,8 +207,8 @@ func executeCommand(args map[string]any) string {
 
 	req := execRequest{
 		ID:      id,
-		Command: "bash",
-		Args:    []string{"-c", command},
+		Command: command,
+		Args:    nil,
 		WorkDir: workdir,
 		Timeout: timeoutSec,
 	}
@@ -234,9 +234,20 @@ func executeCommand(args map[string]any) string {
 	for time.Now().Before(deadline) {
 		resData, err := os.ReadFile(resPath)
 		if err == nil {
+			// Guard against reading a partially-written file: if the
+			// content is empty or not valid JSON, wait and retry.
+			if len(resData) == 0 {
+				time.Sleep(50 * time.Millisecond)
+				continue
+			}
 			var result execResult
 			if err := json.Unmarshal(resData, &result); err != nil {
-				return fmt.Sprintf("Error parsing exec result: %v", err)
+				// Likely a partial write — retry a few times before giving up.
+				time.Sleep(100 * time.Millisecond)
+				resData2, err2 := os.ReadFile(resPath)
+				if err2 != nil || json.Unmarshal(resData2, &result) != nil {
+					return fmt.Sprintf("Error parsing exec result: %v", err)
+				}
 			}
 
 			_ = os.Remove(reqPath)
