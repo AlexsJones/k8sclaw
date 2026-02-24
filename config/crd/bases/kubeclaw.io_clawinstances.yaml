@@ -190,8 +190,9 @@ spec:
                   description: ChannelSpec defines a channel connection.
                   properties:
                     configRef:
-                      description: ConfigRef references the secret containing channel
-                        credentials.
+                      description: |-
+                        ConfigRef references the secret containing channel credentials.
+                        Optional for channels that use alternative authentication (e.g. WhatsApp QR pairing).
                       properties:
                         secret:
                           description: Secret is the name of the Secret.

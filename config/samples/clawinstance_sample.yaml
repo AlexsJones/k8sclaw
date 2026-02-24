@@ -14,11 +14,11 @@ spec:
   agents:
     default:
       model: gpt-4o
-      image: ghcr.io/alexsjones/kubeclaw/agent-codex:v0.0.25
+      image: ghcr.io/alexsjones/kubeclaw/agent-codex:v0.0.26
       maxTokens: 128000
     sandbox:
       enabled: true
-      image: ghcr.io/alexsjones/kubeclaw/sandbox:v0.0.25
+      image: ghcr.io/alexsjones/kubeclaw/sandbox:v0.0.26
       resourceLimits:
         cpu: "2"
         memory: 4Gi
