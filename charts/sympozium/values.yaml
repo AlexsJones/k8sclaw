@@ -1,0 +1,151 @@
+# -- Global image settings
+image:
+  registry: ghcr.io/alexsjones/sympozium
+  pullPolicy: IfNotPresent
+  # -- Override the image tag (defaults to .Chart.AppVersion)
+  tag: ""
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+# -- Namespace to deploy into (created if it doesn't exist)
+namespace: sympozium-system
+
+# -- Controller (reconciles CRDs, manages agent pods)
+controller:
+  replicas: 1
+  image:
+    repository: ""  # defaults to {{ .Values.image.registry }}/controller
+    tag: ""
+  resources:
+    limits:
+      cpu: 500m
+      memory: 256Mi
+    requests:
+      cpu: 100m
+      memory: 128Mi
+  leaderElect: true
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+# -- API Server (REST API for TUI/CLI and channel deployments)
+apiserver:
+  replicas: 2
+  image:
+    repository: ""  # defaults to {{ .Values.image.registry }}/apiserver
+    tag: ""
+  resources:
+    limits:
+      cpu: 500m
+      memory: 256Mi
+    requests:
+      cpu: 100m
+      memory: 128Mi
+  service:
+    type: ClusterIP
+    port: 8080
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+# -- Webhook (admission controller for policy enforcement)
+webhook:
+  enabled: true
+  replicas: 2
+  image:
+    repository: ""  # defaults to {{ .Values.image.registry }}/webhook
+    tag: ""
+  resources:
+    limits:
+      cpu: 200m
+      memory: 128Mi
+    requests:
+      cpu: 50m
+      memory: 64Mi
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+# -- NATS JetStream (event bus for agent IPC)
+nats:
+  # -- Deploy built-in NATS. Set to false if using an external NATS cluster.
+  enabled: true
+  image:
+    repository: nats
+    tag: 2-alpine
+  resources:
+    limits:
+      cpu: 500m
+      memory: 256Mi
+    requests:
+      cpu: 50m
+      memory: 64Mi
+  # -- External NATS URL (used when nats.enabled=false)
+  externalUrl: ""
+  persistence:
+    enabled: false
+    size: 1Gi
+    storageClass: ""
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+# -- cert-manager integration for webhook TLS
+certManager:
+  # -- Requires cert-manager to be installed in the cluster
+  enabled: true
+  issuer:
+    # -- Use "ClusterIssuer" for cluster-wide, "Issuer" for namespace-scoped
+    kind: Issuer
+    name: sympozium-selfsigned
+    selfSigned: true
+  certificate:
+    duration: 8760h    # 1 year
+    renewBefore: 720h  # 30 days
+
+# -- CRD installation
+crds:
+  # -- Install CRDs with the chart. Disable if managing CRDs separately.
+  install: true
+
+# -- RBAC
+rbac:
+  # -- Create ClusterRole, ClusterRoleBinding, and ServiceAccounts
+  create: true
+
+# -- Network policies for agent pod isolation
+networkPolicies:
+  # -- Deploy default network policies (deny-all + allow-eventbus for agents)
+  enabled: true
+
+# -- Default ClawPolicy to create on install
+defaultPolicy:
+  enabled: false
+  # -- Spec for the default SymposiumPolicy CR
+  spec: {}
+
+# -- SkillPacks to install by default
+defaultSkills:
+  enabled: false
+  # -- List of SkillPack specs
+  skills: []
+
+# -- Pod security context (applied to all control plane pods)
+securityContext:
+  runAsNonRoot: true
+  seccompProfile:
+    type: RuntimeDefault
+
+# -- Container security context (applied to all control plane containers)
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop: ["ALL"]
+
+# -- ServiceMonitor for Prometheus (requires prometheus-operator)
+serviceMonitor:
+  enabled: false
+  interval: 30s
+  labels: {}

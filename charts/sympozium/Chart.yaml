@@ -1,0 +1,23 @@
+apiVersion: v2
+name: sympozium
+description: Sympozium — run a fleet of AI agents on Kubernetes
+type: application
+version: 0.1.0
+appVersion: "0.0.41"
+home: https://github.com/AlexsJones/sympozium
+sources:
+  - https://github.com/AlexsJones/sympozium
+maintainers:
+  - name: AlexsJones
+    url: https://github.com/AlexsJones
+  - name: Three Foxes (in a Trenchcoat)
+    email: threefoxes53235@gmail.com
+    url: https://github.com/three-foxes-in-a-trenchcoat
+keywords:
+  - kubernetes
+  - ai
+  - agents
+  - agentic
+  - llm
+  - sympozium
+icon: https://raw.githubusercontent.com/AlexsJones/sympozium/main/icon.png

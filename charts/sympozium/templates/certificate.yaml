@@ -1,0 +1,33 @@
+{{- if and .Values.certManager.enabled .Values.webhook.enabled }}
+{{- if .Values.certManager.issuer.selfSigned }}
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: {{ .Values.certManager.issuer.name }}
+  namespace: {{ include "sympozium.namespace" . }}
+  labels:
+    {{- include "sympozium.labels" . | nindent 4 }}
+spec:
+  selfSigned: {}
+{{- end }}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: sympozium-webhook-cert
+  namespace: {{ include "sympozium.namespace" . }}
+  labels:
+    {{- include "sympozium.labels" . | nindent 4 }}
+spec:
+  secretName: sympozium-webhook-cert
+  issuerRef:
+    name: {{ .Values.certManager.issuer.name }}
+    kind: {{ .Values.certManager.issuer.kind }}
+  dnsNames:
+    - sympozium-webhook-service
+    - sympozium-webhook-service.{{ include "sympozium.namespace" . }}
+    - sympozium-webhook-service.{{ include "sympozium.namespace" . }}.svc
+    - sympozium-webhook-service.{{ include "sympozium.namespace" . }}.svc.cluster.local
+  duration: {{ .Values.certManager.certificate.duration }}
+  renewBefore: {{ .Values.certManager.certificate.renewBefore }}
+{{- end }}
