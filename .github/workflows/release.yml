@@ -48,14 +48,11 @@ jobs:
           PLATFORM="${{ matrix.goos }}-${{ matrix.goarch }}"
           ASSET="${BINARY}-${PLATFORM}"
 
-          # Build with the final binary named 'kubeclaw' so install.sh and
-          # the Homebrew formula can both use `bin.install "kubeclaw"`.
           go build \
             -ldflags "-s -w -X main.version=${TAG}" \
             -o kubeclaw \
             ./cmd/kubeclaw/
 
-          # Wrap in a tarball named kubeclaw-<platform>.tar.gz
           tar czf "${ASSET}.tar.gz" kubeclaw
 
       - name: Upload artifact
@@ -111,9 +108,9 @@ jobs:
 
   # ── Update Homebrew tap ─────────────────────────────────────────────────────
   update-homebrew:
-    name: Update Homebrew tap
     needs: release
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout tap
         uses: actions/checkout@v4
@@ -128,121 +125,62 @@ jobs:
         run: |
           VERSION="${TAG#v}"
 
-          # Download all four tarballs and compute their SHA256
+          # Download the four tarballs and compute SHA256
           declare -A SHAS
           for platform in darwin-amd64 darwin-arm64 linux-amd64 linux-arm64; do
             URL="https://github.com/AlexsJones/kubeclaw/releases/download/${TAG}/kubeclaw-${platform}.tar.gz"
-            echo "Hashing ${URL}..."
-            SHA=$(curl -fsSL "${URL}" | shasum -a 256 | awk '{print $1}')
-            SHAS[$platform]="${SHA}"
-            echo "  ${platform}: ${SHA}"
+            echo "Downloading ${URL}..."
+            SHA=$(curl -fsSL "$URL" | shasum -a 256 | awk '{print $1}')
+            SHAS[$platform]="$SHA"
+            echo "${platform}: ${SHA}"
           done
 
-          mkdir -p homebrew-tap/Formula
+          # Generate the formula
+          cat > homebrew-tap/Formula/kubeclaw.rb << RUBY
+          class Kubeclaw < Formula
+            desc "Kubernetes-native AI agent orchestration platform CLI"
+            homepage "https://github.com/AlexsJones/kubeclaw"
+            version "${VERSION}"
+            license "Apache-2.0"
 
-          cat > homebrew-tap/Formula/Kubeclaw.rb << RUBY
-class Kubeclaw < Formula
-  desc "Kubernetes-native AI agent orchestration platform CLI"
-  homepage "https://github.com/AlexsJones/kubeclaw"
-  version "${VERSION}"
-  license "Apache-2.0"
+            on_macos do
+              if Hardware::CPU.arm?
+                url "https://github.com/AlexsJones/kubeclaw/releases/download/v#{version}/kubeclaw-darwin-arm64.tar.gz"
+                sha256 "${SHAS[darwin-arm64]}"
+              else
+                url "https://github.com/AlexsJones/kubeclaw/releases/download/v#{version}/kubeclaw-darwin-amd64.tar.gz"
+                sha256 "${SHAS[darwin-amd64]}"
+              end
+            end
 
-  on_macos do
-    if Hardware::CPU.arm?
-      url "https://github.com/AlexsJones/kubeclaw/releases/download/v#{version}/kubeclaw-darwin-arm64.tar.gz"
-      sha256 "${SHAS[darwin-arm64]}"
-    else
-      url "https://github.com/AlexsJones/kubeclaw/releases/download/v#{version}/kubeclaw-darwin-amd64.tar.gz"
-      sha256 "${SHAS[darwin-amd64]}"
-    end
-  end
+            on_linux do
+              if Hardware::CPU.arm?
+                url "https://github.com/AlexsJones/kubeclaw/releases/download/v#{version}/kubeclaw-linux-arm64.tar.gz"
+                sha256 "${SHAS[linux-arm64]}"
+              else
+                url "https://github.com/AlexsJones/kubeclaw/releases/download/v#{version}/kubeclaw-linux-amd64.tar.gz"
+                sha256 "${SHAS[linux-amd64]}"
+              end
+            end
 
-  on_linux do
-    if Hardware::CPU.arm?
-      url "https://github.com/AlexsJones/kubeclaw/releases/download/v#{version}/kubeclaw-linux-arm64.tar.gz"
-      sha256 "${SHAS[linux-arm64]}"
-    else
-      url "https://github.com/AlexsJones/kubeclaw/releases/download/v#{version}/kubeclaw-linux-amd64.tar.gz"
-      sha256 "${SHAS[linux-amd64]}"
-    end
-  end
+            def install
+              bin.install "kubeclaw"
+            end
 
-  def install
-    bin.install "kubeclaw"
-  end
+            test do
+              assert_match version.to_s, shell_output("#{bin}/kubeclaw version")
+            end
+          end
+          RUBY
 
-  test do
-    assert_match version.to_s, shell_output("#{bin}/kubeclaw version")
-  end
-end
-RUBY
+          # Fix heredoc indentation
+          sed -i 's/^          //' homebrew-tap/Formula/kubeclaw.rb
 
       - name: Commit and push
         run: |
           cd homebrew-tap
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-
-          # Bootstrap a README on first push to an empty repo
-          if [ ! -f README.md ]; then
-            cat > README.md << 'MD'
-<p align="center">
-  <img src="https://raw.githubusercontent.com/AlexsJones/kubeclaw/main/header.png" alt="kubeclaw" width="600px">
-</p>
-
-# Homebrew Tap for KubeClaw
-
-Official [Homebrew](https://brew.sh) tap for [KubeClaw](https://github.com/AlexsJones/kubeclaw) —
-the Kubernetes-native AI agent orchestration platform.
-
-## Install
-
-```sh
-brew tap AlexsJones/kubeclaw
-brew install kubeclaw
-```
-
-## Upgrade
-
-```sh
-brew update
-brew upgrade kubeclaw
-```
-
-## Verify
-
-```sh
-kubeclaw version
-```
-
-## Deploy to your cluster
-
-```sh
-kubeclaw install
-```
-
-See the [Getting Started guide](https://github.com/AlexsJones/kubeclaw/blob/main/docs/getting-started.md)
-for a full walkthrough — onboarding, the TUI, and all CLI commands.
-
-## Manual tap
-
-If you prefer not to add the tap globally:
-
-```sh
-brew install AlexsJones/kubeclaw/kubeclaw
-```
-
----
-
-This formula is updated automatically by the
-[KubeClaw release workflow](https://github.com/AlexsJones/kubeclaw/blob/main/.github/workflows/release.yml)
-on every new release.
-MD
-            git add README.md
-          fi
-
-          git add Formula/Kubeclaw.rb
-          git diff --cached --quiet && echo "No changes" && exit 0
+          git add Formula/kubeclaw.rb
           git commit -m "Update kubeclaw to ${GITHUB_REF_NAME}"
-          # Push to main; --set-upstream handles the first push to an empty repo
-          git push origin HEAD:main
+          git push
