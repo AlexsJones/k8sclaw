@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/go-logr/logr"
@@ -30,13 +31,14 @@ const (
 
 // Bridge is the IPC bridge sidecar process.
 type Bridge struct {
-	BasePath     string // Root IPC path (e.g., /ipc)
-	AgentRunID   string
-	InstanceName string
-	EventBus     eventbus.EventBus
-	Log          logr.Logger
-	Watcher      *Watcher
-	agentDone    chan struct{} // signalled when result.json is received
+	BasePath       string // Root IPC path (e.g., /ipc)
+	AgentRunID     string
+	InstanceName   string
+	EventBus       eventbus.EventBus
+	Log            logr.Logger
+	Watcher        *Watcher
+	agentDone      chan struct{} // signalled when result.json is received
+	processedFiles sync.Map     // dedup fsnotify Create+Write for the same file
 }
 
 // NewBridge creates a new IPC bridge.
@@ -123,9 +125,15 @@ func (b *Bridge) watchOutput(ctx context.Context) {
 
 // handleOutputFile processes a file created in /ipc/output/.
 func (b *Bridge) handleOutputFile(ctx context.Context, fe FileEvent) {
+	// fsnotify fires both Create and Write for the same file; deduplicate.
+	if _, loaded := b.processedFiles.LoadOrStore(fe.Path, true); loaded {
+		return
+	}
+
 	data, err := os.ReadFile(fe.Path)
 	if err != nil {
 		b.Log.Error(err, "failed to read output file", "path", fe.Path)
+		b.processedFiles.Delete(fe.Path) // allow retry on read error
 		return
 	}
 
@@ -185,9 +193,15 @@ func (b *Bridge) watchSpawnRequests(ctx context.Context) {
 
 // handleSpawnRequest processes a spawn request file.
 func (b *Bridge) handleSpawnRequest(ctx context.Context, fe FileEvent) {
+	// fsnotify fires both Create and Write for the same file; deduplicate.
+	if _, loaded := b.processedFiles.LoadOrStore(fe.Path, true); loaded {
+		return
+	}
+
 	data, err := os.ReadFile(fe.Path)
 	if err != nil {
 		b.Log.Error(err, "failed to read spawn request", "path", fe.Path)
+		b.processedFiles.Delete(fe.Path)
 		return
 	}
 
@@ -228,9 +242,15 @@ func (b *Bridge) watchToolRequests(ctx context.Context) {
 
 // handleExecRequest processes an exec request and runs it in the sandbox sidecar.
 func (b *Bridge) handleExecRequest(ctx context.Context, fe FileEvent) {
+	// fsnotify fires both Create and Write for the same file; deduplicate.
+	if _, loaded := b.processedFiles.LoadOrStore(fe.Path, true); loaded {
+		return
+	}
+
 	data, err := os.ReadFile(fe.Path)
 	if err != nil {
 		b.Log.Error(err, "failed to read exec request", "path", fe.Path)
+		b.processedFiles.Delete(fe.Path)
 		return
 	}
 
@@ -266,9 +286,15 @@ func (b *Bridge) watchMessages(ctx context.Context) {
 
 // handleOutboundMessage processes an outbound message to a channel.
 func (b *Bridge) handleOutboundMessage(ctx context.Context, fe FileEvent) {
+	// fsnotify fires both Create and Write for the same file; deduplicate.
+	if _, loaded := b.processedFiles.LoadOrStore(fe.Path, true); loaded {
+		return
+	}
+
 	data, err := os.ReadFile(fe.Path)
 	if err != nil {
 		b.Log.Error(err, "failed to read outbound message", "path", fe.Path)
+		b.processedFiles.Delete(fe.Path)
 		return
 	}
 
