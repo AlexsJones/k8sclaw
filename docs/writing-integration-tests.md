@@ -248,3 +248,4 @@ not after it completes. The Job/pod is cleaned up quickly after the agent finish
 |---|---|---|
 | write_file | `test/integration/test-write-file.sh` | Agent uses `write_file` tool to create a file with specific content |
 | k8s-ops nodes | `test/integration/test-k8s-ops-nodes.sh` | Agent uses `execute_command` with k8s-ops skill to run `kubectl get nodes` |
+| telegram | `test/integration/test-telegram-channel.sh` | Channel deployment pipeline + optional full E2E with real bot |
