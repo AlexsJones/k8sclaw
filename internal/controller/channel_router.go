@@ -60,9 +60,16 @@ func (cr *ChannelRouter) Start(ctx context.Context) error {
 	}
 }
 
-// resolveProvider guesses the AI provider from the auth secret names.
-// The onboard wizard names secrets like "<inst>-openai-key".
+// resolveProvider returns the AI provider for the instance.
+// It prefers the explicit Provider field on AuthRefs, falling back to
+// guessing from the auth secret names.
 func resolveProvider(inst *kubeclawv1alpha1.ClawInstance) string {
+	for _, ref := range inst.Spec.AuthRefs {
+		if ref.Provider != "" {
+			return ref.Provider
+		}
+	}
+	// Fallback: guess from secret name (e.g. "<inst>-openai-key").
 	for _, ref := range inst.Spec.AuthRefs {
 		for _, p := range []string{"anthropic", "azure-openai", "ollama", "openai"} {
 			if strings.Contains(ref.Secret, p) {

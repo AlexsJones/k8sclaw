@@ -132,6 +132,9 @@ type SkillRef struct {
 
 // SecretRef references a Kubernetes Secret.
 type SecretRef struct {
+	// Provider is the AI provider name (e.g. "openai", "anthropic", "azure-openai", "ollama").
+	// +optional
+	Provider string `json:"provider,omitempty"`
 	// Secret is the name of the Secret.
 	Secret string `json:"secret"`
 }
