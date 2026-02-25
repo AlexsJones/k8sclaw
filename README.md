@@ -29,6 +29,8 @@
 curl -fsSL https://deploy.k8sclaw.ai/install.sh | sh
 ```
 
+📖 **New here?** See the [Getting Started guide](docs/getting-started.md) — install, deploy, onboard your first agent, and learn the TUI and CLI commands.
+
 ## Why KubeClaw?
 
 KubeClaw serves **two powerful use cases** on one Kubernetes-native platform:
