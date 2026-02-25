@@ -130,3 +130,83 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  # ── Update Homebrew tap ─────────────────────────────────────────────────────
+  update-homebrew:
+    name: Update Homebrew tap
+    needs: release-cli
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout tap
+        uses: actions/checkout@v4
+        with:
+          repository: AlexsJones/homebrew-kubeclaw
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          path: homebrew-tap
+
+      - name: Download release assets and update formula
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          VERSION="${TAG#v}"
+
+          declare -A SHAS
+          for platform in darwin-amd64 darwin-arm64 linux-amd64 linux-arm64; do
+            URL="https://github.com/AlexsJones/kubeclaw/releases/download/${TAG}/kubeclaw-${platform}.tar.gz"
+            echo "Hashing ${URL}..."
+            SHA=$(curl -fsSL "${URL}" | shasum -a 256 | awk '{print $1}')
+            SHAS[$platform]="${SHA}"
+            echo "  ${platform}: ${SHA}"
+          done
+
+          mkdir -p homebrew-tap/Formula
+
+          cat > homebrew-tap/Formula/Kubeclaw.rb << RUBY
+          class Kubeclaw < Formula
+            desc "Kubernetes-native AI agent orchestration platform CLI"
+            homepage "https://github.com/AlexsJones/kubeclaw"
+            version "${VERSION}"
+            license "Apache-2.0"
+
+            on_macos do
+              if Hardware::CPU.arm?
+                url "https://github.com/AlexsJones/kubeclaw/releases/download/v#{version}/kubeclaw-darwin-arm64.tar.gz"
+                sha256 "${SHAS[darwin-arm64]}"
+              else
+                url "https://github.com/AlexsJones/kubeclaw/releases/download/v#{version}/kubeclaw-darwin-amd64.tar.gz"
+                sha256 "${SHAS[darwin-amd64]}"
+              end
+            end
+
+            on_linux do
+              if Hardware::CPU.arm?
+                url "https://github.com/AlexsJones/kubeclaw/releases/download/v#{version}/kubeclaw-linux-arm64.tar.gz"
+                sha256 "${SHAS[linux-arm64]}"
+              else
+                url "https://github.com/AlexsJones/kubeclaw/releases/download/v#{version}/kubeclaw-linux-amd64.tar.gz"
+                sha256 "${SHAS[linux-amd64]}"
+              end
+            end
+
+            def install
+              bin.install "kubeclaw"
+            end
+
+            test do
+              assert_match version.to_s, shell_output("#{bin}/kubeclaw version")
+            end
+          end
+          RUBY
+
+          # Fix heredoc indentation
+          sed -i 's/^          //' homebrew-tap/Formula/Kubeclaw.rb
+
+      - name: Commit and push
+        run: |
+          cd homebrew-tap
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Formula/Kubeclaw.rb
+          git diff --cached --quiet && echo "No changes" && exit 0
+          git commit -m "Update kubeclaw to ${GITHUB_REF_NAME}"
+          git push origin HEAD:main
