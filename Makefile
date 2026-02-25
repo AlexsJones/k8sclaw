@@ -135,6 +135,22 @@ db-migrate: ## Run database migrations
 	@echo "Running migrations against $${DATABASE_URL}"
 	psql "$${DATABASE_URL}" -f migrations/001_initial.sql
 
+##@ Helm
+
+helm-sync: manifests ## Sync CRDs and appVersion into the Helm chart
+	@echo "Syncing CRDs to charts/sympozium/crds/..."
+	@mkdir -p charts/sympozium/crds
+	cp config/crd/bases/*.yaml charts/sympozium/crds/
+	@echo "Done."
+
+helm-sync-check: ## Check that Helm chart CRDs are in sync (CI use)
+	@diff -qr config/crd/bases/ charts/sympozium/crds/ > /dev/null 2>&1 \
+		|| (echo "ERROR: Helm chart CRDs are out of sync. Run 'make helm-sync'" && exit 1)
+	@echo "Helm chart CRDs are in sync."
+
+helm-lint: ## Lint the Helm chart
+	helm lint charts/sympozium/
+
 ##@ Clean
 
 clean: ## Remove build artifacts
