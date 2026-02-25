@@ -61,6 +61,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Stamp image tags with release version
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          echo "Stamping image tags with ${TAG}..."
+          find config/ -name '*.yaml' -exec \
+            sed -i "s|ghcr.io/alexsjones/sympozium/\([^:]*\):latest|ghcr.io/alexsjones/sympozium/\1:${TAG}|g" {} +
+
       - name: Package install manifests
         run: |
           tar -czf sympozium-manifests.tar.gz \

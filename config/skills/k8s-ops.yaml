@@ -141,7 +141,7 @@ spec:
     minMemory: 256Mi
     minCPU: 100m
   sidecar:
-    image: ghcr.io/alexsjones/sympozium/skill-k8s-ops:v0.0.29
+    image: ghcr.io/alexsjones/sympozium/skill-k8s-ops:latest
     mountWorkspace: true
     resources:
       cpu: "100m"
