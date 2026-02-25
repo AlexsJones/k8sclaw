@@ -1,6 +1,6 @@
 
 <p align="center">
-  <img src="header.png" alt="kubeclaw icon" width="600px;">
+  <img src="header.png" alt="kubeclaw icon" width="800px;">
 </p>
 
 <p align="center">
