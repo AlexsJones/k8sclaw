@@ -1,13 +1,12 @@
-# KubeClaw
 
 <p align="center">
-  <img src="icon.png" alt="kubeclaw icon" width="128" height="128">
+  <img src="header.png" alt="kubeclaw icon" width="600px;">
 </p>
 
 <p align="center">
-  <strong>The Kubernetes-Native Agentic Control Plane</strong><br>
-  <em>Run a fleet of AI agents on Kubernetes. Administer your cluster agentically.<br>
-  Every agent is an ephemeral Pod. Every policy is a CRD. Every execution is a Job.<br>
+ 
+  <em>
+  Every agent is an ephemeral Pod.<br>Every policy is a CRD. Every execution is a Job.<br>
   Orchestrate multi-agent workflows <b>and</b> let agents diagnose, scale, and remediate your infrastructure.<br>
   Multi-tenant. Horizontally scalable. Safe by design.</em><br><br>
   From the creator of <a href="https://github.com/k8sgpt-ai/k8sgpt">k8sgpt</a> and <a href="https://github.com/AlexsJones/llmfit">llmfit</a>

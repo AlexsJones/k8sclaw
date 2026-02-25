@@ -71,7 +71,8 @@ jobs:
             config/network/ \
             config/nats/ \
             config/cert/ \
-            config/skills/
+            config/skills/ \
+            config/policies/
 
       - name: Upload manifests
         uses: softprops/action-gh-release@v2

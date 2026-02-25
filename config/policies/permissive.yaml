@@ -1,0 +1,34 @@
+---
+# Permissive policy — development and demo environments.
+#
+# Use this for local development, demos, or trusted clusters:
+#   - Sandbox is optional (not required)
+#   - All tools allowed by default
+#   - Generous resource limits
+#   - Higher sub-agent depth for complex multi-step tasks
+#   - All feature gates enabled
+apiVersion: kubeclaw.io/v1alpha1
+kind: ClawPolicy
+metadata:
+  name: permissive
+spec:
+  sandboxPolicy:
+    required: false
+    maxCPU: "8"
+    maxMemory: 16Gi
+    allowHostMounts: false
+  toolGating:
+    defaultAction: allow
+    rules: []
+  subagentPolicy:
+    maxDepth: 5
+    maxConcurrent: 10
+  networkPolicy:
+    denyAll: false
+    allowDNS: true
+    allowEventBus: true
+  featureGates:
+    code-execution: true
+    sub-agents: true
+    browser-automation: true
+    file-access: true

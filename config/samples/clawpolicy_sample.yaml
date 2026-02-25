@@ -1,5 +1,6 @@
 ---
-# Example ClawPolicy
+# Example ClawPolicy — moderate defaults suitable for most clusters.
+# See config/policies/ for restrictive, permissive, and network-isolated presets.
 apiVersion: kubeclaw.io/v1alpha1
 kind: ClawPolicy
 metadata:
@@ -9,12 +10,12 @@ spec:
   toolGating:
     defaultAction: allow
     rules:
-      - tool: exec_command
+      - tool: execute_command
         action: ask
       - tool: write_file
         action: allow
-      - tool: network_request
-        action: deny
+      - tool: fetch_url
+        action: allow
   subagentPolicy:
     maxDepth: 3
     maxConcurrent: 5
@@ -27,3 +28,4 @@ spec:
     browser-automation: false
     code-execution: true
     file-access: true
+    sub-agents: true

@@ -1,0 +1,47 @@
+---
+# Restrictive policy — production-hardened, deny-by-default.
+#
+# Use this when agents operate in sensitive environments:
+#   - Sandbox is mandatory (all commands run in an isolated container)
+#   - Tools default to deny; only explicitly allowed tools are usable
+#   - Shell execution requires approval ("ask")
+#   - Network fetch and file writes are denied
+#   - Sub-agent depth and concurrency are tightly capped
+#   - Code execution feature gate is enabled (sandbox enforces isolation)
+apiVersion: kubeclaw.io/v1alpha1
+kind: ClawPolicy
+metadata:
+  name: restrictive
+spec:
+  sandboxPolicy:
+    required: true
+    maxCPU: "2"
+    maxMemory: 4Gi
+    allowHostMounts: false
+  toolGating:
+    defaultAction: deny
+    rules:
+      - tool: execute_command
+        action: ask
+      - tool: read_file
+        action: allow
+      - tool: list_directory
+        action: allow
+      - tool: write_file
+        action: deny
+      - tool: fetch_url
+        action: deny
+      - tool: send_channel_message
+        action: allow
+  subagentPolicy:
+    maxDepth: 2
+    maxConcurrent: 3
+  networkPolicy:
+    denyAll: true
+    allowDNS: true
+    allowEventBus: true
+  featureGates:
+    code-execution: true
+    sub-agents: true
+    browser-automation: false
+    file-access: false

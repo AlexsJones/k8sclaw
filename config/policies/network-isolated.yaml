@@ -1,0 +1,36 @@
+---
+# Network-isolated policy — agents can use tools but have no internet access.
+#
+# Use this when agents need full tool access but must not reach
+# external services, APIs, or the public internet:
+#   - Sandbox is optional
+#   - All tools except fetch_url are allowed
+#   - Network deny-all with only DNS and event bus egress
+#   - Useful for air-gapped or compliance-sensitive clusters
+apiVersion: kubeclaw.io/v1alpha1
+kind: ClawPolicy
+metadata:
+  name: network-isolated
+spec:
+  sandboxPolicy:
+    required: false
+    maxCPU: "4"
+    maxMemory: 8Gi
+    allowHostMounts: false
+  toolGating:
+    defaultAction: allow
+    rules:
+      - tool: fetch_url
+        action: deny
+  subagentPolicy:
+    maxDepth: 3
+    maxConcurrent: 5
+  networkPolicy:
+    denyAll: true
+    allowDNS: true
+    allowEventBus: true
+  featureGates:
+    code-execution: true
+    sub-agents: true
+    browser-automation: false
+    file-access: true
