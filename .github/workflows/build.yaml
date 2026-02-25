@@ -30,6 +30,9 @@ jobs:
       - name: Test
         run: go test -race -short ./...
 
+      - name: Check Helm chart CRDs in sync
+        run: make helm-sync-check
+
   build-and-push:
     runs-on: ubuntu-latest
     needs: test

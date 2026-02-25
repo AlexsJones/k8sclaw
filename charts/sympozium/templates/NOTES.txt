@@ -1,0 +1,31 @@
+🎉 Sympozium control plane deployed!
+
+Namespace: {{ include "sympozium.namespace" . }}
+
+Components:
+  ✅ Controller Manager ({{ .Values.controller.replicas }} replica(s))
+  ✅ API Server ({{ .Values.apiserver.replicas }} replica(s))
+{{- if .Values.webhook.enabled }}
+  ✅ Admission Webhook ({{ .Values.webhook.replicas }} replica(s))
+{{- end }}
+{{- if .Values.nats.enabled }}
+  ✅ NATS JetStream (built-in event bus)
+{{- else }}
+  ℹ️  Using external NATS: {{ .Values.nats.externalUrl }}
+{{- end }}
+
+Next steps:
+
+  1. Install the CLI (if not already installed):
+     curl -fsSL https://deploy.sympozium.ai/install.sh | sh
+
+  2. Connect the CLI to your cluster:
+     sympozium status
+
+  3. Onboard your first agent:
+     sympozium onboard
+
+  4. Open the TUI:
+     sympozium
+
+📖 Docs: https://github.com/AlexsJones/sympozium

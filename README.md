@@ -36,7 +36,42 @@ brew install sympozium
 curl -fsSL https://deploy.sympozium.ai/install.sh | sh
 ```
 
+Then deploy to your cluster and onboard your first agent:
+
+```bash
+sympozium install
+sympozium onboard
+```
+
 📖 **New here?** See the [Getting Started guide](docs/getting-started.md) — install, deploy, onboard your first agent, and learn the TUI and CLI commands.
+
+### Advanced: Helm Chart
+
+For production and GitOps workflows, you can deploy the control plane separately using Helm and install the CLI independently.
+
+#### Control Plane
+
+**Prerequisites:** [cert-manager](https://cert-manager.io/) (for webhook TLS):
+```bash
+kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/v1.17.1/cert-manager.yaml
+```
+
+Deploy the Sympozium control plane:
+```bash
+helm install sympozium ./charts/sympozium
+```
+
+See [`charts/sympozium/values.yaml`](charts/sympozium/values.yaml) for configuration options (replicas, resources, external NATS, network policies, etc.).
+
+#### CLI
+
+Install the CLI on your local machine to connect to the cluster:
+
+```bash
+brew tap AlexsJones/sympozium && brew install sympozium
+# or
+curl -fsSL https://deploy.sympozium.ai/install.sh | sh
+```
 
 ## Why Sympozium?
 

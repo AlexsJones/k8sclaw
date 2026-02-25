@@ -1,0 +1,100 @@
+{{- if .Values.webhook.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sympozium-webhook
+  namespace: {{ include "sympozium.namespace" . }}
+  labels:
+    {{- include "sympozium.labels" . | nindent 4 }}
+    app.kubernetes.io/component: webhook
+spec:
+  replicas: {{ .Values.webhook.replicas }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: webhook
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/component: webhook
+    spec:
+      serviceAccountName: sympozium-controller-manager
+      securityContext:
+        {{- toYaml .Values.securityContext | nindent 8 }}
+      containers:
+        - name: webhook
+          image: {{ include "sympozium.webhookImage" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - containerPort: 9443
+              name: webhook
+              protocol: TCP
+          volumeMounts:
+            - name: cert
+              mountPath: /tmp/k8s-webhook-server/serving-certs
+              readOnly: true
+          resources:
+            {{- toYaml .Values.webhook.resources | nindent 12 }}
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+      volumes:
+        - name: cert
+          secret:
+            secretName: sympozium-webhook-cert
+      {{- with .Values.webhook.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.webhook.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.webhook.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: sympozium-webhook-service
+  namespace: {{ include "sympozium.namespace" . }}
+  labels:
+    {{- include "sympozium.labels" . | nindent 4 }}
+spec:
+  selector:
+    app.kubernetes.io/component: webhook
+  ports:
+    - port: 443
+      targetPort: webhook
+      protocol: TCP
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingWebhookConfiguration
+metadata:
+  name: {{ include "sympozium.fullname" . }}-webhook
+  labels:
+    {{- include "sympozium.labels" . | nindent 4 }}
+  {{- if .Values.certManager.enabled }}
+  annotations:
+    cert-manager.io/inject-ca-from: {{ include "sympozium.namespace" . }}/sympozium-webhook-cert
+  {{- end }}
+webhooks:
+  - name: vagentpod.sympozium.ai
+    admissionReviewVersions: ["v1"]
+    clientConfig:
+      service:
+        name: sympozium-webhook-service
+        namespace: {{ include "sympozium.namespace" . }}
+        path: /validate-agent-pods
+    rules:
+      - operations: ["CREATE", "UPDATE"]
+        apiGroups: ["sympozium.ai"]
+        apiVersions: ["v1alpha1"]
+        resources: ["agentruns"]
+    failurePolicy: Fail
+    sideEffects: None
+{{- end }}

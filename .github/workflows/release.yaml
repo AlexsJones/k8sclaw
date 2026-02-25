@@ -138,6 +138,42 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+  # ── Sync Helm chart with release ──────────────────────────────────────────────
+  release-helm-chart:
+    name: Sync Helm chart
+    needs: [release-images, release-manifests]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Sync CRDs and bump appVersion
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          VERSION="${TAG#v}"
+
+          echo "Syncing CRDs to Helm chart..."
+          mkdir -p charts/sympozium/crds
+          cp config/crd/bases/*.yaml charts/sympozium/crds/
+
+          echo "Bumping Chart.yaml appVersion to ${VERSION}..."
+          sed -i "s/^appVersion:.*/appVersion: \"${VERSION}\"/" charts/sympozium/Chart.yaml
+
+          echo "Done. appVersion=${VERSION}"
+
+      - name: Commit and push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add charts/
+          git diff --cached --quiet && echo "No chart changes" && exit 0
+          git commit -m "chore: sync Helm chart for ${GITHUB_REF_NAME}"
+          git push origin main
+
   # ── Update Homebrew tap ─────────────────────────────────────────────────────
   update-homebrew:
     name: Update Homebrew tap

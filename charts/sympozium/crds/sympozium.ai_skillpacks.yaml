@@ -1,0 +1,310 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.17.2
+  name: skillpacks.sympozium.ai
+spec:
+  group: sympozium.ai
+  names:
+    kind: SkillPack
+    listKind: SkillPackList
+    plural: skillpacks
+    singular: skillpack
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .status.skillCount
+      name: Skills
+      type: integer
+    - jsonPath: .status.configMapName
+      name: ConfigMap
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          SkillPack is the Schema for the skillpacks API.
+          It bundles portable skills as a CRD that produces ConfigMaps mounted into agent pods.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: |-
+              SkillPackSpec defines the desired state of SkillPack.
+              Skills are Markdown-based instruction bundles mounted into agent pods.
+            properties:
+              category:
+                description: Category classifies this skill pack (e.g. "kubernetes",
+                  "security", "devops").
+                type: string
+              runtimeRequirements:
+                description: RuntimeRequirements defines container image requirements
+                  for this skill pack.
+                properties:
+                  image:
+                    description: Image is the container image that satisfies these
+                      requirements.
+                    type: string
+                  minCPU:
+                    description: MinCPU is the minimum CPU requirement (e.g. "100m").
+                    type: string
+                  minMemory:
+                    description: MinMemory is the minimum memory requirement (e.g.
+                      "256Mi").
+                    type: string
+                  sandbox:
+                    description: Sandbox indicates whether this skill requires a sandbox.
+                    type: boolean
+                type: object
+              sidecar:
+                description: |-
+                  Sidecar defines a container that is injected into the agent pod when this
+                  SkillPack is active. The sidecar provides tools (kubectl, helm, etc.) and
+                  the controller creates scoped RBAC automatically.
+                properties:
+                  clusterRBAC:
+                    description: |-
+                      ClusterRBAC defines cluster-scoped RBAC rules (ClusterRole + ClusterRoleBinding).
+                      Use for read-only cluster-wide access (e.g. listing nodes, namespaces).
+                    items:
+                      description: RBACRule defines a single Kubernetes RBAC policy
+                        rule.
+                      properties:
+                        apiGroups:
+                          description: APIGroups is the list of API groups (e.g. "",
+                            "apps", "batch").
+                          items:
+                            type: string
+                          type: array
+                        resources:
+                          description: Resources is the list of resources (e.g. "pods",
+                            "deployments").
+                          items:
+                            type: string
+                          type: array
+                        verbs:
+                          description: Verbs is the list of allowed verbs (e.g. "get",
+                            "list", "watch").
+                          items:
+                            type: string
+                          type: array
+                      required:
+                      - apiGroups
+                      - resources
+                      - verbs
+                      type: object
+                    type: array
+                  command:
+                    description: |-
+                      Command overrides the container entrypoint.
+                      Defaults to ["sleep", "infinity"] to keep the sidecar alive.
+                    items:
+                      type: string
+                    type: array
+                  env:
+                    description: Env is a list of environment variables for the sidecar.
+                    items:
+                      description: EnvVar is a simplified environment variable (name
+                        + value).
+                      properties:
+                        name:
+                          type: string
+                        value:
+                          type: string
+                      required:
+                      - name
+                      - value
+                      type: object
+                    type: array
+                  image:
+                    description: Image is the container image for this skill sidecar.
+                    type: string
+                  mountWorkspace:
+                    default: true
+                    description: MountWorkspace controls whether /workspace is mounted
+                      into the sidecar.
+                    type: boolean
+                  rbac:
+                    description: |-
+                      RBAC defines Kubernetes RBAC rules that this sidecar needs.
+                      The controller creates a Role + RoleBinding scoped to the run namespace.
+                    items:
+                      description: RBACRule defines a single Kubernetes RBAC policy
+                        rule.
+                      properties:
+                        apiGroups:
+                          description: APIGroups is the list of API groups (e.g. "",
+                            "apps", "batch").
+                          items:
+                            type: string
+                          type: array
+                        resources:
+                          description: Resources is the list of resources (e.g. "pods",
+                            "deployments").
+                          items:
+                            type: string
+                          type: array
+                        verbs:
+                          description: Verbs is the list of allowed verbs (e.g. "get",
+                            "list", "watch").
+                          items:
+                            type: string
+                          type: array
+                      required:
+                      - apiGroups
+                      - resources
+                      - verbs
+                      type: object
+                    type: array
+                  resources:
+                    description: Resources for the sidecar container.
+                    properties:
+                      cpu:
+                        description: CPU request (e.g. "100m").
+                        type: string
+                      memory:
+                        description: Memory request (e.g. "128Mi").
+                        type: string
+                    type: object
+                required:
+                - image
+                type: object
+              skills:
+                description: Skills is the list of skills in this pack.
+                items:
+                  description: Skill defines a single skill entry.
+                  properties:
+                    content:
+                      description: Content is the Markdown content of the skill.
+                      type: string
+                    description:
+                      description: Description describes what this skill does.
+                      type: string
+                    name:
+                      description: Name is the skill identifier.
+                      type: string
+                    requires:
+                      description: Requires lists runtime requirements (binaries,
+                        etc.) for this skill.
+                      properties:
+                        bins:
+                          description: Bins lists required binaries.
+                          items:
+                            type: string
+                          type: array
+                        tools:
+                          description: Tools lists tools this skill expects the agent
+                            to have.
+                          items:
+                            type: string
+                          type: array
+                      type: object
+                  required:
+                  - content
+                  - name
+                  type: object
+                type: array
+              source:
+                description: Source records where this skill pack was imported from.
+                type: string
+              version:
+                description: Version is the skill pack version.
+                type: string
+            required:
+            - skills
+            type: object
+          status:
+            description: SkillPackStatus defines the observed state of SkillPack.
+            properties:
+              conditions:
+                description: Conditions represent the latest available observations.
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+              configMapName:
+                description: ConfigMapName is the name of the generated ConfigMap.
+                type: string
+              phase:
+                description: Phase is the current phase.
+                type: string
+              skillCount:
+                description: SkillCount is the number of skills in this pack.
+                type: integer
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

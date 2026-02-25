@@ -1,0 +1,86 @@
+{{- if .Values.rbac.create }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: sympozium-controller-manager
+  namespace: {{ include "sympozium.namespace" . }}
+  labels:
+    {{- include "sympozium.labels" . | nindent 4 }}
+    app.kubernetes.io/component: controller
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: sympozium-apiserver
+  namespace: {{ include "sympozium.namespace" . }}
+  labels:
+    {{- include "sympozium.labels" . | nindent 4 }}
+    app.kubernetes.io/component: apiserver
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "sympozium.fullname" . }}-manager
+  labels:
+    {{- include "sympozium.labels" . | nindent 4 }}
+rules:
+  # CRDs
+  - apiGroups: ["sympozium.ai"]
+    resources:
+      - sympoziuminstances
+      - agentruns
+      - sympoziumpolicies
+      - skillpacks
+      - sympoziumschedules
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["sympozium.ai"]
+    resources:
+      - sympoziuminstances/status
+      - agentruns/status
+      - sympoziumpolicies/status
+      - skillpacks/status
+      - sympoziumschedules/status
+    verbs: ["get", "update", "patch"]
+  - apiGroups: ["sympozium.ai"]
+    resources:
+      - sympoziuminstances/finalizers
+      - agentruns/finalizers
+      - sympoziumpolicies/finalizers
+      - skillpacks/finalizers
+      - sympoziumschedules/finalizers
+    verbs: ["update"]
+  # Core resources for agent pods
+  - apiGroups: [""]
+    resources: ["pods", "pods/log", "services", "configmaps", "secrets", "serviceaccounts"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["create", "patch"]
+  # RBAC for skill sidecar auto-provisioning
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: ["clusterroles", "clusterrolebindings", "roles", "rolebindings"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # Jobs for agent runs
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # Leader election
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "sympozium.fullname" . }}-manager
+  labels:
+    {{- include "sympozium.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "sympozium.fullname" . }}-manager
+subjects:
+  - kind: ServiceAccount
+    name: sympozium-controller-manager
+    namespace: {{ include "sympozium.namespace" . }}
+{{- end }}
