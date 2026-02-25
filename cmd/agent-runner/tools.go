@@ -23,6 +23,7 @@ const (
 	ToolListDirectory      = "list_directory"
 	ToolSendChannelMessage = "send_channel_message"
 	ToolFetchURL           = "fetch_url"
+	ToolScheduleTask       = "schedule_task"
 )
 
 // ToolDef describes a tool for LLM function calling.
@@ -158,6 +159,36 @@ func defaultTools() []ToolDef {
 				"required": []string{"path", "content"},
 			},
 		},
+		{
+			Name: ToolScheduleTask,
+			Description: "Create, update, or delete a recurring scheduled task. " +
+				"Use this to set up heartbeats, periodic checks, or any repeating work. " +
+				"The schedule fires automatically and creates a new AgentRun each time. " +
+				"You can adjust the interval, update the task description, pause, or delete a schedule.",
+			Parameters: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"name": map[string]any{
+						"type":        "string",
+						"description": "A short unique name for this schedule (e.g. 'cluster-health-check', 'daily-report'). Used as the ClawSchedule resource name.",
+					},
+					"schedule": map[string]any{
+						"type":        "string",
+						"description": "Cron expression for how often to run (e.g. '0 */3 * * *' for every 3 hours, '*/30 * * * *' for every 30 minutes, '0 9 * * 1-5' for weekdays at 9am). Standard 5-field cron format: minute hour day-of-month month day-of-week.",
+					},
+					"task": map[string]any{
+						"type":        "string",
+						"description": "The task description the agent will receive each time the schedule fires. Be specific and self-contained — each run is independent.",
+					},
+					"action": map[string]any{
+						"type":        "string",
+						"description": "What to do: 'create' (new schedule), 'update' (change schedule/task), 'suspend' (pause), 'resume' (unpause), or 'delete' (remove).",
+						"enum":        []string{"create", "update", "suspend", "resume", "delete"},
+					},
+				},
+				"required": []string{"name", "action"},
+			},
+		},
 	}
 }
 
@@ -183,6 +214,8 @@ func executeToolCall(name string, argsJSON string) string {
 		return sendChannelMessageTool(args)
 	case ToolFetchURL:
 		return fetchURLTool(args)
+	case ToolScheduleTask:
+		return scheduleTaskTool(args)
 	default:
 		return fmt.Sprintf("Unknown tool: %s", name)
 	}
@@ -695,4 +728,91 @@ func truncateStr(s string, n int) string {
 		return s
 	}
 	return s[:n] + "..."
+}
+
+// --- Schedule task tool ---
+
+// scheduleTaskTool writes a schedule request to /ipc/schedules/ for the
+// IPC bridge to relay to the controller, which creates/updates a ClawSchedule.
+func scheduleTaskTool(args map[string]any) string {
+	name, _ := args["name"].(string)
+	action, _ := args["action"].(string)
+	schedule, _ := args["schedule"].(string)
+	task, _ := args["task"].(string)
+
+	if name == "" {
+		return "Error: 'name' is required — a short unique name for this schedule"
+	}
+	if action == "" {
+		return "Error: 'action' is required (create, update, suspend, resume, delete)"
+	}
+
+	// Validate required fields per action.
+	switch action {
+	case "create":
+		if schedule == "" {
+			return "Error: 'schedule' is required for create (cron expression, e.g. '0 */3 * * *')"
+		}
+		if task == "" {
+			return "Error: 'task' is required for create — what should the agent do each time?"
+		}
+	case "update":
+		if schedule == "" && task == "" {
+			return "Error: 'schedule' and/or 'task' required for update — provide what you want to change"
+		}
+	case "suspend", "resume", "delete":
+		// Only name + action needed.
+	default:
+		return fmt.Sprintf("Error: unknown action '%s' — use create, update, suspend, resume, or delete", action)
+	}
+
+	req := struct {
+		Name     string `json:"name"`
+		Action   string `json:"action"`
+		Schedule string `json:"schedule,omitempty"`
+		Task     string `json:"task,omitempty"`
+	}{
+		Name:     name,
+		Action:   action,
+		Schedule: schedule,
+		Task:     task,
+	}
+
+	data, err := json.Marshal(req)
+	if err != nil {
+		return fmt.Sprintf("Error marshalling schedule request: %v", err)
+	}
+
+	dir := "/ipc/schedules"
+	_ = os.MkdirAll(dir, 0o755)
+	id := fmt.Sprintf("%d", time.Now().UnixNano())
+	path := filepath.Join(dir, fmt.Sprintf("schedule-%s.json", id))
+
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		return fmt.Sprintf("Error writing schedule file: %v", err)
+	}
+
+	log.Printf("Wrote schedule request: name=%s action=%s schedule=%s", name, action, schedule)
+
+	switch action {
+	case "create":
+		return fmt.Sprintf("Schedule '%s' created with cron '%s'. The task will run automatically on this interval.", name, schedule)
+	case "update":
+		parts := []string{}
+		if schedule != "" {
+			parts = append(parts, fmt.Sprintf("schedule='%s'", schedule))
+		}
+		if task != "" {
+			parts = append(parts, "task updated")
+		}
+		return fmt.Sprintf("Schedule '%s' updated: %s", name, strings.Join(parts, ", "))
+	case "suspend":
+		return fmt.Sprintf("Schedule '%s' suspended. It will not fire until resumed.", name)
+	case "resume":
+		return fmt.Sprintf("Schedule '%s' resumed. Next run will fire according to the cron expression.", name)
+	case "delete":
+		return fmt.Sprintf("Schedule '%s' deleted.", name)
+	default:
+		return fmt.Sprintf("Schedule '%s' action '%s' submitted.", name, action)
+	}
 }

@@ -144,6 +144,17 @@ func main() {
 				setupLog.Error(err, "unable to add channel router")
 				os.Exit(1)
 			}
+
+			schedRouter := &controller.ScheduleRouter{
+				Client:   mgr.GetClient(),
+				EventBus: eb,
+				Log:      ctrl.Log.WithName("schedule-router"),
+			}
+			if err := mgr.Add(schedRouter); err != nil {
+				setupLog.Error(err, "unable to add schedule router")
+				os.Exit(1)
+			}
+
 			setupLog.Info("Channel message router enabled", "natsURL", natsURL)
 		}
 	} else {

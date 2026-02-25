@@ -22,11 +22,12 @@ import (
 
 // IPCDir layout constants matching the design doc protocol.
 const (
-	DirInput    = "input"
-	DirOutput   = "output"
-	DirSpawn    = "spawn"
-	DirTools    = "tools"
-	DirMessages = "messages"
+	DirInput     = "input"
+	DirOutput    = "output"
+	DirSpawn     = "spawn"
+	DirTools     = "tools"
+	DirMessages  = "messages"
+	DirSchedules = "schedules"
 )
 
 // Bridge is the IPC bridge sidecar process.
@@ -62,7 +63,7 @@ func (b *Bridge) Start(ctx context.Context) error {
 	)
 
 	// Create IPC directory structure
-	dirs := []string{DirInput, DirOutput, DirSpawn, DirTools, DirMessages}
+	dirs := []string{DirInput, DirOutput, DirSpawn, DirTools, DirMessages, DirSchedules}
 	for _, dir := range dirs {
 		path := filepath.Join(b.BasePath, dir)
 		if err := os.MkdirAll(path, 0750); err != nil {
@@ -88,6 +89,9 @@ func (b *Bridge) Start(ctx context.Context) error {
 
 	// Watch for outbound messages
 	go b.watchMessages(ctx)
+
+	// Watch for schedule requests
+	go b.watchSchedules(ctx)
 
 	// Subscribe to inbound events from the control plane
 	go b.subscribeToInbound(ctx)
@@ -307,6 +311,52 @@ func (b *Bridge) handleOutboundMessage(ctx context.Context, fe FileEvent) {
 	if err := b.EventBus.Publish(ctx, eventbus.TopicChannelMessageSend, event); err != nil {
 		b.Log.Error(err, "failed to publish outbound message")
 	}
+}
+
+// watchSchedules watches /ipc/schedules/ for schedule task requests.
+func (b *Bridge) watchSchedules(ctx context.Context) {
+	schedulesPath := filepath.Join(b.BasePath, DirSchedules)
+	events, err := b.Watcher.Watch(ctx, schedulesPath)
+	if err != nil {
+		b.Log.Error(err, "failed to watch schedules directory")
+		return
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case fe := <-events:
+			b.handleScheduleRequest(ctx, fe)
+		}
+	}
+}
+
+// handleScheduleRequest processes a schedule request file.
+func (b *Bridge) handleScheduleRequest(ctx context.Context, fe FileEvent) {
+	// fsnotify fires both Create and Write for the same file; deduplicate.
+	if _, loaded := b.processedFiles.LoadOrStore(fe.Path, true); loaded {
+		return
+	}
+
+	data, err := os.ReadFile(fe.Path)
+	if err != nil {
+		b.Log.Error(err, "failed to read schedule request", "path", fe.Path)
+		b.processedFiles.Delete(fe.Path)
+		return
+	}
+
+	metadata := map[string]string{
+		"agentRunID":   b.AgentRunID,
+		"instanceName": b.InstanceName,
+	}
+
+	event, _ := eventbus.NewEvent(eventbus.TopicScheduleUpsert, metadata, json.RawMessage(data))
+	if err := b.EventBus.Publish(ctx, eventbus.TopicScheduleUpsert, event); err != nil {
+		b.Log.Error(err, "failed to publish schedule request")
+	}
+
+	b.Log.Info("Forwarded schedule request to control plane")
 }
 
 // subscribeToInbound subscribes to events from the control plane and

@@ -51,6 +51,7 @@ const (
 	TopicToolExecResult        = "tool.exec.result"
 	TopicToolApprovalRequest   = "tool.approval.request"
 	TopicToolApprovalResponse  = "tool.approval.response"
+	TopicScheduleUpsert        = "schedule.upsert"
 )
 
 // NewEvent creates a new event with the current timestamp.

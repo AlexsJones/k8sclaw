@@ -18,6 +18,10 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-blue" alt="License"></a>
 </p>
 
+<p align="center">
+  <img src="demo.gif" alt="KubeClaw TUI demo" width="800px;">
+</p>
+
 ---
 ### Quick Install (macOS / Linux)
 
