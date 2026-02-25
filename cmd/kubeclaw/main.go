@@ -448,7 +448,7 @@ func runOnboard() error {
 	printBanner()
 
 	// ── Step 1: Check KubeClaw is installed ───────────────────────────────
-	fmt.Println("\n📋 Step 1/5 — Checking cluster...")
+	fmt.Println("\n📋 Step 1/6 — Checking cluster...")
 	if err := initClient(); err != nil {
 		fmt.Println("\n  ❌ Cannot connect to your cluster.")
 		fmt.Println("  Make sure kubectl is configured and run: kubeclaw install")
@@ -465,12 +465,12 @@ func runOnboard() error {
 	fmt.Println("  ✅ KubeClaw is installed and CRDs are available.")
 
 	// ── Step 2: Instance name ────────────────────────────────────────────
-	fmt.Println("\n📋 Step 2/5 — Create your ClawInstance")
+	fmt.Println("\n📋 Step 2/6 — Create your ClawInstance")
 	fmt.Println("  An instance represents you (or a tenant) in the system.")
 	instanceName := prompt(reader, "  Instance name", "my-agent")
 
 	// ── Step 3: AI provider ──────────────────────────────────────────────
-	fmt.Println("\n📋 Step 3/5 — AI Provider")
+	fmt.Println("\n📋 Step 3/6 — AI Provider")
 	fmt.Println("  Which model provider do you want to use?")
 	fmt.Println("    1) OpenAI")
 	fmt.Println("    2) Anthropic")
@@ -527,7 +527,7 @@ func runOnboard() error {
 	providerSecretName := fmt.Sprintf("%s-%s-key", instanceName, providerName)
 
 	// ── Step 4: Channel ──────────────────────────────────────────────────
-	fmt.Println("\n📋 Step 4/5 — Connect a Channel (optional)")
+	fmt.Println("\n📋 Step 4/6 — Connect a Channel (optional)")
 	fmt.Println("  Channels let your agent receive messages from external platforms.")
 	fmt.Println("    1) Telegram  — easiest, just talk to @BotFather")
 	fmt.Println("    2) Slack")
@@ -566,9 +566,38 @@ func runOnboard() error {
 	channelSecretName := fmt.Sprintf("%s-%s-secret", instanceName, channelType)
 
 	// ── Step 5: Apply default policy? ────────────────────────────────────
-	fmt.Println("\n📋 Step 5/5 — Default Policy")
+	fmt.Println("\n📋 Step 5/6 — Default Policy")
 	fmt.Println("  A ClawPolicy controls what tools agents can use, sandboxing, etc.")
 	applyPolicy := promptYN(reader, "  Apply the default policy?", true)
+
+	// ── Step 6: Heartbeat interval ──────────────────────────────────────
+	fmt.Println("\n📋 Step 6/6 — Heartbeat Schedule")
+	fmt.Println("  A heartbeat lets your agent wake up periodically to review memory")
+	fmt.Println("  and note anything that needs attention.")
+	fmt.Println("    1) Every 30 minutes")
+	fmt.Println("    2) Every hour          (recommended)")
+	fmt.Println("    3) Every 6 hours")
+	fmt.Println("    4) Once a day (9am)")
+	fmt.Println("    5) Disabled — no heartbeat")
+	hbChoice := prompt(reader, "  Choice [1-5]", "2")
+	var heartbeatCron, heartbeatLabel string
+	switch hbChoice {
+	case "1":
+		heartbeatCron = "*/30 * * * *"
+		heartbeatLabel = "every 30 minutes"
+	case "3":
+		heartbeatCron = "0 */6 * * *"
+		heartbeatLabel = "every 6 hours"
+	case "4":
+		heartbeatCron = "0 9 * * *"
+		heartbeatLabel = "once a day (9am)"
+	case "5":
+		heartbeatCron = ""
+		heartbeatLabel = "disabled"
+	default:
+		heartbeatCron = "0 * * * *"
+		heartbeatLabel = "every hour"
+	}
 
 	// ── Summary ──────────────────────────────────────────────────────────
 	fmt.Println("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
@@ -585,6 +614,7 @@ func runOnboard() error {
 		fmt.Println("  Channel:    (none)")
 	}
 	fmt.Printf("  Policy:     %v\n", applyPolicy)
+	fmt.Printf("  Heartbeat:  %s\n", heartbeatLabel)
 	fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 
 	if !promptYN(reader, "\n  Proceed?", true) {
@@ -645,6 +675,28 @@ func runOnboard() error {
 		policyName, applyPolicy)
 	if err := kubectlApplyStdin(instanceYAML); err != nil {
 		return fmt.Errorf("apply instance: %w", err)
+	}
+
+	// 5. Create heartbeat schedule (unless disabled).
+	if heartbeatCron != "" {
+		heartbeatName := fmt.Sprintf("%s-heartbeat", instanceName)
+		fmt.Printf("  Creating heartbeat schedule %s (%s)...\n", heartbeatName, heartbeatLabel)
+		heartbeatYAML := fmt.Sprintf(`apiVersion: kubeclaw.io/v1alpha1
+kind: ClawSchedule
+metadata:
+  name: %s
+  namespace: %s
+spec:
+  instanceRef: %s
+  schedule: "%s"
+  task: "Review your memory. Summarise what you know so far and note anything that needs attention."
+  type: heartbeat
+  concurrencyPolicy: Forbid
+  includeMemory: true
+`, heartbeatName, namespace, instanceName, heartbeatCron)
+		if err := kubectlApplyStdin(heartbeatYAML); err != nil {
+			return fmt.Errorf("apply heartbeat schedule: %w", err)
+		}
 	}
 
 	// ── WhatsApp QR pairing ──────────────────────────────────────────────
@@ -1658,6 +1710,7 @@ const (
 	wizStepChannel                 // menu 1-5: channel type
 	wizStepChannelToken            // text: channel bot token
 	wizStepPolicy                  // y/n: apply default policy
+	wizStepHeartbeat               // menu 1-5: heartbeat interval
 	wizStepConfirm                 // y/n: confirm summary
 	wizStepApplying                // auto — create resources
 	wizStepWhatsAppQR              // auto — stream QR from pod logs
@@ -1683,6 +1736,8 @@ type wizardState struct {
 	channelTokenKey string
 	channelToken    string
 	applyPolicy     bool
+	heartbeatCron   string // cron expression for heartbeat schedule
+	heartbeatLabel  string // human-readable label (e.g. "every hour")
 
 	// Dynamic model list (fetched from provider API when key is supplied).
 	fetchedModels []string // model IDs fetched from the API
@@ -3117,7 +3172,7 @@ func (m tuiModel) handleRowEdit() (tea.Model, tea.Cmd) {
 		}
 		// Find first schedule for this instance to pre-populate heartbeat tab.
 		m.editHeartbeat = editHeartbeatForm{
-			schedule:          "*/5 * * * *",
+			schedule:          "0 * * * *",
 			task:              "Review your memory. Summarise what you know so far and note anything that needs attention.",
 			schedType:         0,
 			concurrencyPolicy: 0,
@@ -5832,6 +5887,31 @@ func (m tuiModel) advanceWizard(val string) (tea.Model, tea.Cmd) {
 	case wizStepPolicy:
 		v := strings.ToLower(val)
 		w.applyPolicy = (v == "" || v == "y" || v == "yes")
+		w.step = wizStepHeartbeat
+		m.input.Placeholder = "Heartbeat interval [1-5] (default: 2 — every hour)"
+		return m, nil
+
+	case wizStepHeartbeat:
+		if val == "" {
+			val = "2"
+		}
+		switch val {
+		case "1":
+			w.heartbeatCron = "*/30 * * * *"
+			w.heartbeatLabel = "every 30 minutes"
+		case "3":
+			w.heartbeatCron = "0 */6 * * *"
+			w.heartbeatLabel = "every 6 hours"
+		case "4":
+			w.heartbeatCron = "0 9 * * *"
+			w.heartbeatLabel = "once a day (9am)"
+		case "5":
+			w.heartbeatCron = ""
+			w.heartbeatLabel = "disabled"
+		default: // "2" or anything else
+			w.heartbeatCron = "0 * * * *"
+			w.heartbeatLabel = "every hour"
+		}
 		w.step = wizStepConfirm
 		m.input.Placeholder = "Proceed? [Y/n]"
 		return m, nil
@@ -5923,24 +6003,32 @@ func (m tuiModel) renderWizardPanel(h int) string {
 		}
 		lines = append(lines, hintStyle.Render("  Policy:   ")+valueStyle.Render(pv))
 	}
+	if w.step > wizStepHeartbeat {
+		stepNum = 6
+		hbLabel := w.heartbeatLabel
+		if hbLabel == "" {
+			hbLabel = "every hour"
+		}
+		lines = append(lines, hintStyle.Render("  Heartbeat: ")+valueStyle.Render(hbLabel))
+	}
 
-	if w.step >= wizStepInstanceName && w.step <= wizStepPolicy {
+	if w.step >= wizStepInstanceName && w.step <= wizStepHeartbeat {
 		lines = append(lines, "")
 	}
 
 	// Show current step prompt.
 	switch w.step {
 	case wizStepCheckCluster:
-		lines = append(lines, stepStyle.Render("  📋 Step 1/5 — Checking cluster..."))
+		lines = append(lines, stepStyle.Render("  📋 Step 1/6 — Checking cluster..."))
 
 	case wizStepInstanceName:
-		lines = append(lines, stepStyle.Render("  📋 Step 1/5 — Create your ClawInstance"))
+		lines = append(lines, stepStyle.Render("  📋 Step 1/6 — Create your ClawInstance"))
 		lines = append(lines, menuStyle.Render("  An instance represents you (or a tenant) in the system."))
 		lines = append(lines, "")
 		lines = append(lines, labelStyle.Render("  Enter instance name:"))
 
 	case wizStepProvider:
-		lines = append(lines, stepStyle.Render("  📋 Step 2/5 — AI Provider"))
+		lines = append(lines, stepStyle.Render("  📋 Step 2/6 — AI Provider"))
 		lines = append(lines, menuStyle.Render("  Which model provider do you want to use?"))
 		lines = append(lines, "")
 		lines = append(lines, menuNumStyle.Render("  1)")+menuStyle.Render(" OpenAI"))
@@ -5950,11 +6038,11 @@ func (m tuiModel) renderWizardPanel(h int) string {
 		lines = append(lines, menuNumStyle.Render("  5)")+menuStyle.Render(" Other / OpenAI-compatible"))
 
 	case wizStepBaseURL:
-		lines = append(lines, stepStyle.Render("  📋 Step 2/5 — AI Provider (continued)"))
+		lines = append(lines, stepStyle.Render("  📋 Step 2/6 — AI Provider (continued)"))
 		lines = append(lines, labelStyle.Render("  Enter base URL:"))
 
 	case wizStepAPIKey:
-		lines = append(lines, stepStyle.Render("  📋 Step 2/5 — AI Provider (continued)"))
+		lines = append(lines, stepStyle.Render("  📋 Step 2/6 — AI Provider (continued)"))
 		lines = append(lines, labelStyle.Render(fmt.Sprintf("  Paste your %s:", w.secretEnvKey)))
 		envVal := os.Getenv(w.secretEnvKey)
 		if envVal != "" {
@@ -5965,7 +6053,7 @@ func (m tuiModel) renderWizardPanel(h int) string {
 		lines = append(lines, hintStyle.Render("  (providing a key lets us fetch your available models)"))
 
 	case wizStepModel:
-		lines = append(lines, stepStyle.Render("  📋 Step 2/5 — Select Model"))
+		lines = append(lines, stepStyle.Render("  📋 Step 2/6 — Select Model"))
 		if len(w.fetchedModels) > 0 {
 			lines = append(lines, menuStyle.Render(fmt.Sprintf("  Found %d models from your %s account:", len(w.fetchedModels), w.providerName)))
 			lines = append(lines, "")
@@ -6030,7 +6118,7 @@ func (m tuiModel) renderWizardPanel(h int) string {
 		}
 
 	case wizStepChannel:
-		lines = append(lines, stepStyle.Render("  📋 Step 3/5 — Connect a Channel (optional)"))
+		lines = append(lines, stepStyle.Render("  📋 Step 3/6 — Connect a Channel (optional)"))
 		lines = append(lines, menuStyle.Render("  Channels let your agent receive messages from external platforms."))
 		lines = append(lines, "")
 		lines = append(lines, menuNumStyle.Render("  1)")+menuStyle.Render(" Telegram  — easiest, just talk to @BotFather"))
@@ -6040,16 +6128,27 @@ func (m tuiModel) renderWizardPanel(h int) string {
 		lines = append(lines, menuNumStyle.Render("  5)")+menuStyle.Render(" Skip — I'll add a channel later"))
 
 	case wizStepChannelToken:
-		lines = append(lines, stepStyle.Render("  📋 Step 3/5 — Connect a Channel (continued)"))
+		lines = append(lines, stepStyle.Render("  📋 Step 3/6 — Connect a Channel (continued)"))
 		lines = append(lines, labelStyle.Render(fmt.Sprintf("  Paste your %s token:", w.channelType)))
 
 	case wizStepPolicy:
-		lines = append(lines, stepStyle.Render("  📋 Step 4/5 — Default Policy"))
+		lines = append(lines, stepStyle.Render("  📋 Step 4/6 — Default Policy"))
 		lines = append(lines, menuStyle.Render("  A ClawPolicy controls what tools agents can use, sandboxing, etc."))
 		lines = append(lines, labelStyle.Render("  Apply the default policy?"))
 
+	case wizStepHeartbeat:
+		lines = append(lines, stepStyle.Render("  📋 Step 5/6 — Heartbeat Schedule"))
+		lines = append(lines, menuStyle.Render("  A heartbeat lets your agent wake up periodically to review memory"))
+		lines = append(lines, menuStyle.Render("  and note anything that needs attention."))
+		lines = append(lines, "")
+		lines = append(lines, menuNumStyle.Render("  1)")+menuStyle.Render(" Every 30 minutes"))
+		lines = append(lines, menuNumStyle.Render("  2)")+menuStyle.Render(" Every hour")+hintStyle.Render("  (recommended)"))
+		lines = append(lines, menuNumStyle.Render("  3)")+menuStyle.Render(" Every 6 hours"))
+		lines = append(lines, menuNumStyle.Render("  4)")+menuStyle.Render(" Once a day (9am)"))
+		lines = append(lines, menuNumStyle.Render("  5)")+menuStyle.Render(" Disabled — no heartbeat"))
+
 	case wizStepConfirm:
-		lines = append(lines, stepStyle.Render("  📋 Step 5/5 — Confirm"))
+		lines = append(lines, stepStyle.Render("  📋 Step 6/6 — Confirm"))
 		lines = append(lines, "")
 		lines = append(lines, tuiSepStyle.Render("  "+strings.Repeat("━", 50)))
 		lines = append(lines, labelStyle.Render("  Summary"))
@@ -6071,6 +6170,11 @@ func (m tuiModel) renderWizardPanel(h int) string {
 			pv = "no"
 		}
 		lines = append(lines, hintStyle.Render("  Policy:    ")+valueStyle.Render(pv))
+		hbDisplay := w.heartbeatLabel
+		if hbDisplay == "" {
+			hbDisplay = "every hour"
+		}
+		lines = append(lines, hintStyle.Render("  Heartbeat: ")+valueStyle.Render(hbDisplay))
 		lines = append(lines, tuiSepStyle.Render("  "+strings.Repeat("━", 50)))
 		lines = append(lines, "")
 		lines = append(lines, labelStyle.Render("  Proceed?"))
@@ -6303,35 +6407,47 @@ func tuiOnboardApply(ns string, w *wizardState) (string, error) {
 		msgs = append(msgs, tuiSuccessStyle.Render(fmt.Sprintf("✓ Created ClawInstance: %s", w.instanceName)))
 	}
 
-	// 5. Create a default heartbeat schedule that reviews memory.
-	heartbeatName := fmt.Sprintf("%s-heartbeat", w.instanceName)
-	heartbeat := &kubeclawv1alpha1.ClawSchedule{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      heartbeatName,
-			Namespace: ns,
-		},
-		Spec: kubeclawv1alpha1.ClawScheduleSpec{
-			InstanceRef:       w.instanceName,
-			Schedule:          "0 * * * *",
-			Task:              "Review your memory. Summarise what you know so far and note anything that needs attention.",
-			Type:              "heartbeat",
-			ConcurrencyPolicy: "Forbid",
-			IncludeMemory:     true,
-		},
+	// 5. Create a heartbeat schedule (unless disabled).
+	heartbeatCron := w.heartbeatCron
+	if heartbeatCron == "" && w.heartbeatLabel != "disabled" {
+		heartbeatCron = "0 * * * *" // default to hourly
 	}
-	if err := k8sClient.Create(ctx, heartbeat); err != nil {
-		var existingSched kubeclawv1alpha1.ClawSchedule
-		if getErr := k8sClient.Get(ctx, types.NamespacedName{Name: heartbeatName, Namespace: ns}, &existingSched); getErr == nil {
-			existingSched.Spec = heartbeat.Spec
-			if err2 := k8sClient.Update(ctx, &existingSched); err2 != nil {
-				return "", fmt.Errorf("update heartbeat schedule: %w", err2)
+	if heartbeatCron != "" {
+		heartbeatName := fmt.Sprintf("%s-heartbeat", w.instanceName)
+		heartbeat := &kubeclawv1alpha1.ClawSchedule{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      heartbeatName,
+				Namespace: ns,
+			},
+			Spec: kubeclawv1alpha1.ClawScheduleSpec{
+				InstanceRef:       w.instanceName,
+				Schedule:          heartbeatCron,
+				Task:              "Review your memory. Summarise what you know so far and note anything that needs attention.",
+				Type:              "heartbeat",
+				ConcurrencyPolicy: "Forbid",
+				IncludeMemory:     true,
+			},
+		}
+		if err := k8sClient.Create(ctx, heartbeat); err != nil {
+			var existingSched kubeclawv1alpha1.ClawSchedule
+			if getErr := k8sClient.Get(ctx, types.NamespacedName{Name: heartbeatName, Namespace: ns}, &existingSched); getErr == nil {
+				existingSched.Spec = heartbeat.Spec
+				if err2 := k8sClient.Update(ctx, &existingSched); err2 != nil {
+					return "", fmt.Errorf("update heartbeat schedule: %w", err2)
+				}
+				msgs = append(msgs, tuiSuccessStyle.Render(fmt.Sprintf("✓ Updated heartbeat: %s", heartbeatName)))
+			} else {
+				return "", fmt.Errorf("create heartbeat schedule: %w", err)
 			}
-			msgs = append(msgs, tuiSuccessStyle.Render(fmt.Sprintf("✓ Updated heartbeat: %s", heartbeatName)))
 		} else {
-			return "", fmt.Errorf("create heartbeat schedule: %w", err)
+			hbLabel := w.heartbeatLabel
+			if hbLabel == "" {
+				hbLabel = "every hour"
+			}
+			msgs = append(msgs, tuiSuccessStyle.Render(fmt.Sprintf("✓ Created heartbeat: %s (%s, reviews memory)", heartbeatName, hbLabel)))
 		}
 	} else {
-		msgs = append(msgs, tuiSuccessStyle.Render(fmt.Sprintf("✓ Created heartbeat: %s (every hour, reviews memory)", heartbeatName)))
+		msgs = append(msgs, tuiDimStyle.Render("⏭ Heartbeat disabled — no schedule created"))
 	}
 
 	msgs = append(msgs, "")
