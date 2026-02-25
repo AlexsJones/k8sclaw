@@ -161,7 +161,7 @@ jobs:
 
           mkdir -p homebrew-tap/Formula
 
-          cat > homebrew-tap/Formula/Kubeclaw.rb << RUBY
+          cat > homebrew-tap/Formula/kubeclaw.rb << RUBY
           class Kubeclaw < Formula
             desc "Kubernetes-native AI agent orchestration platform CLI"
             homepage "https://github.com/AlexsJones/kubeclaw"
@@ -199,14 +199,14 @@ jobs:
           RUBY
 
           # Fix heredoc indentation
-          sed -i 's/^          //' homebrew-tap/Formula/Kubeclaw.rb
+          sed -i 's/^          //' homebrew-tap/Formula/kubeclaw.rb
 
       - name: Commit and push
         run: |
           cd homebrew-tap
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add Formula/Kubeclaw.rb
+          git add Formula/kubeclaw.rb
           git diff --cached --quiet && echo "No changes" && exit 0
           git commit -m "Update kubeclaw to ${GITHUB_REF_NAME}"
           git push origin HEAD:main
