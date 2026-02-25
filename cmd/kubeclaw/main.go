@@ -984,7 +984,7 @@ func runInstall(ver string) error {
 
 	// Install cert-manager if not present, then apply webhook certificate.
 	fmt.Println("  Checking cert-manager...")
-	if err := kubectl("get", "namespace", "cert-manager"); err != nil {
+	if err := kubectlQuiet("get", "namespace", "cert-manager"); err != nil {
 		fmt.Println("  Installing cert-manager...")
 		if err := kubectl("apply", "-f",
 			"https://github.com/cert-manager/cert-manager/releases/download/v1.17.1/cert-manager.yaml"); err != nil {
@@ -1167,6 +1167,15 @@ func kubectl(args ...string) error {
 	cmd := exec.Command("kubectl", args...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
+	return cmd.Run()
+}
+
+// kubectlQuiet runs kubectl but suppresses stderr — used for existence probes
+// where a NotFound error is expected and should not be shown to the user.
+func kubectlQuiet(args ...string) error {
+	cmd := exec.Command("kubectl", args...)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = io.Discard
 	return cmd.Run()
 }
 
