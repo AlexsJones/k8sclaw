@@ -83,8 +83,12 @@ func (r *AgentRunReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		return r.reconcileDelete(ctx, log, agentRun)
 	}
 
-	// Add finalizer
-	if !controllerutil.ContainsFinalizer(agentRun, agentRunFinalizer) {
+	// Add finalizer only for non-terminal runs. Completed/failed runs have
+	// their finalizer removed in reconcileCompleted; we must not re-add it or
+	// we create an infinite remove→add→remove loop.
+	isTerminal := agentRun.Status.Phase == sympoziumv1alpha1.AgentRunPhaseSucceeded ||
+		agentRun.Status.Phase == sympoziumv1alpha1.AgentRunPhaseFailed
+	if !isTerminal && !controllerutil.ContainsFinalizer(agentRun, agentRunFinalizer) {
 		controllerutil.AddFinalizer(agentRun, agentRunFinalizer)
 		if err := r.Update(ctx, agentRun); err != nil {
 			if errors.IsConflict(err) {
@@ -312,10 +316,13 @@ func (r *AgentRunReconciler) reconcileCompleted(ctx context.Context, log logr.Lo
 	r.cleanupSkillRBAC(ctx, log, agentRun)
 
 	// Remove the finalizer so the CR can be deleted later if needed.
+	// Use a Patch (not Update) to avoid overwriting status fields (like
+	// tokenUsage) that were set by the status subresource update in succeedRun.
 	if controllerutil.ContainsFinalizer(agentRun, agentRunFinalizer) {
 		log.Info("Removing finalizer from completed AgentRun")
+		patch := client.MergeFrom(agentRun.DeepCopy())
 		controllerutil.RemoveFinalizer(agentRun, agentRunFinalizer)
-		if err := r.Update(ctx, agentRun); err != nil {
+		if err := r.Patch(ctx, agentRun, patch); err != nil {
 			if errors.IsConflict(err) {
 				return ctrl.Result{Requeue: true}, nil
 			}
@@ -410,8 +417,9 @@ func (r *AgentRunReconciler) reconcileDelete(ctx context.Context, log logr.Logge
 		}
 	}
 
+	patch := client.MergeFrom(agentRun.DeepCopy())
 	controllerutil.RemoveFinalizer(agentRun, agentRunFinalizer)
-	return ctrl.Result{}, r.Update(ctx, agentRun)
+	return ctrl.Result{}, r.Patch(ctx, agentRun, patch)
 }
 
 // validatePolicy checks the AgentRun against the applicable SympoziumPolicy.

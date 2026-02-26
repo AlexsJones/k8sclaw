@@ -3,7 +3,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    controller-gen.kubebuilder.io/version: v0.17.2
+    controller-gen.kubebuilder.io/version: v0.20.1
   name: agentruns.sympozium.ai
 spec:
   group: sympozium.ai
@@ -69,8 +69,8 @@ spec:
                 - keep
                 type: string
               instanceRef:
-                description: InstanceRef is the name of the SympoziumInstance this run
-                  belongs to.
+                description: InstanceRef is the name of the SympoziumInstance this
+                  run belongs to.
                 type: string
               model:
                 description: Model specifies the LLM configuration for this run.
@@ -313,6 +313,37 @@ spec:
                 description: StartedAt is when the agent run started.
                 format: date-time
                 type: string
+              tokenUsage:
+                description: TokenUsage contains LLM token counts and timing for this
+                  run.
+                properties:
+                  durationMs:
+                    description: DurationMs is the wall-clock time of the LLM interaction
+                      in milliseconds.
+                    format: int64
+                    type: integer
+                  inputTokens:
+                    description: InputTokens is the total number of prompt/input tokens
+                      sent to the LLM.
+                    type: integer
+                  outputTokens:
+                    description: OutputTokens is the total number of completion/output
+                      tokens received.
+                    type: integer
+                  toolCalls:
+                    description: ToolCalls is the number of tool invocations during
+                      this run.
+                    type: integer
+                  totalTokens:
+                    description: TotalTokens is InputTokens + OutputTokens.
+                    type: integer
+                required:
+                - durationMs
+                - inputTokens
+                - outputTokens
+                - toolCalls
+                - totalTokens
+                type: object
             type: object
         type: object
     served: true
