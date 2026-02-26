@@ -1,0 +1,41 @@
+---
+# Example PersonaPack
+apiVersion: sympozium.ai/v1alpha1
+kind: PersonaPack
+metadata:
+  name: my-team
+  namespace: default
+spec:
+  description: "Custom team persona pack"
+  category: custom
+  version: "1.0.0"
+  authRefs:
+    - secret: my-team-openai-key
+  policyRef: default-policy
+  personas:
+    - name: reviewer
+      displayName: "Code Reviewer"
+      systemPrompt: |
+        You are a code review agent. You review pull requests and
+        provide constructive feedback on code quality, security,
+        and best practices.
+      skills:
+        - code-review
+      toolPolicy:
+        allow:
+          - read_file
+          - list_directory
+          - fetch_url
+        deny:
+          - write_file
+          - execute_command
+      schedule:
+        type: scheduled
+        cron: "0 */4 * * 1-5"
+        task: "Check for new pull requests and review any that are unreviewed."
+      memory:
+        enabled: true
+        seeds:
+          - "Follow team coding standards"
+      channels:
+        - slack

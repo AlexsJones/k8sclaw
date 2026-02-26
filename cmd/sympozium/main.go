@@ -1266,9 +1266,10 @@ const (
 	viewChannels
 	viewPods
 	viewSchedules
+	viewPersonas
 )
 
-var viewNames = []string{"Instances", "Runs", "Policies", "Skills", "Channels", "Pods", "Schedules"}
+var viewNames = []string{"Instances", "Runs", "Policies", "Skills", "Channels", "Pods", "Schedules", "Personas"}
 
 // detailPaneState controls the visibility of the right-hand detail pane.
 type detailPaneState int
@@ -1440,14 +1441,15 @@ type suggestionsMsg struct {
 	items []suggestion
 }
 type dataRefreshMsg struct {
-	instances *[]sympoziumv1alpha1.SympoziumInstance
-	runs      *[]sympoziumv1alpha1.AgentRun
-	policies  *[]sympoziumv1alpha1.SympoziumPolicy
-	skills    *[]sympoziumv1alpha1.SkillPack
-	channels  *[]channelRow
-	pods      *[]podRow
-	schedules *[]sympoziumv1alpha1.SympoziumSchedule
-	fetchErr  string
+	instances    *[]sympoziumv1alpha1.SympoziumInstance
+	runs         *[]sympoziumv1alpha1.AgentRun
+	policies     *[]sympoziumv1alpha1.SympoziumPolicy
+	skills       *[]sympoziumv1alpha1.SkillPack
+	channels     *[]channelRow
+	pods         *[]podRow
+	schedules    *[]sympoziumv1alpha1.SympoziumSchedule
+	personaPacks *[]sympoziumv1alpha1.PersonaPack
+	fetchErr     string
 }
 
 // ── Suggestion ───────────────────────────────────────────────────────────────
@@ -1474,6 +1476,8 @@ var slashCommandSuggestions = []suggestion{
 	{"/delete", "Delete: /delete <type> <name>"},
 	{"/schedule", "Create schedule: /schedule <inst> <cron> <task>"},
 	{"/schedules", "View schedules"},
+	{"/personas", "View PersonaPacks"},
+	{"/persona", "Install persona pack: /persona install <name>"},
 	{"/memory", "View memory: /memory <inst>"},
 	{"/ns", "Switch namespace: /ns <name>"},
 	{"/onboard", "Interactive setup wizard"},
@@ -1486,6 +1490,7 @@ var deleteTypeSuggestions = []suggestion{
 	{"run", "Delete an AgentRun"},
 	{"policy", "Delete a SympoziumPolicy"},
 	{"schedule", "Delete a SympoziumSchedule"},
+	{"persona", "Delete a PersonaPack"},
 	{"channel", "Remove a channel from instance"},
 }
 
@@ -1786,13 +1791,14 @@ type tuiModel struct {
 	wizard wizardState
 
 	// Cached K8s data
-	instances []sympoziumv1alpha1.SympoziumInstance
-	runs      []sympoziumv1alpha1.AgentRun
-	policies  []sympoziumv1alpha1.SympoziumPolicy
-	skills    []sympoziumv1alpha1.SkillPack
-	channels  []channelRow
-	pods      []podRow
-	schedules []sympoziumv1alpha1.SympoziumSchedule
+	instances    []sympoziumv1alpha1.SympoziumInstance
+	runs         []sympoziumv1alpha1.AgentRun
+	policies     []sympoziumv1alpha1.SympoziumPolicy
+	skills       []sympoziumv1alpha1.SkillPack
+	channels     []channelRow
+	pods         []podRow
+	schedules    []sympoziumv1alpha1.SympoziumSchedule
+	personaPacks []sympoziumv1alpha1.PersonaPack
 
 	// Input
 	input        textinput.Model
@@ -1827,6 +1833,7 @@ type tuiModel struct {
 	editTaskInput    bool            // sub-modal for task text entry
 	editTaskTI       textinput.Model // text input for task sub-modal
 	editSkills       []editSkillItem // toggleable skills list
+	editChannels     []editChannelItem // channel bindings
 
 	// Detail pane
 	detailPane       detailPaneState // collapsed, panel, or fullscreen
@@ -1859,11 +1866,19 @@ type editSkillItem struct {
 	category string // e.g. "kubernetes"
 }
 
+// editChannelItem represents a channel binding in the edit modal.
+type editChannelItem struct {
+	chType    string // telegram, slack, discord, whatsapp
+	enabled   bool   // whether channel is bound to the instance
+	secretRef string // secret name for credentials
+}
+
 var editScheduleTypes = []string{"heartbeat", "scheduled", "sweep"}
 var editConcurrencyPolicies = []string{"Forbid", "Allow", "Replace"}
 var editMemoryFieldCount = 3    // enabled, maxSizeKB, systemPrompt
 var editHeartbeatFieldCount = 6 // schedule, task, type, concurrencyPolicy, includeMemory, suspend
-var editTabNames = []string{"Memory", "Heartbeat", "Skills"}
+var editTabNames = []string{"Memory", "Heartbeat", "Skills", "Channels"}
+var availableChannelTypes = []string{"telegram", "slack", "discord", "whatsapp"}
 
 const maxLogLines = 200
 
@@ -1986,6 +2001,7 @@ func refreshDataCmd() tea.Cmd {
 			pols    sympoziumv1alpha1.SympoziumPolicyList
 			skls    sympoziumv1alpha1.SkillPackList
 			scheds  sympoziumv1alpha1.SympoziumScheduleList
+			packs   sympoziumv1alpha1.PersonaPackList
 			podList corev1.PodList
 		)
 
@@ -1999,7 +2015,7 @@ func refreshDataCmd() tea.Cmd {
 
 		// Fetch all resources in parallel.
 		var wg sync.WaitGroup
-		wg.Add(6)
+		wg.Add(7)
 
 		go func() {
 			defer wg.Done()
@@ -2037,6 +2053,12 @@ func refreshDataCmd() tea.Cmd {
 				addErr(fmt.Sprintf("pods: %v", err))
 			}
 		}()
+		go func() {
+			defer wg.Done()
+			if err := k8sClient.List(ctx, &packs); err != nil {
+				addErr(fmt.Sprintf("personapacks: %v", err))
+			}
+		}()
 
 		wg.Wait()
 
@@ -2060,6 +2082,9 @@ func refreshDataCmd() tea.Cmd {
 		}
 		if !containsPrefix(errs, "schedules:") {
 			msg.schedules = &scheds.Items
+		}
+		if !containsPrefix(errs, "personapacks:") {
+			msg.personaPacks = &packs.Items
 		}
 
 		// Build channel rows from instances.
@@ -2221,6 +2246,8 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					max = editHeartbeatFieldCount
 				} else if m.editTab == 2 {
 					max = len(m.editSkills)
+				} else if m.editTab == 3 {
+					max = len(m.editChannels)
 				}
 				if m.editField < max-1 {
 					m.editField++
@@ -2247,6 +2274,10 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				} else if m.editTab == 2 {
 					if m.editField >= 0 && m.editField < len(m.editSkills) {
 						m.editSkills[m.editField].enabled = !m.editSkills[m.editField].enabled
+					}
+				} else if m.editTab == 3 {
+					if m.editField >= 0 && m.editField < len(m.editChannels) {
+						m.editChannels[m.editField].enabled = !m.editChannels[m.editField].enabled
 					}
 				}
 				return m, nil
@@ -2319,6 +2350,10 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				} else if m.editTab == 2 {
 					if m.editField >= 0 && m.editField < len(m.editSkills) {
 						m.editSkills[m.editField].enabled = !m.editSkills[m.editField].enabled
+					}
+				} else if m.editTab == 3 {
+					if m.editField >= 0 && m.editField < len(m.editChannels) {
+						m.editChannels[m.editField].enabled = !m.editChannels[m.editField].enabled
 					}
 				}
 				return m, nil
@@ -2765,6 +2800,9 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.schedules != nil {
 			m.schedules = *msg.schedules
 		}
+		if msg.personaPacks != nil {
+			m.personaPacks = *msg.personaPacks
+		}
 		if msg.fetchErr != "" {
 			m.addLog(tuiErrorStyle.Render("✗ Fetch error: " + msg.fetchErr))
 			m.connected = false
@@ -2869,6 +2907,8 @@ func (m tuiModel) activeViewCount() int {
 		return len(m.filteredPods())
 	case viewSchedules:
 		return len(m.schedules)
+	case viewPersonas:
+		return len(m.personaPacks)
 	}
 	return 0
 }
@@ -2973,6 +3013,21 @@ func (m tuiModel) handleRowAction() (tea.Model, tea.Cmd) {
 			}
 			m.addLog(fmt.Sprintf("%s │ inst:%s cron:%s type:%s phase:%s runs:%d next:%s",
 				s.Name, s.Spec.InstanceRef, s.Spec.Schedule, s.Spec.Type, s.Status.Phase, s.Status.TotalRuns, nextRun))
+		}
+	case viewPersonas:
+		if m.selectedRow < len(m.personaPacks) {
+			pp := m.personaPacks[m.selectedRow]
+			var personaNames []string
+			for _, p := range pp.Spec.Personas {
+				display := p.Name
+				if p.DisplayName != "" {
+					display = p.DisplayName
+				}
+				personaNames = append(personaNames, display)
+			}
+			m.addLog(fmt.Sprintf("%s │ %s │ personas: %s │ phase:%s installed:%d/%d",
+				pp.Name, pp.Spec.Category, strings.Join(personaNames, ", "),
+				pp.Status.Phase, pp.Status.InstalledCount, pp.Status.PersonaCount))
 		}
 	}
 	return m, nil
@@ -3095,6 +3150,13 @@ func (m tuiModel) handleRowDescribe() (tea.Model, tea.Cmd) {
 				return tuiDescribeResource(m.namespace, "sympoziumschedule", name)
 			})
 		}
+	case viewPersonas:
+		if m.selectedRow < len(m.personaPacks) {
+			name := m.personaPacks[m.selectedRow].Name
+			return m, m.asyncCmd(func() (string, error) {
+				return tuiDescribeResource(m.namespace, "personapack", name)
+			})
+		}
 	}
 	return m, nil
 }
@@ -3158,6 +3220,15 @@ func (m tuiModel) handleRowDelete() (tea.Model, tea.Cmd) {
 			m.deleteResourceName = name
 			ns := m.namespace
 			m.deleteFunc = func() (string, error) { return tuiDelete(ns, "schedule", name) }
+		}
+	case viewPersonas:
+		if m.selectedRow < len(m.personaPacks) {
+			name := m.personaPacks[m.selectedRow].Name
+			m.confirmDelete = true
+			m.deleteResourceKind = "persona pack"
+			m.deleteResourceName = name
+			ns := m.namespace
+			m.deleteFunc = func() (string, error) { return tuiDelete(ns, "persona", name) }
 		}
 	}
 	return m, nil
@@ -3234,6 +3305,19 @@ func (m tuiModel) handleRowEdit() (tea.Model, tea.Cmd) {
 				category: sp.Spec.Category,
 			})
 		}
+		// Populate channels tab: list all available channel types, mark those bound.
+		boundChannels := make(map[string]string) // type → secret
+		for _, ch := range inst.Spec.Channels {
+			boundChannels[ch.Type] = ch.ConfigRef.Secret
+		}
+		m.editChannels = nil
+		for _, ct := range availableChannelTypes {
+			m.editChannels = append(m.editChannels, editChannelItem{
+				chType:    ct,
+				enabled:   boundChannels[ct] != "",
+				secretRef: boundChannels[ct],
+			})
+		}
 		m.showEditModal = true
 	case viewSchedules:
 		if m.selectedRow >= len(m.schedules) {
@@ -3262,9 +3346,10 @@ func (m tuiModel) handleRowEdit() (tea.Model, tea.Cmd) {
 				break
 			}
 		}
-		// Also populate memory and skills from instance if found.
+		// Also populate memory, skills, and channels from instance if found.
 		m.editMemory = editMemoryForm{maxSizeKB: "256"}
 		m.editSkills = nil
+		m.editChannels = nil
 		for _, inst := range m.instances {
 			if inst.Name == sched.Spec.InstanceRef {
 				if inst.Spec.Memory != nil {
@@ -3287,6 +3372,17 @@ func (m tuiModel) handleRowEdit() (tea.Model, tea.Cmd) {
 						category: sp.Spec.Category,
 					})
 				}
+				boundChannels := make(map[string]string)
+				for _, ch := range inst.Spec.Channels {
+					boundChannels[ch.Type] = ch.ConfigRef.Secret
+				}
+				for _, ct := range availableChannelTypes {
+					m.editChannels = append(m.editChannels, editChannelItem{
+						chType:    ct,
+						enabled:   boundChannels[ct] != "",
+						secretRef: boundChannels[ct],
+					})
+				}
 				break
 			}
 		}
@@ -3305,11 +3401,13 @@ func (m tuiModel) applyEditModal() tea.Cmd {
 	hb := m.editHeartbeat
 	skills := make([]editSkillItem, len(m.editSkills))
 	copy(skills, m.editSkills)
+	channels := make([]editChannelItem, len(m.editChannels))
+	copy(channels, m.editChannels)
 	return func() tea.Msg {
 		ctx := context.Background()
 		var msgs []string
 
-		// Apply memory changes to SympoziumInstance.
+		// Apply memory, skills, and channel changes to SympoziumInstance.
 		if instName != "" {
 			var inst sympoziumv1alpha1.SympoziumInstance
 			if err := k8sClient.Get(ctx, types.NamespacedName{Name: instName, Namespace: ns}, &inst); err != nil {
@@ -3336,6 +3434,20 @@ func (m tuiModel) applyEditModal() tea.Cmd {
 			}
 			inst.Spec.Skills = skillRefs
 
+			// Apply channel toggles to instance.
+			var channelSpecs []sympoziumv1alpha1.ChannelSpec
+			for _, ch := range channels {
+				if ch.enabled {
+					channelSpecs = append(channelSpecs, sympoziumv1alpha1.ChannelSpec{
+						Type: ch.chType,
+						ConfigRef: sympoziumv1alpha1.SecretRef{
+							Secret: ch.secretRef,
+						},
+					})
+				}
+			}
+			inst.Spec.Channels = channelSpecs
+
 			if err := k8sClient.Update(ctx, &inst); err != nil {
 				return cmdResultMsg{err: fmt.Errorf("update instance %q: %w", instName, err)}
 			}
@@ -3348,6 +3460,15 @@ func (m tuiModel) applyEditModal() tea.Cmd {
 					}
 				}
 				updateParts = append(updateParts, fmt.Sprintf("%d skill(s)", enabled))
+			}
+			chEnabled := 0
+			for _, ch := range channels {
+				if ch.enabled {
+					chEnabled++
+				}
+			}
+			if chEnabled > 0 {
+				updateParts = append(updateParts, fmt.Sprintf("%d channel(s)", chEnabled))
 			}
 			msgs = append(msgs, fmt.Sprintf("%s updated on %s", strings.Join(updateParts, " + "), instName))
 		}
@@ -3585,6 +3706,23 @@ func (m *tuiModel) updateSuggestions(input string) tea.Cmd {
 		if argIdx == 1 {
 			return m.fetchSuggestionsAsync(func() []suggestion { return fetchInstanceSuggestions(ns, prefix) })
 		}
+	case "/persona":
+		if argIdx == 1 {
+			var matches []suggestion
+			for _, s := range []suggestion{
+				{"install", "Install a PersonaPack"},
+				{"delete", "Delete a PersonaPack"},
+			} {
+				if prefix == "" || strings.HasPrefix(s.text, prefix) {
+					matches = append(matches, s)
+				}
+			}
+			m.suggestions = matches
+			return nil
+		}
+		if argIdx == 2 {
+			return m.fetchSuggestionsAsync(func() []suggestion { return fetchPersonaPackSuggestions(ns, prefix) })
+		}
 	case "/delete":
 		if argIdx == 1 {
 			var matches []suggestion
@@ -3698,6 +3836,29 @@ func fetchPolicySuggestions(ns, prefix string) []suggestion {
 	return out
 }
 
+func fetchPersonaPackSuggestions(ns, prefix string) []suggestion {
+	if k8sClient == nil {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	var list sympoziumv1alpha1.PersonaPackList
+	if err := k8sClient.List(ctx, &list, client.InNamespace(ns)); err != nil {
+		return nil
+	}
+	var out []suggestion
+	for _, pp := range list.Items {
+		if prefix == "" || strings.HasPrefix(strings.ToLower(pp.Name), prefix) {
+			desc := pp.Spec.Category
+			if desc == "" {
+				desc = fmt.Sprintf("%d personas", len(pp.Spec.Personas))
+			}
+			out = append(out, suggestion{text: pp.Name, desc: desc})
+		}
+	}
+	return out
+}
+
 func fetchDeleteTargetSuggestions(ns, resourceType, prefix string) []suggestion {
 	switch resourceType {
 	case "instance", "inst":
@@ -3706,6 +3867,8 @@ func fetchDeleteTargetSuggestions(ns, resourceType, prefix string) []suggestion 
 		return fetchRunSuggestions(ns, prefix, false)
 	case "policy", "pol":
 		return fetchPolicySuggestions(ns, prefix)
+	case "persona":
+		return fetchPersonaPackSuggestions(ns, prefix)
 	}
 	return nil
 }
@@ -3788,6 +3951,41 @@ func (m tuiModel) handleCommand(input string) (tea.Model, tea.Cmd) {
 		m.selectedRow = 0
 		m.tableScroll = 0
 		m.addLog("Switched to Schedules view")
+		return m, nil
+
+	case "/personas":
+		m.activeView = viewPersonas
+		m.selectedRow = 0
+		m.tableScroll = 0
+		m.addLog("Switched to Personas view")
+		return m, nil
+
+	case "/persona":
+		if len(args) < 1 {
+			m.addLog(tuiErrorStyle.Render("Usage: /persona install <pack-name>"))
+			return m, nil
+		}
+		subCmd := strings.ToLower(args[0])
+		switch subCmd {
+		case "install":
+			if len(args) < 2 {
+				m.addLog(tuiErrorStyle.Render("Usage: /persona install <pack-name>"))
+				return m, nil
+			}
+			packName := args[1]
+			ns := m.namespace
+			return m, m.asyncCmd(func() (string, error) { return tuiInstallPersonaPack(ns, packName) })
+		case "delete":
+			if len(args) < 2 {
+				m.addLog(tuiErrorStyle.Render("Usage: /persona delete <pack-name>"))
+				return m, nil
+			}
+			packName := args[1]
+			ns := m.namespace
+			return m, m.asyncCmd(func() (string, error) { return tuiDeletePersonaPack(ns, packName) })
+		default:
+			m.addLog(tuiErrorStyle.Render("Unknown sub-command. Usage: /persona install|delete <pack-name>"))
+		}
 		return m, nil
 
 	case "/schedule":
@@ -4139,6 +4337,8 @@ func (m tuiModel) renderTable(tableH int) string {
 		b.WriteString(m.renderPodsTable(tableH))
 	case viewSchedules:
 		b.WriteString(m.renderSchedulesTable(tableH))
+	case viewPersonas:
+		b.WriteString(m.renderPersonasTable(tableH))
 	}
 
 	return b.String()
@@ -4563,6 +4763,52 @@ func (m tuiModel) renderSchedulesTable(tableH int) string {
 			if m.width > renderedW {
 				b.WriteString(style.Render(strings.Repeat(" ", m.width-renderedW)))
 			}
+		}
+		b.WriteString("\n")
+	}
+	return b.String()
+}
+
+func (m tuiModel) renderPersonasTable(tableH int) string {
+	var b strings.Builder
+
+	header := fmt.Sprintf(" %-24s %-14s %-10s %-10s %-12s %-8s", "NAME", "CATEGORY", "PERSONAS", "INSTALLED", "PHASE", "AGE")
+	b.WriteString(tuiColHeaderStyle.Render(padRight(header, m.width)))
+	b.WriteString("\n")
+
+	if len(m.personaPacks) == 0 {
+		b.WriteString(m.renderEmptyTable(tableH-1, "No PersonaPacks found — apply one from config/personas/"))
+		return b.String()
+	}
+
+	for i := 0; i < tableH-1; i++ {
+		idx := i + m.tableScroll
+		if idx >= len(m.personaPacks) {
+			b.WriteString(strings.Repeat(" ", m.width) + "\n")
+			continue
+		}
+		pp := m.personaPacks[idx]
+		age := shortDuration(time.Since(pp.CreationTimestamp.Time))
+		phase := pp.Status.Phase
+		if phase == "" {
+			phase = "Pending"
+		}
+		cat := pp.Spec.Category
+		if cat == "" {
+			cat = "-"
+		}
+
+		row := fmt.Sprintf(" %-24s %-14s %-10d %-10d %-12s %-8s",
+			truncate(pp.Name, 24), truncate(cat, 14), pp.Status.PersonaCount, pp.Status.InstalledCount, phase, age)
+
+		if idx == m.selectedRow {
+			b.WriteString(tuiRowSelectedStyle.Render(padRight(row, m.width)))
+		} else {
+			style := tuiRowStyle
+			if idx%2 == 1 {
+				style = tuiRowAltStyle
+			}
+			b.WriteString(style.Render(padRight(row, m.width)))
 		}
 		b.WriteString("\n")
 	}
@@ -5454,7 +5700,7 @@ func (m tuiModel) renderEditModal(base string) string {
 		renderField(3, "Concurrency", "◀ "+editConcurrencyPolicies[m.editHeartbeat.concurrencyPolicy]+" ▶")
 		renderBool(4, "IncludeMemory", m.editHeartbeat.includeMemory)
 		renderBool(5, "Suspend", m.editHeartbeat.suspend)
-	} else {
+	} else if m.editTab == 2 {
 		// Skills tab
 		if len(m.editSkills) == 0 {
 			content.WriteString(tuiDimStyle.Render("  No SkillPacks found in the cluster.") + "\n")
@@ -5473,6 +5719,31 @@ func (m tuiModel) renderEditModal(base string) string {
 				lbl := fmt.Sprintf("  %s %s%s", tog, sk.name, cat)
 				if m.editField == i {
 					lbl = highlight.Render(fmt.Sprintf("▸ %s %s%s", tog, sk.name, cat))
+				} else {
+					lbl = value.Render(lbl)
+				}
+				content.WriteString("  " + lbl + "\n")
+			}
+		}
+	} else if m.editTab == 3 {
+		// Channels tab
+		if len(m.editChannels) == 0 {
+			content.WriteString(tuiDimStyle.Render("  No channel types available.") + "\n")
+		} else {
+			content.WriteString(tuiDimStyle.Render("  Toggle channels on/off with space or enter:") + "\n")
+			content.WriteString(tuiDimStyle.Render("  Channels require a credentials secret in the cluster.") + "\n\n")
+			for i, ch := range m.editChannels {
+				tog := "○"
+				if ch.enabled {
+					tog = "●"
+				}
+				secret := tuiDimStyle.Render("no secret")
+				if ch.secretRef != "" {
+					secret = ch.secretRef
+				}
+				lbl := fmt.Sprintf("  %s %s  %s", tog, ch.chType, secret)
+				if m.editField == i {
+					lbl = highlight.Render(fmt.Sprintf("▸ %s %s  %s", tog, ch.chType, secret))
 				} else {
 					lbl = value.Render(lbl)
 				}
@@ -5734,8 +6005,14 @@ func tuiDelete(ns, resourceType, name string) (string, error) {
 			return "", fmt.Errorf("delete schedule: %w", err)
 		}
 		return tuiSuccessStyle.Render(fmt.Sprintf("✓ Deleted schedule: %s", name)), nil
+	case "persona":
+		obj := &sympoziumv1alpha1.PersonaPack{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns}}
+		if err := k8sClient.Delete(ctx, obj); err != nil {
+			return "", fmt.Errorf("delete persona pack: %w", err)
+		}
+		return tuiSuccessStyle.Render(fmt.Sprintf("✓ Deleted PersonaPack: %s (owned resources will be garbage-collected)", name)), nil
 	default:
-		return "", fmt.Errorf("unknown type: %s (use: instance, run, policy, schedule, channel)", resourceType)
+		return "", fmt.Errorf("unknown type: %s (use: instance, run, policy, schedule, persona, channel)", resourceType)
 	}
 }
 
@@ -5839,6 +6116,36 @@ func tuiCreateSchedule(ns, instanceName, cronExpr, task string) (string, error) 
 		return "", fmt.Errorf("create schedule: %w", err)
 	}
 	return tuiSuccessStyle.Render(fmt.Sprintf("✓ Created schedule %s (%s)", name, cronExpr)), nil
+}
+
+func tuiInstallPersonaPack(ns, packName string) (string, error) {
+	ctx := context.Background()
+
+	// Check if pack already exists.
+	var existing sympoziumv1alpha1.PersonaPack
+	if err := k8sClient.Get(ctx, types.NamespacedName{Name: packName, Namespace: ns}, &existing); err == nil {
+		return "", fmt.Errorf("PersonaPack %q already exists (phase: %s, %d/%d personas installed)",
+			packName, existing.Status.Phase, existing.Status.InstalledCount, existing.Status.PersonaCount)
+	}
+
+	// Look for a built-in pack YAML on disk. If not found, create a minimal one.
+	// The user is expected to have applied the pack YAML via kubectl or sympozium install.
+	return "", fmt.Errorf("PersonaPack %q not found in cluster. Apply it first:\n  kubectl apply -f config/personas/%s.yaml", packName, packName)
+}
+
+func tuiDeletePersonaPack(ns, packName string) (string, error) {
+	ctx := context.Background()
+
+	var pack sympoziumv1alpha1.PersonaPack
+	if err := k8sClient.Get(ctx, types.NamespacedName{Name: packName, Namespace: ns}, &pack); err != nil {
+		return "", fmt.Errorf("PersonaPack %q not found: %w", packName, err)
+	}
+
+	if err := k8sClient.Delete(ctx, &pack); err != nil {
+		return "", fmt.Errorf("delete PersonaPack %q: %w", packName, err)
+	}
+
+	return tuiSuccessStyle.Render(fmt.Sprintf("✓ Deleted PersonaPack %s (owned resources will be garbage-collected)", packName)), nil
 }
 
 func tuiShowMemory(ns, instanceName string) (string, error) {
