@@ -12,8 +12,9 @@
   From the creator of <a href="https://github.com/k8sgpt-ai/k8sgpt">k8sgpt</a> and <a href="https://github.com/AlexsJones/llmfit">llmfit</a>
 </p>
 
+<p align="center">
 **This project is under active development. API's will change, things will be break. Be brave.**
-
+</p>
 <p align="center">
   <a href="https://github.com/AlexsJones/sympozium/actions"><img src="https://github.com/AlexsJones/sympozium/actions/workflows/build.yaml/badge.svg" alt="Build"></a>
   <a href="https://github.com/AlexsJones/sympozium/releases/latest"><img src="https://img.shields.io/github/v/release/AlexsJones/sympozium" alt="Release"></a>
