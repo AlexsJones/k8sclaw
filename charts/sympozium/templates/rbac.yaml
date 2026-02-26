@@ -32,6 +32,7 @@ rules:
       - sympoziumpolicies
       - skillpacks
       - sympoziumschedules
+      - personapacks
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   - apiGroups: ["sympozium.ai"]
     resources:
@@ -40,6 +41,7 @@ rules:
       - sympoziumpolicies/status
       - skillpacks/status
       - sympoziumschedules/status
+      - personapacks/status
     verbs: ["get", "update", "patch"]
   - apiGroups: ["sympozium.ai"]
     resources:
@@ -48,6 +50,7 @@ rules:
       - sympoziumpolicies/finalizers
       - skillpacks/finalizers
       - sympoziumschedules/finalizers
+      - personapacks/finalizers
     verbs: ["update"]
   # Core resources for agent pods
   - apiGroups: [""]
@@ -63,6 +66,10 @@ rules:
   # Jobs for agent runs
   - apiGroups: ["batch"]
     resources: ["jobs"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # Deployments
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   # Leader election
   - apiGroups: ["coordination.k8s.io"]
