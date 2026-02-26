@@ -62,6 +62,16 @@ func (s *Server) Start(addr string) error {
 	mux.HandleFunc("GET /api/v1/skills", s.listSkills)
 	mux.HandleFunc("GET /api/v1/skills/{name}", s.getSkill)
 
+	// Schedule endpoints
+	mux.HandleFunc("GET /api/v1/schedules", s.listSchedules)
+	mux.HandleFunc("GET /api/v1/schedules/{name}", s.getSchedule)
+	mux.HandleFunc("POST /api/v1/schedules", s.createSchedule)
+	mux.HandleFunc("DELETE /api/v1/schedules/{name}", s.deleteSchedule)
+
+	// PersonaPack endpoints
+	mux.HandleFunc("GET /api/v1/personapacks", s.listPersonaPacks)
+	mux.HandleFunc("GET /api/v1/personapacks/{name}", s.getPersonaPack)
+
 	// WebSocket streaming
 	mux.HandleFunc("/ws/stream", s.handleStream)
 
@@ -299,6 +309,159 @@ func (s *Server) getSkill(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, sk)
+}
+
+// --- Schedule handlers ---
+
+func (s *Server) listSchedules(w http.ResponseWriter, r *http.Request) {
+	ns := r.URL.Query().Get("namespace")
+	if ns == "" {
+		ns = "default"
+	}
+
+	var list sympoziumv1alpha1.SympoziumScheduleList
+	if err := s.client.List(r.Context(), &list, client.InNamespace(ns)); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	writeJSON(w, list.Items)
+}
+
+func (s *Server) getSchedule(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	ns := r.URL.Query().Get("namespace")
+	if ns == "" {
+		ns = "default"
+	}
+
+	var sched sympoziumv1alpha1.SympoziumSchedule
+	if err := s.client.Get(r.Context(), types.NamespacedName{Name: name, Namespace: ns}, &sched); err != nil {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+
+	writeJSON(w, sched)
+}
+
+// CreateScheduleRequest is the request body for creating a new SympoziumSchedule.
+type CreateScheduleRequest struct {
+	// Name is the schedule resource name. If empty, a name is generated from instanceRef.
+	Name string `json:"name,omitempty"`
+	// InstanceRef is the name of the SympoziumInstance this schedule belongs to.
+	InstanceRef string `json:"instanceRef"`
+	// Schedule is a cron expression (e.g. "0 * * * *").
+	Schedule string `json:"schedule"`
+	// Task is the task description sent to the agent on each trigger.
+	Task string `json:"task"`
+	// Type categorises the schedule: heartbeat, scheduled, or sweep.
+	Type string `json:"type,omitempty"`
+	// Suspend pauses scheduling when true.
+	Suspend bool `json:"suspend,omitempty"`
+	// ConcurrencyPolicy controls behaviour when a trigger fires while the previous run is active.
+	ConcurrencyPolicy string `json:"concurrencyPolicy,omitempty"`
+}
+
+func (s *Server) createSchedule(w http.ResponseWriter, r *http.Request) {
+	ns := r.URL.Query().Get("namespace")
+	if ns == "" {
+		ns = "default"
+	}
+
+	var req CreateScheduleRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	if req.InstanceRef == "" || req.Schedule == "" || req.Task == "" {
+		http.Error(w, "instanceRef, schedule, and task are required", http.StatusBadRequest)
+		return
+	}
+
+	sched := &sympoziumv1alpha1.SympoziumSchedule{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: ns,
+		},
+		Spec: sympoziumv1alpha1.SympoziumScheduleSpec{
+			InstanceRef: req.InstanceRef,
+			Schedule:    req.Schedule,
+			Task:        req.Task,
+			Suspend:     req.Suspend,
+		},
+	}
+
+	if req.Name != "" {
+		sched.ObjectMeta.Name = req.Name
+	} else {
+		sched.ObjectMeta.GenerateName = req.InstanceRef + "-schedule-"
+	}
+
+	if req.Type != "" {
+		sched.Spec.Type = req.Type
+	}
+	if req.ConcurrencyPolicy != "" {
+		sched.Spec.ConcurrencyPolicy = req.ConcurrencyPolicy
+	}
+
+	if err := s.client.Create(r.Context(), sched); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusCreated)
+	writeJSON(w, sched)
+}
+
+func (s *Server) deleteSchedule(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	ns := r.URL.Query().Get("namespace")
+	if ns == "" {
+		ns = "default"
+	}
+
+	sched := &sympoziumv1alpha1.SympoziumSchedule{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
+	}
+	if err := s.client.Delete(r.Context(), sched); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// --- PersonaPack handlers ---
+
+func (s *Server) listPersonaPacks(w http.ResponseWriter, r *http.Request) {
+	ns := r.URL.Query().Get("namespace")
+	if ns == "" {
+		ns = "default"
+	}
+
+	var list sympoziumv1alpha1.PersonaPackList
+	if err := s.client.List(r.Context(), &list, client.InNamespace(ns)); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	writeJSON(w, list.Items)
+}
+
+func (s *Server) getPersonaPack(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	ns := r.URL.Query().Get("namespace")
+	if ns == "" {
+		ns = "default"
+	}
+
+	var pp sympoziumv1alpha1.PersonaPack
+	if err := s.client.Get(r.Context(), types.NamespacedName{Name: name, Namespace: ns}, &pp); err != nil {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+
+	writeJSON(w, pp)
 }
 
 // --- WebSocket streaming ---
