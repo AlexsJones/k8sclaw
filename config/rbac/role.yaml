@@ -8,6 +8,16 @@ rules:
   - ""
   resources:
   - configmaps
+  - endpoints
+  - events
+  - limitranges
+  - persistentvolumeclaims
+  - pods
+  - pods/exec
+  - pods/log
+  - pods/portforward
+  - replicationcontrollers
+  - resourcequotas
   - secrets
   - serviceaccounts
   - services
@@ -22,28 +32,41 @@ rules:
 - apiGroups:
   - ""
   resources:
-  - events
-  verbs:
-  - create
-  - patch
-- apiGroups:
-  - ""
-  resources:
-  - pods
+  - namespaces
+  - nodes
+  - persistentvolumes
   verbs:
   - get
   - list
   - watch
 - apiGroups:
-  - ""
+  - apiextensions.k8s.io
   resources:
-  - pods/log
+  - customresourcedefinitions
   verbs:
   - get
+  - list
+  - watch
 - apiGroups:
   - apps
   resources:
+  - controllerrevisions
+  - daemonsets
   - deployments
+  - replicasets
+  - statefulsets
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - autoscaling
+  resources:
+  - horizontalpodautoscalers
   verbs:
   - create
   - delete
@@ -55,6 +78,7 @@ rules:
 - apiGroups:
   - batch
   resources:
+  - cronjobs
   - jobs
   verbs:
   - create
@@ -77,6 +101,32 @@ rules:
   - update
   - watch
 - apiGroups:
+  - networking.k8s.io
+  resources:
+  - ingressclasses
+  - ingresses
+  - networkpolicies
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - policy
+  resources:
+  - poddisruptionbudgets
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
   - rbac.authorization.k8s.io
   resources:
   - clusterrolebindings
@@ -90,6 +140,15 @@ rules:
   - list
   - patch
   - update
+  - watch
+- apiGroups:
+  - storage.k8s.io
+  resources:
+  - storageclasses
+  - volumeattachments
+  verbs:
+  - get
+  - list
   - watch
 - apiGroups:
   - sympozium.ai
