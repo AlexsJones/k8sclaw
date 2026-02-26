@@ -76,11 +76,11 @@ spec:
                   for each run.
                 type: boolean
               instanceRef:
-                description: InstanceRef is the name of the SympoziumInstance this schedule
-                  belongs to.
+                description: InstanceRef is the name of the SympoziumInstance this
+                  schedule belongs to.
                 type: string
               schedule:
-                description: Schedule is a cron expression (e.g. "*/5 * * * *").
+                description: Schedule is a cron expression (e.g. "0 * * * *").
                 type: string
               suspend:
                 description: Suspend pauses scheduling when true.

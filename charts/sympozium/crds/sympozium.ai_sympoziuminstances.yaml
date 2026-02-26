@@ -198,6 +198,10 @@ spec:
                         ConfigRef references the secret containing channel credentials.
                         Optional for channels that use alternative authentication (e.g. WhatsApp QR pairing).
                       properties:
+                        provider:
+                          description: Provider is the AI provider name (e.g. "openai",
+                            "anthropic", "azure-openai", "ollama").
+                          type: string
                         secret:
                           description: Secret is the name of the Secret.
                           type: string
@@ -234,8 +238,8 @@ spec:
                 - enabled
                 type: object
               policyRef:
-                description: PolicyRef references the SympoziumPolicy that applies to this
-                  instance.
+                description: PolicyRef references the SympoziumPolicy that applies
+                  to this instance.
                 type: string
               skills:
                 description: Skills to mount (from SkillPack CRDs or ConfigMaps).

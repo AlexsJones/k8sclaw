@@ -158,8 +158,8 @@ spec:
             description: SympoziumPolicyStatus defines the observed state of SympoziumPolicy.
             properties:
               boundInstances:
-                description: BoundInstances is the number of SympoziumInstances bound to
-                  this policy.
+                description: BoundInstances is the number of SympoziumInstances bound
+                  to this policy.
                 type: integer
               conditions:
                 description: Conditions represent the latest available observations.
