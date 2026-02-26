@@ -22,6 +22,7 @@ type SympoziumPolicyReconciler struct {
 
 // +kubebuilder:rbac:groups=sympozium.ai,resources=sympoziumpolicies,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=sympozium.ai,resources=sympoziumpolicies/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=sympozium.ai,resources=sympoziumpolicies/finalizers,verbs=update
 
 // Reconcile handles SympoziumPolicy reconciliation.
 func (r *SympoziumPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
