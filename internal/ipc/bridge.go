@@ -39,7 +39,7 @@ type Bridge struct {
 	Log            logr.Logger
 	Watcher        *Watcher
 	agentDone      chan struct{} // signalled when result.json is received
-	processedFiles sync.Map     // dedup fsnotify Create+Write for the same file
+	processedFiles sync.Map      // dedup fsnotify Create+Write for the same file
 }
 
 // NewBridge creates a new IPC bridge.

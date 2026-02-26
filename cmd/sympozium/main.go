@@ -1885,23 +1885,23 @@ type tuiModel struct {
 	deleteFunc         func() (string, error) // the actual delete function
 
 	// Edit modal
-	showEditModal       bool
-	editTab             int // 0=Memory, 1=Heartbeat
-	editInstanceName    string
-	editScheduleName    string // non-empty when editing an existing schedule
-	editField           int    // which field is selected in the current tab
-	editMemory          editMemoryForm
-	editHeartbeat       editHeartbeatForm
-	editTaskInput       bool              // sub-modal for task text entry
-	editTaskTI          textinput.Model   // text input for task sub-modal
-	editChannelTokenInput bool            // sub-modal for channel token entry
-	editChannelTokenTI    textinput.Model // text input for channel token sub-modal
-	editChannelTokenIdx   int             // index into editChannels being configured
-	editChannelNewTokens  map[int]string  // idx → token for channels needing secret creation
-	editSkills          []editSkillItem   // toggleable skills list
-	editChannels        []editChannelItem // channel bindings
-	editPersonaPackName string            // non-empty when editing a PersonaPack
-	editPersonas        []editPersonaItem // toggleable personas list
+	showEditModal         bool
+	editTab               int // 0=Memory, 1=Heartbeat
+	editInstanceName      string
+	editScheduleName      string // non-empty when editing an existing schedule
+	editField             int    // which field is selected in the current tab
+	editMemory            editMemoryForm
+	editHeartbeat         editHeartbeatForm
+	editTaskInput         bool              // sub-modal for task text entry
+	editTaskTI            textinput.Model   // text input for task sub-modal
+	editChannelTokenInput bool              // sub-modal for channel token entry
+	editChannelTokenTI    textinput.Model   // text input for channel token sub-modal
+	editChannelTokenIdx   int               // index into editChannels being configured
+	editChannelNewTokens  map[int]string    // idx → token for channels needing secret creation
+	editSkills            []editSkillItem   // toggleable skills list
+	editChannels          []editChannelItem // channel bindings
+	editPersonaPackName   string            // non-empty when editing a PersonaPack
+	editPersonas          []editPersonaItem // toggleable personas list
 
 	// Detail pane
 	detailPane       detailPaneState // collapsed, panel, or fullscreen

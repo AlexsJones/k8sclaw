@@ -38,20 +38,20 @@ type EventBus interface {
 
 // Topics used by Sympozium components.
 const (
-	TopicAgentRunRequested     = "agent.run.requested"
-	TopicAgentRunStarted       = "agent.run.started"
-	TopicAgentRunCompleted     = "agent.run.completed"
-	TopicAgentRunFailed        = "agent.run.failed"
-	TopicAgentStreamChunk      = "agent.stream.chunk"
-	TopicAgentSpawnRequest     = "agent.spawn.request"
-	TopicChannelMessageRecv    = "channel.message.received"
-	TopicChannelMessageSend    = "channel.message.send"
-	TopicChannelHealthUpdate   = "channel.health.update"
-	TopicToolExecRequest       = "tool.exec.request"
-	TopicToolExecResult        = "tool.exec.result"
-	TopicToolApprovalRequest   = "tool.approval.request"
-	TopicToolApprovalResponse  = "tool.approval.response"
-	TopicScheduleUpsert        = "schedule.upsert"
+	TopicAgentRunRequested    = "agent.run.requested"
+	TopicAgentRunStarted      = "agent.run.started"
+	TopicAgentRunCompleted    = "agent.run.completed"
+	TopicAgentRunFailed       = "agent.run.failed"
+	TopicAgentStreamChunk     = "agent.stream.chunk"
+	TopicAgentSpawnRequest    = "agent.spawn.request"
+	TopicChannelMessageRecv   = "channel.message.received"
+	TopicChannelMessageSend   = "channel.message.send"
+	TopicChannelHealthUpdate  = "channel.health.update"
+	TopicToolExecRequest      = "tool.exec.request"
+	TopicToolExecResult       = "tool.exec.result"
+	TopicToolApprovalRequest  = "tool.approval.request"
+	TopicToolApprovalResponse = "tool.approval.response"
+	TopicScheduleUpsert       = "schedule.upsert"
 )
 
 // NewEvent creates a new event with the current timestamp.

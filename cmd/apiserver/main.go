@@ -43,7 +43,7 @@ func main() {
 	// Build Kubernetes client
 	cfg := ctrl.GetConfigOrDie()
 	k8sClient, err := ctrl.NewManager(cfg, ctrl.Options{
-		Scheme: scheme,
+		Scheme:  scheme,
 		Metrics: metricsserver.Options{BindAddress: "0"}, // disable metrics; apiserver is not a controller
 	})
 	if err != nil {
