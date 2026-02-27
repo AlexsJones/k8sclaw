@@ -523,4 +523,8 @@ export const api = {
     logs: (name: string) =>
       apiFetch<{ logs: string }>(`/api/v1/pods/${name}/logs`),
   },
+
+  namespaces: {
+    list: () => apiFetch<string[]>("/api/v1/namespaces"),
+  },
 };

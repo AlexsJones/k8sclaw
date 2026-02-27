@@ -108,6 +108,9 @@ func (s *Server) buildMux(frontendFS fs.FS, token string) http.Handler {
 	mux.HandleFunc("PATCH /api/v1/personapacks/{name}", s.patchPersonaPack)
 	mux.HandleFunc("DELETE /api/v1/personapacks/{name}", s.deletePersonaPack)
 
+	// Namespace listing
+	mux.HandleFunc("GET /api/v1/namespaces", s.listNamespaces)
+
 	// WebSocket streaming
 	mux.HandleFunc("/ws/stream", s.handleStream)
 
@@ -864,6 +867,19 @@ func providerEnvKey(provider string) string {
 	default:
 		return "PROVIDER_API_KEY"
 	}
+}
+
+func (s *Server) listNamespaces(w http.ResponseWriter, r *http.Request) {
+	var nsList corev1.NamespaceList
+	if err := s.client.List(r.Context(), &nsList); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	names := make([]string, 0, len(nsList.Items))
+	for _, ns := range nsList.Items {
+		names = append(names, ns.Name)
+	}
+	writeJSON(w, names)
 }
 
 func writeJSON(w http.ResponseWriter, v interface{}) {

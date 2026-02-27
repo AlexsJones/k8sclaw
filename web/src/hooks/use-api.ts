@@ -15,6 +15,12 @@ function toastError(err: Error) {
   );
 }
 
+// ── Namespaces ───────────────────────────────────────────────────────────────
+
+export function useNamespaces() {
+  return useQuery({ queryKey: ["namespaces"], queryFn: api.namespaces.list });
+}
+
 // ── Instances ────────────────────────────────────────────────────────────────
 
 export function useInstances() {

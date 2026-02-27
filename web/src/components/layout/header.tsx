@@ -1,7 +1,14 @@
 import { useAuth } from "@/components/auth-provider";
 import { getNamespace, setNamespace } from "@/lib/api";
+import { useNamespaces } from "@/hooks/use-api";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { LogOut, Wifi, WifiOff } from "lucide-react";
 import { useWebSocket } from "@/hooks/use-websocket";
 import { useState } from "react";
@@ -9,21 +16,13 @@ import { useState } from "react";
 export function Header() {
   const { logout } = useAuth();
   const { connected } = useWebSocket();
+  const { data: namespaces } = useNamespaces();
   const [ns, setNs] = useState(getNamespace());
 
-  const handleNsChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    setNs(e.target.value);
-  };
-
-  const handleNsBlur = () => {
-    if (ns.trim()) {
-      setNamespace(ns.trim());
-      window.location.reload();
-    }
-  };
-
-  const handleNsKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === "Enter") handleNsBlur();
+  const handleNsChange = (value: string) => {
+    setNs(value);
+    setNamespace(value);
+    window.location.reload();
   };
 
   return (
@@ -31,13 +30,18 @@ export function Header() {
       <div className="flex items-center gap-4">
         <div className="flex items-center gap-2 text-sm text-muted-foreground">
           <span>Namespace:</span>
-          <Input
-            value={ns}
-            onChange={handleNsChange}
-            onBlur={handleNsBlur}
-            onKeyDown={handleNsKeyDown}
-            className="h-7 w-36 text-xs"
-          />
+          <Select value={ns} onValueChange={handleNsChange}>
+            <SelectTrigger className="h-7 w-44 text-xs">
+              <SelectValue placeholder="Select namespace…" />
+            </SelectTrigger>
+            <SelectContent>
+              {(namespaces || []).map((name) => (
+                <SelectItem key={name} value={name} className="text-xs">
+                  {name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         </div>
       </div>
       <div className="flex items-center gap-3">

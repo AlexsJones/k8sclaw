@@ -7,6 +7,8 @@ import {
   Wrench,
   Clock,
   Users,
+  Github,
+  Heart,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -57,9 +59,27 @@ export function AppSidebar() {
         </nav>
       </ScrollArea>
 
-      {/* Footer */}
-      <div className="border-t border-border/50 px-4 py-3">
-        <p className="text-xs text-muted-foreground">
+      {/* Help & Contribute */}
+      <div className="border-t border-border/50 px-4 py-3 space-y-2">
+        <a
+          href="https://github.com/AlexsJones/sympozium"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="flex items-center gap-2 rounded-md px-2 py-1.5 text-xs font-medium text-muted-foreground hover:bg-white/5 hover:text-foreground transition-colors"
+        >
+          <Github className="h-3.5 w-3.5" />
+          Star on GitHub
+        </a>
+        <a
+          href="https://github.com/AlexsJones/sympozium/blob/main/CONTRIBUTING.md"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="flex items-center gap-2 rounded-md px-2 py-1.5 text-xs font-medium text-muted-foreground hover:bg-white/5 hover:text-foreground transition-colors"
+        >
+          <Heart className="h-3.5 w-3.5" />
+          Contribute
+        </a>
+        <p className="px-2 text-[10px] text-muted-foreground/60">
           Kubernetes-native AI agents
         </p>
       </div>

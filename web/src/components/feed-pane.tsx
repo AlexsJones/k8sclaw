@@ -6,6 +6,13 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
   MessageSquare,
   X,
   Send,
@@ -215,34 +222,38 @@ export function FeedPane({
         </Button>
       </div>
 
-      {/* Instance tabs */}
+      {/* Instance selector */}
       {tabInstances.length > 0 ? (
         <>
-          <div className="flex gap-1 overflow-x-auto border-b border-border/50 px-2 py-1.5 scrollbar-hide">
-            {tabInstances.map((inst) => (
-              <button
-                key={inst.metadata.name}
-                onClick={() => setActiveTab(inst.metadata.name)}
-                className={cn(
-                  "flex items-center gap-1.5 whitespace-nowrap rounded-md px-2.5 py-1 text-xs font-medium transition-colors",
-                  activeTab === inst.metadata.name
-                    ? "bg-indigo-500/15 text-indigo-400 border border-indigo-500/30"
-                    : "text-muted-foreground hover:bg-white/5 hover:text-foreground border border-transparent"
-                )}
-              >
-                <span
-                  className={cn(
-                    "h-1.5 w-1.5 rounded-full",
-                    inst.status?.phase?.toLowerCase() === "running" ||
-                      inst.status?.phase?.toLowerCase() === "ready" ||
-                      inst.status?.phase?.toLowerCase() === "active"
-                      ? "bg-emerald-400"
-                      : "bg-muted-foreground"
-                  )}
-                />
-                {inst.metadata.name}
-              </button>
-            ))}
+          <div className="border-b border-border/50 px-3 py-2">
+            <Select value={activeTab} onValueChange={setActiveTab}>
+              <SelectTrigger className="h-8 text-xs bg-transparent">
+                <SelectValue placeholder="Select instance…" />
+              </SelectTrigger>
+              <SelectContent>
+                {tabInstances.map((inst) => (
+                  <SelectItem
+                    key={inst.metadata.name}
+                    value={inst.metadata.name}
+                    className="text-xs"
+                  >
+                    <span className="flex items-center gap-2">
+                      <span
+                        className={cn(
+                          "h-1.5 w-1.5 rounded-full",
+                          inst.status?.phase?.toLowerCase() === "running" ||
+                            inst.status?.phase?.toLowerCase() === "ready" ||
+                            inst.status?.phase?.toLowerCase() === "active"
+                            ? "bg-emerald-400"
+                            : "bg-muted-foreground"
+                        )}
+                      />
+                      {inst.metadata.name}
+                    </span>
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
 
           {/* Feed content */}

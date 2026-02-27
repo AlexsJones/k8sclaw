@@ -8,6 +8,7 @@ import {
   type ReactNode,
 } from "react";
 import { getToken } from "@/lib/api";
+import { useAuth } from "@/components/auth-provider";
 
 export interface StreamEvent {
   topic: string;
@@ -28,6 +29,7 @@ const WebSocketContext = createContext<WebSocketContextType>({
 });
 
 export function WebSocketProvider({ children }: { children: ReactNode }) {
+  const { token: authToken } = useAuth();
   const [events, setEvents] = useState<StreamEvent[]>([]);
   const [connected, setConnected] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
@@ -104,7 +106,7 @@ export function WebSocketProvider({ children }: { children: ReactNode }) {
         wsRef.current = null;
       }
     };
-  }, [connect]);
+  }, [connect, authToken]);
 
   const clearEvents = useCallback(() => setEvents([]), []);
 
