@@ -14,3 +14,6 @@ subjects:
   - kind: ServiceAccount
     name: sympozium-controller-manager
     namespace: sympozium-system
+  - kind: ServiceAccount
+    name: sympozium-apiserver
+    namespace: sympozium-system

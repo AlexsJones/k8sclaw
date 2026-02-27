@@ -125,4 +125,7 @@ subjects:
   - kind: ServiceAccount
     name: sympozium-controller-manager
     namespace: {{ include "sympozium.namespace" . }}
+  - kind: ServiceAccount
+    name: sympozium-apiserver
+    namespace: {{ include "sympozium.namespace" . }}
 {{- end }}
