@@ -11,11 +11,13 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"text/tabwriter"
 	"time"
 
@@ -8696,16 +8698,49 @@ the login URL.`,
 				}()
 			}
 
-			// Run kubectl port-forward (blocks until Ctrl+C).
-			pf := exec.Command("kubectl", "port-forward",
-				"-n", ns,
-				"svc/sympozium-apiserver",
-				fmt.Sprintf("%s:8080", localPort),
-			)
-			pf.Stdout = os.Stdout
-			pf.Stderr = os.Stderr
-			pf.Stdin = os.Stdin
-			return pf.Run()
+			// Run kubectl port-forward in a reconnect loop.
+			// port-forward is inherently fragile (pod restarts, network
+			// namespace closures, etc.), so we automatically reconnect
+			// with exponential backoff.
+			ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
+			defer cancel()
+
+			backoff := 1 * time.Second
+			const maxBackoff = 30 * time.Second
+
+			for {
+				pf := exec.CommandContext(ctx, "kubectl", "port-forward",
+					"-n", ns,
+					"svc/sympozium-apiserver",
+					fmt.Sprintf("%s:8080", localPort),
+				)
+				pf.Stdout = os.Stdout
+				pf.Stderr = os.Stderr
+
+				if err := pf.Run(); err != nil {
+					// If the context was cancelled (Ctrl+C), exit cleanly.
+					if ctx.Err() != nil {
+						fmt.Println("\n  Port-forward stopped.")
+						return nil
+					}
+					fmt.Printf("\n  Port-forward lost — reconnecting in %s...\n", backoff)
+					select {
+					case <-time.After(backoff):
+						backoff *= 2
+						if backoff > maxBackoff {
+							backoff = maxBackoff
+						}
+					case <-ctx.Done():
+						return nil
+					}
+					continue
+				}
+				// port-forward exited cleanly (shouldn't normally happen)
+				if ctx.Err() != nil {
+					return nil
+				}
+				backoff = 1 * time.Second // reset on clean exit
+			}
 		},
 	}
 

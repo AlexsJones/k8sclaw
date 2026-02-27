@@ -12,12 +12,23 @@ const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
       refetchInterval: 5000,
-      // Don't retry on 401 (bad token) — retry other transient errors twice.
+      // Don't retry on 401 (bad token) — retry other transient errors 3 times.
       retry: (failureCount, error) => {
         if (error instanceof Error && "status" in error && (error as { status: number }).status === 401) return false;
-        return failureCount < 2;
+        return failureCount < 3;
       },
+      retryDelay: (attempt) => Math.min(1000 * 2 ** attempt, 10000),
       staleTime: 2000,
+    },
+    mutations: {
+      // Retry network errors on mutations (e.g. port-forward drops mid-request).
+      retry: (failureCount, error) => {
+        const isNetwork =
+          error instanceof TypeError ||
+          (error instanceof Error && /network|failed to fetch|load failed/i.test(error.message));
+        return isNetwork && failureCount < 2;
+      },
+      retryDelay: (attempt) => Math.min(1000 * 2 ** attempt, 5000),
     },
   },
 });

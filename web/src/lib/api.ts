@@ -385,19 +385,40 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const separator = path.includes("?") ? "&" : "?";
   const url = `${path}${separator}namespace=${ns}`;
 
-  const res = await fetch(url, { ...init, headers });
-  if (res.status === 401) {
-    // Don't clear the token — the server may be restarting or temporarily
-    // unavailable.  Let the caller (React Query) handle retries.  The user
-    // can explicitly log out via the UI.
-    throw new ApiError("Unauthorized", 401);
+  // Retry network errors (port-forward drops, transient failures) up to 2
+  // times with a short delay.  Non-network errors (4xx, 5xx) are NOT retried
+  // here — React Query handles those via its own retry config.
+  const maxAttempts = 3;
+  let lastError: unknown;
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    try {
+      const res = await fetch(url, { ...init, headers });
+      if (res.status === 401) {
+        throw new ApiError("Unauthorized", 401);
+      }
+      if (res.status === 204) return undefined as T;
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(text || `HTTP ${res.status}`);
+      }
+      return res.json();
+    } catch (err) {
+      lastError = err;
+      // Only retry on network-level failures (TypeError from fetch).
+      // Don't retry application-level errors (ApiError, HTTP errors).
+      const isNetworkError =
+        err instanceof TypeError ||
+        (err instanceof Error &&
+          !("status" in err) &&
+          /network|failed to fetch|load failed|aborted/i.test(err.message));
+      if (!isNetworkError || attempt >= maxAttempts - 1) {
+        throw err;
+      }
+      // Wait before retrying (1s, then 2s).
+      await new Promise((r) => setTimeout(r, 1000 * (attempt + 1)));
+    }
   }
-  if (res.status === 204) return undefined as T;
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(text || `HTTP ${res.status}`);
-  }
-  return res.json();
+  throw lastError;
 }
 
 // ── Instances ────────────────────────────────────────────────────────────────

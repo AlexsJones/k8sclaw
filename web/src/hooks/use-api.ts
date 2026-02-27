@@ -2,6 +2,19 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { toast } from "sonner";
 
+/** Show a user-friendly toast for mutation errors.  Network failures get a
+ *  clearer message than the raw TypeError from fetch. */
+function toastError(err: Error) {
+  const isNetwork =
+    err instanceof TypeError ||
+    /network|failed to fetch|load failed/i.test(err.message);
+  toast.error(
+    isNetwork
+      ? "Connection lost — the port-forward may have dropped. Please retry."
+      : err.message,
+  );
+}
+
 // ── Instances ────────────────────────────────────────────────────────────────
 
 export function useInstances() {
@@ -24,7 +37,7 @@ export function useDeleteInstance() {
       qc.invalidateQueries({ queryKey: ["instances"] });
       toast.success("Instance deleted");
     },
-    onError: (err: Error) => toast.error(err.message),
+    onError: toastError,
   });
 }
 
@@ -36,7 +49,7 @@ export function useCreateInstance() {
       qc.invalidateQueries({ queryKey: ["instances"] });
       toast.success("Instance created");
     },
-    onError: (err: Error) => toast.error(err.message),
+    onError: toastError,
   });
 }
 
@@ -62,7 +75,7 @@ export function useCreateRun() {
       qc.invalidateQueries({ queryKey: ["runs"] });
       toast.success("Run created");
     },
-    onError: (err: Error) => toast.error(err.message),
+    onError: toastError,
   });
 }
 
@@ -74,7 +87,7 @@ export function useDeleteRun() {
       qc.invalidateQueries({ queryKey: ["runs"] });
       toast.success("Run deleted");
     },
-    onError: (err: Error) => toast.error(err.message),
+    onError: toastError,
   });
 }
 
@@ -100,7 +113,7 @@ export function useDeletePolicy() {
       qc.invalidateQueries({ queryKey: ["policies"] });
       toast.success("Policy deleted");
     },
-    onError: (err: Error) => toast.error(err.message),
+    onError: toastError,
   });
 }
 
@@ -140,7 +153,7 @@ export function useCreateSchedule() {
       qc.invalidateQueries({ queryKey: ["schedules"] });
       toast.success("Schedule created");
     },
-    onError: (err: Error) => toast.error(err.message),
+    onError: toastError,
   });
 }
 
@@ -152,7 +165,7 @@ export function useDeleteSchedule() {
       qc.invalidateQueries({ queryKey: ["schedules"] });
       toast.success("Schedule deleted");
     },
-    onError: (err: Error) => toast.error(err.message),
+    onError: toastError,
   });
 }
 
@@ -181,7 +194,7 @@ export function useDeletePersonaPack() {
       qc.invalidateQueries({ queryKey: ["personaPacks"] });
       toast.success("Persona pack deleted");
     },
-    onError: (err: Error) => toast.error(err.message),
+    onError: toastError,
   });
 }
 
@@ -206,7 +219,7 @@ export function useActivatePersonaPack() {
       qc.invalidateQueries({ queryKey: ["personaPacks"] });
       toast.success("Persona pack updated");
     },
-    onError: (err: Error) => toast.error(err.message),
+    onError: toastError,
   });
 }
 
