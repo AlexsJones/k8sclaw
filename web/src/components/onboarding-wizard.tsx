@@ -430,13 +430,13 @@ export function OnboardingWizard({
                   autoComplete="off"
                 />
                 <p className="text-xs text-muted-foreground">
-                  Used to fetch available models. Not stored — stays in your
-                  browser only.
+                  A Kubernetes Secret will be created automatically from this
+                  key. Also used to fetch available models.
                 </p>
               </div>
             )}
             <div className="space-y-2">
-              <Label>K8s Secret Name</Label>
+              <Label>K8s Secret Name <span className="text-muted-foreground font-normal">(optional if API Key provided)</span></Label>
               <Input
                 value={form.secretName}
                 onChange={(e) =>
@@ -445,8 +445,8 @@ export function OnboardingWizard({
                 placeholder="my-provider-api-key"
               />
               <p className="text-xs text-muted-foreground">
-                Kubernetes Secret containing your API key (data key{" "}
-                <code className="text-indigo-400">PROVIDER_API_KEY</code>).
+                Use an existing Kubernetes Secret, or leave blank to
+                auto-create one from the API Key above.
               </p>
             </div>
           </div>

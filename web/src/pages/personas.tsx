@@ -50,7 +50,8 @@ export function PersonasPage() {
         name: wizardPack.metadata.name,
         enabled: true,
         provider: result.provider,
-        secretName: result.secretName,
+        secretName: result.secretName || undefined,
+        apiKey: result.apiKey || undefined,
         model: result.model,
         baseURL: result.baseURL || undefined,
         channelConfigs:

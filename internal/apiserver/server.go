@@ -14,6 +14,8 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
+	corev1 "k8s.io/api/core/v1"
+	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -640,6 +642,7 @@ type PatchPersonaPackRequest struct {
 	Enabled        *bool             `json:"enabled,omitempty"`
 	Provider       string            `json:"provider,omitempty"`
 	SecretName     string            `json:"secretName,omitempty"`
+	APIKey         string            `json:"apiKey,omitempty"`
 	Model          string            `json:"model,omitempty"`
 	BaseURL        string            `json:"baseURL,omitempty"`
 	ChannelConfigs map[string]string `json:"channelConfigs,omitempty"`
@@ -667,6 +670,44 @@ func (s *Server) patchPersonaPack(w http.ResponseWriter, r *http.Request) {
 
 	if req.Enabled != nil {
 		pp.Spec.Enabled = *req.Enabled
+	}
+
+	// Auto-create a K8s Secret when the user provides a raw API key.
+	if req.Provider != "" && req.APIKey != "" && req.SecretName == "" {
+		req.SecretName = name + "-credentials"
+		envKey := providerEnvKey(req.Provider)
+		secret := &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      req.SecretName,
+				Namespace: ns,
+				Labels: map[string]string{
+					"app.kubernetes.io/managed-by": "sympozium",
+					"sympozium.ai/persona-pack":    name,
+				},
+			},
+			StringData: map[string]string{envKey: req.APIKey},
+		}
+		createErr := s.client.Create(r.Context(), secret)
+		if createErr != nil && !k8serrors.IsAlreadyExists(createErr) {
+			http.Error(w, "failed to create credentials secret: "+createErr.Error(), http.StatusInternalServerError)
+			return
+		}
+		if k8serrors.IsAlreadyExists(createErr) {
+			// Update the existing secret with the new key.
+			existing := &corev1.Secret{}
+			if err := s.client.Get(r.Context(), types.NamespacedName{Name: req.SecretName, Namespace: ns}, existing); err != nil {
+				http.Error(w, "failed to get existing secret: "+err.Error(), http.StatusInternalServerError)
+				return
+			}
+			if existing.Data == nil {
+				existing.Data = map[string][]byte{}
+			}
+			existing.Data[envKey] = []byte(req.APIKey)
+			if err := s.client.Update(r.Context(), existing); err != nil {
+				http.Error(w, "failed to update credentials secret: "+err.Error(), http.StatusInternalServerError)
+				return
+			}
+		}
 	}
 
 	if req.Provider != "" && req.SecretName != "" {
@@ -773,6 +814,20 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
+	}
+}
+
+// providerEnvKey returns the environment variable key for a provider's API key.
+func providerEnvKey(provider string) string {
+	switch provider {
+	case "openai":
+		return "OPENAI_API_KEY"
+	case "anthropic":
+		return "ANTHROPIC_API_KEY"
+	case "azure-openai":
+		return "AZURE_OPENAI_API_KEY"
+	default:
+		return "PROVIDER_API_KEY"
 	}
 }
 

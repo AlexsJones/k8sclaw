@@ -196,6 +196,7 @@ export function useActivatePersonaPack() {
       enabled?: boolean;
       provider?: string;
       secretName?: string;
+      apiKey?: string;
       model?: string;
       baseURL?: string;
       channelConfigs?: Record<string, string>;
