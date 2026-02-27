@@ -1836,6 +1836,7 @@ type wizardState struct {
 	personaPackName   string                 // which pack we're installing
 	personaChannels   []personaChannelChoice // channels the user is toggling
 	personaChannelIdx int                    // which channel we're collecting a token for
+	packDetailScroll  int                    // scroll offset for the pack detail pane
 }
 
 func (w *wizardState) reset() {
@@ -2701,9 +2702,17 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						m.wizard.scrollOffset--
 						return m, nil
 					}
+					if m.wizard.personaMode && m.wizard.packDetailScroll > 0 {
+						m.wizard.packDetailScroll--
+						return m, nil
+					}
 				case tea.KeyDown:
 					if m.wizard.step == wizStepModel {
 						m.wizard.scrollOffset++
+						return m, nil
+					}
+					if m.wizard.personaMode {
+						m.wizard.packDetailScroll++
 						return m, nil
 					}
 				case tea.KeyPgUp:
@@ -2714,9 +2723,20 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						}
 						return m, nil
 					}
+					if m.wizard.personaMode && m.wizard.packDetailScroll > 0 {
+						m.wizard.packDetailScroll -= 5
+						if m.wizard.packDetailScroll < 0 {
+							m.wizard.packDetailScroll = 0
+						}
+						return m, nil
+					}
 				case tea.KeyPgDown:
 					if m.wizard.step == wizStepModel {
 						m.wizard.scrollOffset += 5
+						return m, nil
+					}
+					if m.wizard.personaMode {
+						m.wizard.packDetailScroll += 5
 						return m, nil
 					}
 				case tea.KeyEnter:
@@ -4530,6 +4550,19 @@ func (m tuiModel) View() string {
 			wizH = 3
 		}
 
+		// When running the persona wizard and the terminal is wide enough,
+		// split the view: wizard on the left, pack details on the right.
+		showPackPane := m.wizard.personaMode && m.width >= 90 && m.wizard.personaPackName != ""
+		fullWidth := m.width
+		leftW := m.width
+		if showPackPane {
+			leftW = fullWidth * 55 / 100
+			if leftW > fullWidth-30 {
+				leftW = fullWidth - 30 // ensure right pane gets at least 30 cols
+			}
+			m.width = leftW
+		}
+
 		var view strings.Builder
 		view.WriteString(m.renderHeader())
 		view.WriteString("\n")
@@ -4539,7 +4572,17 @@ func (m tuiModel) View() string {
 		view.WriteString(" " + m.input.View())
 		view.WriteString("\n")
 		view.WriteString(m.renderStatusBar())
-		return view.String()
+		base := view.String()
+
+		if showPackPane {
+			rightW := fullWidth - leftW - 1 // 1 for separator
+			paneH := strings.Count(base, "\n")
+			rightPane := m.renderPersonaPackDetailPane(rightW, paneH)
+			base = joinPanesHorizontally(base, rightPane, leftW, rightW)
+			m.width = fullWidth
+		}
+
+		return base
 	}
 
 	// Split pane: show a detail pane on the right when the pane is open,
@@ -7854,6 +7897,195 @@ func (m tuiModel) renderPersonaWizardPanel(h int,
 	}
 
 	return strings.Join(lines, "\n") + "\n"
+}
+
+// renderPersonaPackDetailPane renders the right-hand detail pane showing
+// the contents of the selected PersonaPack during the persona wizard.
+func (m tuiModel) renderPersonaPackDetailPane(w, h int) string {
+	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#E94560"))
+	labelStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#74C7EC")).Bold(true)
+	valueStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#A6E3A1"))
+	dimStyle := tuiDimStyle
+	skillStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#FAB387"))
+
+	var pack *sympoziumv1alpha1.PersonaPack
+	for i := range m.personaPacks {
+		if m.personaPacks[i].Name == m.wizard.personaPackName {
+			pack = &m.personaPacks[i]
+			break
+		}
+	}
+	if pack == nil {
+		lines := []string{" Pack not found"}
+		for len(lines) < h {
+			lines = append(lines, "")
+		}
+		return strings.Join(lines, "\n")
+	}
+
+	var lines []string
+	lines = append(lines, "")
+	lines = append(lines, titleStyle.Render(" Pack Contents"))
+	lines = append(lines, dimStyle.Render(" "+strings.Repeat("─", w-2)))
+	lines = append(lines, "")
+
+	// Pack metadata
+	lines = append(lines, labelStyle.Render(" Name:      ")+valueStyle.Render(pack.Name))
+	if pack.Spec.Category != "" {
+		lines = append(lines, labelStyle.Render(" Category:  ")+valueStyle.Render(pack.Spec.Category))
+	}
+	if pack.Spec.Version != "" {
+		lines = append(lines, labelStyle.Render(" Version:   ")+valueStyle.Render(pack.Spec.Version))
+	}
+	lines = append(lines, labelStyle.Render(" Personas:  ")+valueStyle.Render(fmt.Sprintf("%d", len(pack.Spec.Personas))))
+	if pack.Spec.Description != "" {
+		lines = append(lines, "")
+		// Word-wrap description to fit the pane.
+		desc := pack.Spec.Description
+		maxDescW := w - 3
+		if maxDescW < 10 {
+			maxDescW = 10
+		}
+		for len(desc) > 0 {
+			chunk := desc
+			if len(chunk) > maxDescW {
+				// Try to break at a space.
+				cut := maxDescW
+				if idx := strings.LastIndex(chunk[:cut], " "); idx > 0 {
+					cut = idx
+				}
+				chunk = desc[:cut]
+				desc = strings.TrimLeft(desc[cut:], " ")
+			} else {
+				desc = ""
+			}
+			lines = append(lines, dimStyle.Render(" "+chunk))
+		}
+	}
+
+	// Status line
+	if pack.Status.Phase != "" {
+		phase := pack.Status.Phase
+		phaseStyle := dimStyle
+		if phase == "Ready" {
+			phaseStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#A6E3A1"))
+		} else if phase == "Error" {
+			phaseStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#F38BA8"))
+		}
+		installed := fmt.Sprintf("%d/%d", pack.Status.InstalledCount, len(pack.Spec.Personas))
+		lines = append(lines, labelStyle.Render(" Status:    ")+phaseStyle.Render(phase)+
+			dimStyle.Render("  (")+valueStyle.Render(installed)+dimStyle.Render(" installed)"))
+	}
+
+	lines = append(lines, "")
+	lines = append(lines, dimStyle.Render(" "+strings.Repeat("─", w-2)))
+	lines = append(lines, "")
+
+	// Each persona
+	for i, p := range pack.Spec.Personas {
+		name := p.DisplayName
+		if name == "" {
+			name = p.Name
+		}
+
+		// Check if excluded
+		excluded := false
+		for _, ex := range pack.Spec.ExcludePersonas {
+			if ex == p.Name {
+				excluded = true
+				break
+			}
+		}
+
+		marker := valueStyle.Render(" ● ")
+		if excluded {
+			marker = dimStyle.Render(" ○ ")
+		}
+
+		numStr := dimStyle.Render(fmt.Sprintf("%d. ", i+1))
+		lines = append(lines, numStr+marker+labelStyle.Render(name))
+
+		// Schedule info
+		if p.Schedule != nil {
+			sched := ""
+			if p.Schedule.Interval != "" {
+				sched = "every " + p.Schedule.Interval
+			} else if p.Schedule.Cron != "" {
+				sched = "cron: " + p.Schedule.Cron
+			}
+			if sched != "" {
+				lines = append(lines, dimStyle.Render("    ⏱  "+sched)+" "+dimStyle.Render("("+p.Schedule.Type+")"))
+			}
+		}
+
+		// Skills
+		if len(p.Skills) > 0 {
+			lines = append(lines, dimStyle.Render("    🔧 ")+skillStyle.Render(strings.Join(p.Skills, ", ")))
+		}
+
+		// Channels
+		if len(p.Channels) > 0 {
+			lines = append(lines, dimStyle.Render("    📡 ")+dimStyle.Render(strings.Join(p.Channels, ", ")))
+		}
+
+		// Memory
+		if p.Memory != nil && p.Memory.Enabled {
+			seedCount := len(p.Memory.Seeds)
+			lines = append(lines, dimStyle.Render(fmt.Sprintf("    🧠 memory enabled (%d seeds)", seedCount)))
+		}
+
+		// Tool policy summary
+		if p.ToolPolicy != nil {
+			parts := []string{}
+			if len(p.ToolPolicy.Allow) > 0 {
+				parts = append(parts, fmt.Sprintf("allow:%d", len(p.ToolPolicy.Allow)))
+			}
+			if len(p.ToolPolicy.Deny) > 0 {
+				parts = append(parts, fmt.Sprintf("deny:%d", len(p.ToolPolicy.Deny)))
+			}
+			if len(parts) > 0 {
+				lines = append(lines, dimStyle.Render("    🔒 "+strings.Join(parts, " ")))
+			}
+		}
+
+		// Add a blank line between personas (but not after the last one).
+		if i < len(pack.Spec.Personas)-1 {
+			lines = append(lines, "")
+		}
+	}
+
+	// Apply scroll offset, then pad/truncate to fit height.
+	totalLines := len(lines)
+	scroll := m.wizard.packDetailScroll
+	if scroll > totalLines-h {
+		scroll = totalLines - h
+	}
+	if scroll < 0 {
+		scroll = 0
+	}
+	if scroll > 0 {
+		lines = lines[scroll:]
+	}
+	for len(lines) < h {
+		lines = append(lines, "")
+	}
+	if len(lines) > h {
+		lines = lines[:h]
+	}
+
+	// Show scroll indicator if content overflows.
+	if totalLines > h {
+		scrollPct := 0
+		if totalLines-h > 0 {
+			scrollPct = scroll * 100 / (totalLines - h)
+		}
+		indicator := dimStyle.Render(fmt.Sprintf(" ↕ %d%% (%d/%d)", scrollPct, scroll+1, totalLines))
+		if len(lines) > 0 {
+			lines[len(lines)-1] = indicator
+		}
+	}
+
+	return strings.Join(lines, "\n")
 }
 
 // tuiPersonaApply activates a PersonaPack by creating the auth secret,
