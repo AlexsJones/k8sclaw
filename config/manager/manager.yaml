@@ -83,7 +83,7 @@ metadata:
     app.kubernetes.io/name: sympozium
     app.kubernetes.io/component: apiserver
 spec:
-  replicas: 2
+  replicas: 1
   selector:
     matchLabels:
       app.kubernetes.io/component: apiserver

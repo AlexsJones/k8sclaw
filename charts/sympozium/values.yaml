@@ -32,7 +32,7 @@ controller:
 
 # -- API Server (REST API for TUI/CLI and channel deployments)
 apiserver:
-  replicas: 2
+  replicas: 1
   image:
     repository: ""  # defaults to {{ .Values.image.registry }}/apiserver
     tag: ""

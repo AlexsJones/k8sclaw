@@ -427,13 +427,9 @@ func (s *Server) deleteRun(w http.ResponseWriter, r *http.Request) {
 // --- Policy handlers ---
 
 func (s *Server) listPolicies(w http.ResponseWriter, r *http.Request) {
-	ns := r.URL.Query().Get("namespace")
-	if ns == "" {
-		ns = "default"
-	}
-
+	// Policies are platform-wide shared resources — list across all namespaces.
 	var list sympoziumv1alpha1.SympoziumPolicyList
-	if err := s.client.List(r.Context(), &list, client.InNamespace(ns)); err != nil {
+	if err := s.client.List(r.Context(), &list); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -460,13 +456,9 @@ func (s *Server) getPolicy(w http.ResponseWriter, r *http.Request) {
 // --- Skill handlers ---
 
 func (s *Server) listSkills(w http.ResponseWriter, r *http.Request) {
-	ns := r.URL.Query().Get("namespace")
-	if ns == "" {
-		ns = "default"
-	}
-
+	// SkillPacks are platform-wide shared resources — list across all namespaces.
 	var list sympoziumv1alpha1.SkillPackList
-	if err := s.client.List(r.Context(), &list, client.InNamespace(ns)); err != nil {
+	if err := s.client.List(r.Context(), &list); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -759,12 +751,23 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 
+	// Ping ticker — keeps the connection alive through proxies/port-forwards.
+	pingTicker := time.NewTicker(15 * time.Second)
+	defer pingTicker.Stop()
+
 	// Write loop (forward events to client)
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case event := <-events:
+		case <-pingTicker.C:
+			if err := conn.WriteMessage(websocket.PingMessage, nil); err != nil {
+				return
+			}
+		case event, ok := <-events:
+			if !ok {
+				return
+			}
 			data, _ := json.Marshal(event)
 			if err := conn.WriteMessage(websocket.TextMessage, data); err != nil {
 				return
