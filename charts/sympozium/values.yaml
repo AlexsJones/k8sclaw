@@ -128,13 +128,12 @@ networkPolicies:
   # -- Deploy default network policies (deny-all + allow-eventbus for agents)
   enabled: true
 
-# -- Default ClawPolicy to create on install
-defaultPolicy:
-  enabled: false
-  # -- Spec for the default SymposiumPolicy CR
-  spec: {}
+# -- Default SympoziumPolicies to install (permissive, restrictive, network-isolated)
+defaultPolicies:
+  # -- Install built-in policy presets
+  enabled: true
 
-# -- SkillPacks to install by default
+# -- Default SkillPacks to install (code-review, incident-response, k8s-ops)
 defaultSkills:
   enabled: false
   # -- List of SkillPack specs

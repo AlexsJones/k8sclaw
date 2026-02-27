@@ -1,0 +1,106 @@
+{{- if .Values.defaultPolicies.enabled }}
+---
+# Permissive policy — development and demo environments.
+apiVersion: sympozium.ai/v1alpha1
+kind: SympoziumPolicy
+metadata:
+  name: permissive
+  labels:
+    sympozium.ai/builtin: "true"
+    {{- include "sympozium.labels" . | nindent 4 }}
+spec:
+  sandboxPolicy:
+    required: false
+    maxCPU: "8"
+    maxMemory: 16Gi
+    allowHostMounts: false
+  toolGating:
+    defaultAction: allow
+    rules: []
+  subagentPolicy:
+    maxDepth: 5
+    maxConcurrent: 10
+  networkPolicy:
+    denyAll: false
+    allowDNS: true
+    allowEventBus: true
+  featureGates:
+    code-execution: true
+    sub-agents: true
+    browser-automation: true
+    file-access: true
+---
+# Restrictive policy — production-hardened, deny-by-default.
+apiVersion: sympozium.ai/v1alpha1
+kind: SympoziumPolicy
+metadata:
+  name: restrictive
+  labels:
+    sympozium.ai/builtin: "true"
+    {{- include "sympozium.labels" . | nindent 4 }}
+spec:
+  sandboxPolicy:
+    required: true
+    maxCPU: "2"
+    maxMemory: 4Gi
+    allowHostMounts: false
+  toolGating:
+    defaultAction: deny
+    rules:
+      - tool: execute_command
+        action: ask
+      - tool: read_file
+        action: allow
+      - tool: list_directory
+        action: allow
+      - tool: write_file
+        action: deny
+      - tool: fetch_url
+        action: deny
+      - tool: send_channel_message
+        action: allow
+  subagentPolicy:
+    maxDepth: 2
+    maxConcurrent: 3
+  networkPolicy:
+    denyAll: true
+    allowDNS: true
+    allowEventBus: true
+  featureGates:
+    code-execution: true
+    sub-agents: true
+    browser-automation: false
+    file-access: false
+---
+# Network-isolated policy — full tool access, no internet.
+apiVersion: sympozium.ai/v1alpha1
+kind: SympoziumPolicy
+metadata:
+  name: network-isolated
+  labels:
+    sympozium.ai/builtin: "true"
+    {{- include "sympozium.labels" . | nindent 4 }}
+spec:
+  sandboxPolicy:
+    required: false
+    maxCPU: "4"
+    maxMemory: 8Gi
+    allowHostMounts: false
+  toolGating:
+    defaultAction: allow
+    rules:
+      - tool: fetch_url
+        action: deny
+  subagentPolicy:
+    maxDepth: 3
+    maxConcurrent: 5
+  networkPolicy:
+    denyAll: true
+    allowDNS: true
+    allowEventBus: true
+  featureGates:
+    code-execution: true
+    sub-agents: true
+    browser-automation: false
+    file-access: true
+{{- end }}

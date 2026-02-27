@@ -1128,6 +1128,16 @@ func runInstall(ver, imageTag string) error {
 		}
 	}
 
+	// Install default SympoziumPolicies (permissive, restrictive, network-isolated).
+	policiesDir := filepath.Join(tmpDir, "config/policies/")
+	if _, err := os.Stat(policiesDir); err == nil {
+		fmt.Println("  Installing default SympoziumPolicies...")
+		if err := kubectl("apply", "--server-side", "--force-conflicts", "-f", policiesDir); err != nil {
+			// Non-fatal — policies are optional.
+			fmt.Printf("  Warning: failed to install default policies: %v\n", err)
+		}
+	}
+
 	// Install default PersonaPacks (e.g. platform-team, devops-essentials).
 	personasDir := filepath.Join(tmpDir, "config/personas/")
 	if _, err := os.Stat(personasDir); err == nil {
