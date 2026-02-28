@@ -158,7 +158,7 @@ export function WhatsAppQRModal({
 
   return (
     <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
-      <DialogContent className="sm:max-w-lg">
+      <DialogContent className="sm:max-w-[760px] max-h-[92vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <QrCode className="h-5 w-5 text-green-400" />
@@ -188,7 +188,7 @@ export function WhatsAppQRModal({
             </div>
           )}
           {state === "scanning" && qrLines.length > 0 && (
-            <pre className="max-h-72 overflow-auto rounded-md border border-border/50 bg-black/40 p-3 text-[11px] leading-tight text-green-300">
+            <pre className="max-h-[68vh] overflow-auto rounded-md border border-border/50 bg-black/40 p-3 text-[10px] leading-none text-green-300">
               {qrLines.join("\n")}
             </pre>
           )}
