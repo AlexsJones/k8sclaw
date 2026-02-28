@@ -11,6 +11,7 @@ import (
 
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+	"k8s.io/client-go/kubernetes"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
@@ -66,6 +67,12 @@ func main() {
 		bus = natsbus
 	}
 
+	kubeClient, err := kubernetes.NewForConfig(cfg)
+	if err != nil {
+		log.Error(err, "unable to create kubernetes clientset")
+		os.Exit(1)
+	}
+
 	// Create and start API server
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
@@ -87,7 +94,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	server := apiserver.NewServer(k8sClient.GetClient(), bus, log.WithName("apiserver"))
+	server := apiserver.NewServer(k8sClient.GetClient(), bus, kubeClient, log.WithName("apiserver"))
 
 	if serveUI {
 		// Extract the "dist" subdirectory from the embedded FS.

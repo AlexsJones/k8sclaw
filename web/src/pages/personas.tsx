@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { usePersonaPacks, useActivatePersonaPack, useSkills } from "@/hooks/use-api";
 import { StatusBadge } from "@/components/status-badge";
 import { OnboardingWizard, type WizardResult } from "@/components/onboarding-wizard";
+import { WhatsAppQRModal } from "@/components/whatsapp-qr-modal";
 import {
   Dialog,
   DialogContent,
@@ -35,6 +36,7 @@ export function PersonasPage() {
   // Wizard state
   const [wizardOpen, setWizardOpen] = useState(false);
   const [wizardPack, setWizardPack] = useState<PersonaPack | null>(null);
+  const [whatsAppPack, setWhatsAppPack] = useState<string | null>(null);
 
   // Disable confirmation state
   const [disablePack, setDisablePack] = useState<PersonaPack | null>(null);
@@ -64,13 +66,21 @@ export function PersonasPage() {
         apiKey: result.apiKey || undefined,
         model: result.model,
         baseURL: result.baseURL || undefined,
+        channels: result.channels,
         channelConfigs:
           Object.keys(result.channelConfigs).length > 0
             ? result.channelConfigs
             : undefined,
         skills: result.skills,
       },
-      { onSuccess: closeWizard }
+      {
+        onSuccess: () => {
+          closeWizard();
+          if (result.channels.includes("whatsapp")) {
+            setWhatsAppPack(wizardPack.metadata.name);
+          }
+        },
+      }
     );
   }
 
@@ -226,9 +236,18 @@ export function PersonasPage() {
             )
           ),
           channelConfigs: wizardPack?.spec.channelConfigs || {},
+          channels:
+            wizardPack?.spec.personas?.[0]?.channels ||
+            Object.keys(wizardPack?.spec.channelConfigs || {}),
         }}
         onComplete={handleComplete}
         isPending={activatePack.isPending}
+      />
+
+      <WhatsAppQRModal
+        open={!!whatsAppPack}
+        onClose={() => setWhatsAppPack(null)}
+        personaPackName={whatsAppPack || undefined}
       />
 
       {/* Disable confirmation dialog */}

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useModelList } from "@/hooks/use-model-list";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -61,6 +61,7 @@ export interface WizardResult {
   model: string;
   baseURL: string;
   skills: string[];
+  channels: string[];
   channelConfigs: Record<string, string>;
 }
 
@@ -84,13 +85,13 @@ interface OnboardingWizardProps {
 
 // ── Steps ────────────────────────────────────────────────────────────────────
 
-type WizardStep = "name" | "provider" | "apikey" | "model" | "skills" | "channels" | "confirm";
+type WizardStep = "name" | "provider" | "apikey" | "model" | "skills" | "channels" | "confirm" | "channelAction";
 
 function stepsForMode(mode: "instance" | "persona"): WizardStep[] {
   if (mode === "instance") {
-    return ["name", "provider", "apikey", "model", "skills", "channels", "confirm"];
+    return ["name", "provider", "apikey", "model", "skills", "channels", "confirm", "channelAction"];
   }
-  return ["provider", "apikey", "model", "skills", "channels", "confirm"];
+  return ["provider", "apikey", "model", "skills", "channels", "confirm", "channelAction"];
 }
 
 // ── Step indicator ───────────────────────────────────────────────────────────
@@ -104,6 +105,7 @@ function StepIndicator({ steps, current }: { steps: WizardStep[]; current: Wizar
     skills: "Skills",
     channels: "Channels",
     confirm: "Confirm",
+    channelAction: "Finalize",
   };
   const icons: Record<WizardStep, React.ReactNode> = {
     name: <Server className="h-3.5 w-3.5" />,
@@ -113,6 +115,7 @@ function StepIndicator({ steps, current }: { steps: WizardStep[]; current: Wizar
     skills: <Wrench className="h-3.5 w-3.5" />,
     channels: <MessageSquare className="h-3.5 w-3.5" />,
     confirm: <Check className="h-3.5 w-3.5" />,
+    channelAction: <Key className="h-3.5 w-3.5" />,
   };
   const idx = steps.indexOf(current);
 
@@ -256,8 +259,10 @@ export function OnboardingWizard({
     model: defaults?.model || "",
     baseURL: defaults?.baseURL || "",
     skills: defaults?.skills || [],
+    channels: defaults?.channels || Object.keys(defaults?.channelConfigs || {}),
     channelConfigs: defaults?.channelConfigs || {},
   });
+  const [channelActionIdx, setChannelActionIdx] = useState(0);
 
   const stepIdx = steps.indexOf(step);
 
@@ -268,17 +273,43 @@ export function OnboardingWizard({
       case "provider":
         return !!form.provider;
       case "apikey":
+        if (form.provider === "ollama") return true;
         return !!form.secretName || !!form.apiKey;
       case "model":
         return !!form.model;
       case "skills":
+        return true;
+      case "channelAction":
         return true;
       default:
         return true;
     }
   })();
 
+  const actionChannels = useMemo(
+    () => form.channels.filter((c) => c !== "whatsapp"),
+    [form.channels]
+  );
+  const hasActionChannels = actionChannels.length > 0;
+
   function next() {
+    if (step === "confirm") {
+      if (hasActionChannels) {
+        setChannelActionIdx(0);
+        setStep("channelAction");
+      } else {
+        onComplete(form);
+      }
+      return;
+    }
+    if (step === "channelAction") {
+      if (channelActionIdx < actionChannels.length - 1) {
+        setChannelActionIdx(channelActionIdx + 1);
+      } else {
+        onComplete(form);
+      }
+      return;
+    }
     if (stepIdx < steps.length - 1) setStep(steps[stepIdx + 1]);
   }
   function prev() {
@@ -287,11 +318,8 @@ export function OnboardingWizard({
 
   function handleClose() {
     setStep(steps[0]);
+    setChannelActionIdx(0);
     onClose();
-  }
-
-  function handleComplete() {
-    onComplete(form);
   }
 
   // Reset form when defaults change (new wizard opened)
@@ -304,22 +332,19 @@ export function OnboardingWizard({
       model: d.model || "",
       baseURL: d.baseURL || "",
       skills: d.skills || [],
+      channels: d.channels || Object.keys(d.channelConfigs || {}),
       channelConfigs: d.channelConfigs || {},
     });
     setStep(steps[0]);
+    setChannelActionIdx(0);
   }
 
-  // Expose reset via key change (parent passes new defaults)
-  const defaultsKey = JSON.stringify(defaults);
-  useState(() => {
-    resetWith(defaults || {});
-  });
-  // Also reset when defaults change via effect
-  const [prevKey, setPrevKey] = useState(defaultsKey);
-  if (defaultsKey !== prevKey) {
-    setPrevKey(defaultsKey);
-    resetWith(defaults || {});
-  }
+  const defaultsKey = JSON.stringify(defaults || {});
+  useEffect(() => {
+    if (open) {
+      resetWith(defaults || {});
+    }
+  }, [open, defaultsKey]);
 
   const titleIcon =
     mode === "instance" ? (
@@ -357,11 +382,11 @@ export function OnboardingWizard({
           <DialogDescription>
             {mode === "instance"
               ? "Configure a new SympoziumInstance with provider, model, and skills."
-              : "Configure provider, model, skills, and optional channels to activate this persona pack."}
+              : "Configure provider, model, skills, and channels to activate this persona pack."}
           </DialogDescription>
         </DialogHeader>
 
-        <StepIndicator steps={steps} current={step} />
+        <StepIndicator steps={steps.filter((s) => s !== "channelAction")} current={step === "channelAction" ? "confirm" : step} />
 
         {/* ── Name step (instance only) ─────────────────────────────── */}
         {step === "name" && (
@@ -534,27 +559,39 @@ export function OnboardingWizard({
         {step === "channels" && (
           <div className="space-y-4">
             <p className="text-sm text-muted-foreground">
-              Optionally map channel types to their config secret names.
+              Select channels to bind. Channel-specific setup happens after confirmation.
             </p>
             {CHANNELS.map((ch) => (
-              <div key={ch.value} className="space-y-1">
-                <Label className="text-xs capitalize">{ch.label} Secret</Label>
-                <Input
-                  value={form.channelConfigs[ch.value] || ""}
-                  onChange={(e) => {
-                    const configs = { ...form.channelConfigs };
-                    if (e.target.value) {
-                      configs[ch.value] = e.target.value;
-                    } else {
-                      delete configs[ch.value];
-                    }
-                    setForm({ ...form, channelConfigs: configs });
-                  }}
-                  placeholder={`${ch.value}-bot-token`}
-                  className="h-8 text-sm"
-                />
-              </div>
+              <button
+                key={ch.value}
+                type="button"
+                onClick={() => {
+                  const selected = form.channels.includes(ch.value);
+                  const nextChannels = selected
+                    ? form.channels.filter((c) => c !== ch.value)
+                    : [...form.channels, ch.value];
+                  const nextConfigs = { ...form.channelConfigs };
+                  if (selected) {
+                    delete nextConfigs[ch.value];
+                  }
+                  setForm({ ...form, channels: nextChannels, channelConfigs: nextConfigs });
+                }}
+                className={cn(
+                  "flex w-full items-center justify-between rounded-md border px-3 py-2 text-left text-sm transition-colors",
+                  form.channels.includes(ch.value)
+                    ? "border-indigo-500/40 bg-indigo-500/15 text-indigo-300"
+                    : "border-border/50 hover:bg-white/5"
+                )}
+              >
+                <span>{ch.label}</span>
+                <span className="text-xs">{form.channels.includes(ch.value) ? "Selected" : "Select"}</span>
+              </button>
             ))}
+            {form.channels.includes("whatsapp") && (
+              <p className="text-xs text-muted-foreground">
+                WhatsApp setup will open a QR pairing modal after creation/activation.
+              </p>
+            )}
           </div>
         )}
 
@@ -606,10 +643,10 @@ export function OnboardingWizard({
                   <span>{personaCount}</span>
                 </div>
               )}
-              {Object.keys(form.channelConfigs).length > 0 && (
+              {form.channels.length > 0 && (
                 <div className="flex justify-between">
                   <span className="text-muted-foreground">Channels</span>
-                  <span>{Object.keys(form.channelConfigs).join(", ")}</span>
+                  <span>{form.channels.join(", ")}</span>
                 </div>
               )}
             </div>
@@ -618,6 +655,47 @@ export function OnboardingWizard({
                 ? "A new SympoziumInstance will be created with this configuration."
                 : "The controller will stamp out Instances, Schedules, and ConfigMaps for each persona."}
             </p>
+          </div>
+        )}
+
+        {/* ── Channel action step (post-confirm) ───────────────────── */}
+        {step === "channelAction" && (
+          <div className="space-y-4">
+            {actionChannels.length === 0 ? (
+              <p className="text-sm text-muted-foreground">
+                No additional channel setup required.
+              </p>
+            ) : (
+              <>
+                <p className="text-sm text-muted-foreground">
+                  Channel-specific setup ({channelActionIdx + 1}/{actionChannels.length})
+                </p>
+                <div className="space-y-2">
+                  <Label>
+                    {actionChannels[channelActionIdx]} Secret Name
+                  </Label>
+                  <Input
+                    value={form.channelConfigs[actionChannels[channelActionIdx]] || ""}
+                    onChange={(e) => {
+                      const ch = actionChannels[channelActionIdx];
+                      const configs = { ...form.channelConfigs };
+                      if (e.target.value.trim()) {
+                        configs[ch] = e.target.value.trim();
+                      } else {
+                        delete configs[ch];
+                      }
+                      setForm({ ...form, channelConfigs: configs });
+                    }}
+                    placeholder={`${mode === "persona" ? targetName : form.name}-${actionChannels[channelActionIdx]}-secret`}
+                    className="h-8 text-sm font-mono"
+                    autoFocus
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Use an existing secret that contains the channel token.
+                  </p>
+                </div>
+              </>
+            )}
           </div>
         )}
 
@@ -633,18 +711,30 @@ export function OnboardingWizard({
             <ChevronLeft className="h-4 w-4" /> Back
           </Button>
 
-          {step === "confirm" ? (
+          {step === "confirm" || step === "channelAction" ? (
             <Button
               size="sm"
               className="gap-1 bg-gradient-to-r from-indigo-500 to-purple-600 hover:from-indigo-600 hover:to-purple-700 text-white border-0"
-              onClick={handleComplete}
+              onClick={next}
               disabled={isPending}
             >
               {isPending ? (
                 "Working…"
               ) : (
                 <>
-                  {completeIcon} {completeLabel}
+                  {step === "channelAction" && channelActionIdx < actionChannels.length - 1 ? (
+                    <>
+                      Next Channel <ChevronRight className="h-4 w-4" />
+                    </>
+                  ) : step === "confirm" && hasActionChannels ? (
+                    <>
+                      Finalize Channels <ChevronRight className="h-4 w-4" />
+                    </>
+                  ) : (
+                    <>
+                      {completeIcon} {completeLabel}
+                    </>
+                  )}
                 </>
               )}
             </Button>

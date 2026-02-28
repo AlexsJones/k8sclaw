@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { useInstances, useDeleteInstance, useCreateInstance, useSkills } from "@/hooks/use-api";
 import { StatusBadge } from "@/components/status-badge";
 import { OnboardingWizard, type WizardResult } from "@/components/onboarding-wizard";
+import { WhatsAppQRModal } from "@/components/whatsapp-qr-modal";
 import {
   Table,
   TableHeader,
@@ -24,6 +25,7 @@ export function InstancesPage() {
   const createInstance = useCreateInstance();
   const [wizardOpen, setWizardOpen] = useState(false);
   const [search, setSearch] = useState("");
+  const [whatsAppInstance, setWhatsAppInstance] = useState<string | null>(null);
 
   const filtered = (data || []).filter((inst) =>
     inst.metadata.name.toLowerCase().includes(search.toLowerCase())
@@ -38,8 +40,20 @@ export function InstancesPage() {
         baseURL: result.baseURL || undefined,
         secretName: result.secretName || undefined,
         skills: result.skills,
+        channels: result.channels,
+        channelConfigs:
+          Object.keys(result.channelConfigs).length > 0
+            ? result.channelConfigs
+            : undefined,
       },
-      { onSuccess: () => setWizardOpen(false) }
+      {
+        onSuccess: () => {
+          setWizardOpen(false);
+          if (result.channels.includes("whatsapp")) {
+            setWhatsAppInstance(result.name);
+          }
+        },
+      }
     );
   }
 
@@ -152,6 +166,12 @@ export function InstancesPage() {
         defaults={{ provider: "openai", model: "gpt-4o", skills: ["k8s-ops"] }}
         onComplete={handleComplete}
         isPending={createInstance.isPending}
+      />
+
+      <WhatsAppQRModal
+        open={!!whatsAppInstance}
+        onClose={() => setWhatsAppInstance(null)}
+        instanceName={whatsAppInstance || undefined}
       />
     </div>
   );

@@ -18,6 +18,7 @@ import (
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/kubernetes"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	sympoziumv1alpha1 "github.com/alexsjones/sympozium/api/v1alpha1"
@@ -28,15 +29,17 @@ import (
 type Server struct {
 	client   client.Client
 	eventBus eventbus.EventBus
+	kube     kubernetes.Interface
 	log      logr.Logger
 	upgrader websocket.Upgrader
 }
 
 // NewServer creates a new API server.
-func NewServer(c client.Client, bus eventbus.EventBus, log logr.Logger) *Server {
+func NewServer(c client.Client, bus eventbus.EventBus, kube kubernetes.Interface, log logr.Logger) *Server {
 	return &Server{
 		client:   c,
 		eventBus: bus,
+		kube:     kube,
 		log:      log,
 		upgrader: websocket.Upgrader{
 			CheckOrigin: func(r *http.Request) bool { return true },
@@ -110,6 +113,8 @@ func (s *Server) buildMux(frontendFS fs.FS, token string) http.Handler {
 
 	// Namespace listing
 	mux.HandleFunc("GET /api/v1/namespaces", s.listNamespaces)
+	mux.HandleFunc("GET /api/v1/pods", s.listPods)
+	mux.HandleFunc("GET /api/v1/pods/{name}/logs", s.getPodLogs)
 
 	// WebSocket streaming
 	mux.HandleFunc("/ws/stream", s.handleStream)
@@ -251,13 +256,15 @@ func (s *Server) deleteInstance(w http.ResponseWriter, r *http.Request) {
 
 // CreateInstanceRequest is the request body for creating a new SympoziumInstance.
 type CreateInstanceRequest struct {
-	Name       string   `json:"name"`
-	Provider   string   `json:"provider"`
-	Model      string   `json:"model"`
-	BaseURL    string   `json:"baseURL,omitempty"`
-	SecretName string   `json:"secretName,omitempty"`
-	PolicyRef  string   `json:"policyRef,omitempty"`
-	Skills     []string `json:"skills,omitempty"`
+	Name           string            `json:"name"`
+	Provider       string            `json:"provider"`
+	Model          string            `json:"model"`
+	BaseURL        string            `json:"baseURL,omitempty"`
+	SecretName     string            `json:"secretName,omitempty"`
+	PolicyRef      string            `json:"policyRef,omitempty"`
+	Skills         []string          `json:"skills,omitempty"`
+	Channels       []string          `json:"channels,omitempty"`
+	ChannelConfigs map[string]string `json:"channelConfigs,omitempty"`
 }
 
 func (s *Server) createInstance(w http.ResponseWriter, r *http.Request) {
@@ -319,6 +326,27 @@ func (s *Server) createInstance(w http.ResponseWriter, r *http.Request) {
 			inst.Spec.Skills = append(inst.Spec.Skills, sympoziumv1alpha1.SkillRef{
 				SkillPackRef: sk,
 			})
+		}
+	}
+	if len(req.Channels) > 0 {
+		inst.Spec.Channels = make([]sympoziumv1alpha1.ChannelSpec, 0, len(req.Channels))
+		seen := make(map[string]struct{}, len(req.Channels))
+		for _, ch := range req.Channels {
+			ch = strings.TrimSpace(ch)
+			if ch == "" {
+				continue
+			}
+			if _, ok := seen[ch]; ok {
+				continue
+			}
+			seen[ch] = struct{}{}
+			cs := sympoziumv1alpha1.ChannelSpec{Type: ch}
+			if req.ChannelConfigs != nil {
+				if secret := strings.TrimSpace(req.ChannelConfigs[ch]); secret != "" {
+					cs.ConfigRef = sympoziumv1alpha1.SecretRef{Secret: secret}
+				}
+			}
+			inst.Spec.Channels = append(inst.Spec.Channels, cs)
 		}
 	}
 
@@ -701,6 +729,7 @@ type PatchPersonaPackRequest struct {
 	APIKey         string            `json:"apiKey,omitempty"`
 	Model          string            `json:"model,omitempty"`
 	BaseURL        string            `json:"baseURL,omitempty"`
+	Channels       []string          `json:"channels,omitempty"`
 	ChannelConfigs map[string]string `json:"channelConfigs,omitempty"`
 	PolicyRef      string            `json:"policyRef,omitempty"`
 	Skills         []string          `json:"skills,omitempty"`
@@ -799,6 +828,24 @@ func (s *Server) patchPersonaPack(w http.ResponseWriter, r *http.Request) {
 
 	if req.ChannelConfigs != nil {
 		pp.Spec.ChannelConfigs = req.ChannelConfigs
+	}
+	if req.Channels != nil {
+		normalized := make([]string, 0, len(req.Channels))
+		seen := make(map[string]struct{}, len(req.Channels))
+		for _, ch := range req.Channels {
+			ch = strings.TrimSpace(ch)
+			if ch == "" {
+				continue
+			}
+			if _, ok := seen[ch]; ok {
+				continue
+			}
+			seen[ch] = struct{}{}
+			normalized = append(normalized, ch)
+		}
+		for i := range pp.Spec.Personas {
+			pp.Spec.Personas[i].Channels = append([]string(nil), normalized...)
+		}
 	}
 
 	if req.PolicyRef != "" {
@@ -922,4 +969,77 @@ func (s *Server) listNamespaces(w http.ResponseWriter, r *http.Request) {
 func writeJSON(w http.ResponseWriter, v interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(v)
+}
+
+// PodInfo is a flattened pod representation for the web UI.
+type PodInfo struct {
+	Name         string            `json:"name"`
+	Namespace    string            `json:"namespace"`
+	Phase        string            `json:"phase"`
+	NodeName     string            `json:"nodeName,omitempty"`
+	PodIP        string            `json:"podIP,omitempty"`
+	StartTime    *metav1.Time      `json:"startTime,omitempty"`
+	RestartCount int32             `json:"restartCount"`
+	InstanceRef  string            `json:"instanceRef,omitempty"`
+	Labels       map[string]string `json:"labels,omitempty"`
+}
+
+func (s *Server) listPods(w http.ResponseWriter, r *http.Request) {
+	ns := r.URL.Query().Get("namespace")
+	if ns == "" {
+		ns = "default"
+	}
+
+	var list corev1.PodList
+	if err := s.client.List(r.Context(), &list, client.InNamespace(ns)); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	out := make([]PodInfo, 0, len(list.Items))
+	for _, p := range list.Items {
+		var restarts int32
+		for _, cs := range p.Status.ContainerStatuses {
+			restarts += cs.RestartCount
+		}
+		inst := ""
+		if p.Labels != nil {
+			inst = p.Labels["sympozium.ai/instance"]
+		}
+		out = append(out, PodInfo{
+			Name:         p.Name,
+			Namespace:    p.Namespace,
+			Phase:        string(p.Status.Phase),
+			NodeName:     p.Spec.NodeName,
+			PodIP:        p.Status.PodIP,
+			StartTime:    p.Status.StartTime,
+			RestartCount: restarts,
+			InstanceRef:  inst,
+			Labels:       p.Labels,
+		})
+	}
+
+	writeJSON(w, out)
+}
+
+func (s *Server) getPodLogs(w http.ResponseWriter, r *http.Request) {
+	if s.kube == nil {
+		http.Error(w, "pod logs unavailable", http.StatusServiceUnavailable)
+		return
+	}
+
+	name := r.PathValue("name")
+	ns := r.URL.Query().Get("namespace")
+	if ns == "" {
+		ns = "default"
+	}
+
+	tail := int64(200)
+	req := s.kube.CoreV1().Pods(ns).GetLogs(name, &corev1.PodLogOptions{TailLines: &tail})
+	raw, err := req.Do(r.Context()).Raw()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, map[string]string{"logs": string(raw)})
 }

@@ -218,6 +218,7 @@ export function useActivatePersonaPack() {
       apiKey?: string;
       model?: string;
       baseURL?: string;
+      channels?: string[];
       channelConfigs?: Record<string, string>;
       policyRef?: string;
       skills?: string[];

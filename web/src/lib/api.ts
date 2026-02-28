@@ -331,6 +331,7 @@ export interface PodInfo {
   startTime?: string;
   restartCount: number;
   instanceRef?: string;
+  labels?: Record<string, string>;
 }
 
 // ── API client ───────────────────────────────────────────────────────────────
@@ -438,6 +439,8 @@ export const api = {
       secretName?: string;
       policyRef?: string;
       skills?: string[];
+      channels?: string[];
+      channelConfigs?: Record<string, string>;
     }) =>
       apiFetch<SympoziumInstance>("/api/v1/instances", {
         method: "POST",
@@ -509,6 +512,7 @@ export const api = {
         apiKey?: string;
         model?: string;
         baseURL?: string;
+        channels?: string[];
         channelConfigs?: Record<string, string>;
         policyRef?: string;
         skills?: string[];
