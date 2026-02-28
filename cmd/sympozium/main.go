@@ -1810,21 +1810,21 @@ type podRow struct {
 type wizardStep int
 
 const (
-	wizStepNone         wizardStep = iota
-	wizStepCheckCluster            // auto — verify CRDs
-	wizStepInstanceName            // text: instance name
-	wizStepProvider                // menu 1-6: provider
-	wizStepModel                   // text: model name
-	wizStepBaseURL                 // text: base URL (some providers)
-	wizStepAPIKey                  // text: API key (non-ollama)
-	wizStepChannel                 // menu 1-5: channel type
-	wizStepChannelToken            // text: channel bot token
-	wizStepPolicy                  // y/n: apply default policy
-	wizStepHeartbeat               // menu 1-5: heartbeat interval
-	wizStepConfirm                 // y/n: confirm summary
-	wizStepApplying                // auto — create resources
-	wizStepWhatsAppQR              // auto — stream QR from pod logs
-	wizStepDone                    // auto — show result
+	wizStepNone               wizardStep = iota
+	wizStepCheckCluster                  // auto — verify CRDs
+	wizStepInstanceName                  // text: instance name
+	wizStepProvider                      // menu 1-6: provider
+	wizStepModel                         // text: model name
+	wizStepBaseURL                       // text: base URL (some providers)
+	wizStepAPIKey                        // text: API key (non-ollama)
+	wizStepChannel                       // menu 1-5: channel type
+	wizStepPolicy                        // y/n: apply default policy
+	wizStepHeartbeat                     // menu 1-5: heartbeat interval
+	wizStepConfirm                       // y/n: confirm summary
+	wizStepChannelActionToken            // text: channel token after confirm
+	wizStepApplying                      // auto — create resources
+	wizStepWhatsAppQR                    // auto — stream QR from pod logs
+	wizStepDone                          // auto — show result
 
 	// Persona wizard steps
 	wizStepPersonaPick         // menu: select a persona pack
@@ -1833,8 +1833,8 @@ const (
 	wizStepPersonaAPIKey       // text: API key
 	wizStepPersonaModel        // text: model name
 	wizStepPersonaChannels     // multi-toggle: channels to bind
-	wizStepPersonaChannelToken // text: channel token (per selected channel)
 	wizStepPersonaConfirm      // y/n: confirm summary
+	wizStepPersonaChannelToken // text: channel token (per selected channel, after confirm)
 	wizStepPersonaApplying     // auto — patch pack + create resources
 	wizStepPersonaDone         // auto — show result
 )
@@ -1883,6 +1883,15 @@ type wizardState struct {
 
 func (w *wizardState) reset() {
 	*w = wizardState{}
+}
+
+func (w *wizardState) personaHasEnabledChannel(chType string) bool {
+	for _, ch := range w.personaChannels {
+		if ch.enabled && ch.chType == chType {
+			return true
+		}
+	}
+	return false
 }
 
 // personaChannelChoice tracks a channel toggle during persona onboarding.
@@ -3139,9 +3148,19 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.input.Placeholder = "Press Enter to return"
 				return m, nil
 			}
-			// tuiPersonaApply already set resultMsgs and step on the wizardState.
-			// But the step mutation happened in the goroutine — re-apply here.
 			m.wizard.resultMsgs = strings.Split(msg.output, "\n")
+			if m.wizard.personaHasEnabledChannel("whatsapp") {
+				m.wizard.instanceName = m.firstPersonaInstanceName(m.wizard.personaPackName)
+				if m.wizard.instanceName == "" {
+					m.wizard.instanceName = m.wizard.personaPackName
+				}
+				m.wizard.step = wizStepWhatsAppQR
+				m.wizard.qrStatus = "waiting"
+				m.wizard.resultMsgs = append(m.wizard.resultMsgs,
+					tuiDimStyle.Render(fmt.Sprintf("Showing WhatsApp pairing for %s", m.wizard.instanceName)))
+				m.input.Placeholder = "Waiting for WhatsApp pod... (press Esc to skip)"
+				return m, pollWhatsAppQRCmd(m.namespace, m.wizard.instanceName)
+			}
 			m.wizard.step = wizStepPersonaDone
 			m.input.Placeholder = "Press Enter to switch to Instances"
 			return m, nil
@@ -4565,6 +4584,16 @@ func (m tuiModel) startPersonaWizard(packName string) (tea.Model, tea.Cmd) {
 	// Pack specified — verify it exists and jump to provider.
 	m.wizard.step = wizStepPersonaPick
 	return m.advanceWizard(packName)
+}
+
+func (m tuiModel) firstPersonaInstanceName(packName string) string {
+	for _, pack := range m.personaPacks {
+		if pack.Name != packName || len(pack.Spec.Personas) == 0 {
+			continue
+		}
+		return fmt.Sprintf("%s-%s", packName, pack.Spec.Personas[0].Name)
+	}
+	return ""
 }
 
 // ── View ─────────────────────────────────────────────────────────────────────
@@ -7117,40 +7146,29 @@ func (m tuiModel) advanceWizard(val string) (tea.Model, tea.Cmd) {
 		case "1":
 			w.channelType = "telegram"
 			w.channelTokenKey = "TELEGRAM_BOT_TOKEN"
-			w.step = wizStepChannelToken
-			m.input.Placeholder = "Telegram Bot Token"
-			return m, nil
 		case "2":
 			w.channelType = "slack"
 			w.channelTokenKey = "SLACK_BOT_TOKEN"
-			w.step = wizStepChannelToken
-			m.input.Placeholder = "Slack Bot OAuth Token"
-			return m, nil
 		case "3":
 			w.channelType = "discord"
 			w.channelTokenKey = "DISCORD_BOT_TOKEN"
-			w.step = wizStepChannelToken
-			m.input.Placeholder = "Discord Bot Token"
-			return m, nil
 		case "4":
 			w.channelType = "whatsapp"
 			w.channelTokenKey = "" // WhatsApp uses QR pairing, no token needed
-			// Skip token step — go straight to policy
-			w.step = wizStepPolicy
-			m.input.Placeholder = "Apply default policy? [Y/n]"
-			return m, nil
 		default:
 			w.channelType = ""
+			w.channelTokenKey = ""
 		}
 		w.step = wizStepPolicy
 		m.input.Placeholder = "Apply default policy? [Y/n]"
 		return m, nil
 
-	case wizStepChannelToken:
+	case wizStepChannelActionToken:
 		w.channelToken = val
-		w.step = wizStepPolicy
-		m.input.Placeholder = "Apply default policy? [Y/n]"
-		return m, nil
+		w.step = wizStepApplying
+		return m, m.asyncCmd(func() (string, error) {
+			return tuiOnboardApply(m.namespace, w)
+		})
 
 	case wizStepPolicy:
 		v := strings.ToLower(val)
@@ -7194,6 +7212,12 @@ func (m tuiModel) advanceWizard(val string) (tea.Model, tea.Cmd) {
 			m.addLog(tuiDimStyle.Render("Onboard wizard cancelled"))
 			return m, nil
 		}
+		// Channel-specific action happens at the end, right before apply.
+		if w.channelType != "" && w.channelType != "whatsapp" && w.channelTokenKey != "" {
+			w.step = wizStepChannelActionToken
+			m.input.Placeholder = fmt.Sprintf("%s token (%s, Enter to skip)", w.channelType, w.channelTokenKey)
+			return m, nil
+		}
 		w.step = wizStepApplying
 		return m, m.asyncCmd(func() (string, error) {
 			return tuiOnboardApply(m.namespace, w)
@@ -7201,10 +7225,16 @@ func (m tuiModel) advanceWizard(val string) (tea.Model, tea.Cmd) {
 
 	case wizStepDone:
 		// User pressed Enter on final screen — close wizard.
+		personaMode := w.personaMode
 		w.reset()
 		m.inputFocused = false
 		m.input.Blur()
 		m.input.Placeholder = "Type / for commands or press ? for help..."
+		if personaMode {
+			m.activeView = viewInstances
+			m.selectedRow = 0
+			m.tableScroll = 0
+		}
 		return m, refreshDataCmd()
 
 	// ── Persona Wizard Steps ─────────────────────────────────────────────
@@ -7359,9 +7389,10 @@ func (m tuiModel) advanceWizard(val string) (tea.Model, tea.Cmd) {
 	case wizStepPersonaChannels:
 		val = strings.TrimSpace(val)
 		if val == "" {
-			// Done selecting channels — collect tokens for enabled channels.
-			w.personaChannelIdx = 0
-			return m.advancePersonaChannelToken()
+			// Done selecting channels — move to confirmation.
+			w.step = wizStepPersonaConfirm
+			m.input.Placeholder = "Proceed? [Y/n]"
+			return m, nil
 		}
 		// Toggle a channel by number.
 		if idx, err := strconv.Atoi(val); err == nil && idx >= 1 && idx <= len(w.personaChannels) {
@@ -7377,7 +7408,7 @@ func (m tuiModel) advanceWizard(val string) (tea.Model, tea.Cmd) {
 			w.personaChannels[w.personaChannelIdx].token = val
 		}
 		w.personaChannelIdx++
-		return m.advancePersonaChannelToken()
+		return m.advancePersonaChannelAction()
 
 	case wizStepPersonaConfirm:
 		v := strings.ToLower(val)
@@ -7389,11 +7420,8 @@ func (m tuiModel) advanceWizard(val string) (tea.Model, tea.Cmd) {
 			m.addLog(tuiDimStyle.Render("Persona wizard cancelled"))
 			return m, nil
 		}
-		w.step = wizStepPersonaApplying
-		ns := m.namespace
-		return m, m.asyncCmd(func() (string, error) {
-			return tuiPersonaApply(ns, w)
-		})
+		w.personaChannelIdx = 0
+		return m.advancePersonaChannelAction()
 
 	case wizStepPersonaDone:
 		w.reset()
@@ -7410,9 +7438,9 @@ func (m tuiModel) advanceWizard(val string) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// advancePersonaChannelToken skips to the next enabled channel that needs
-// a token, or advances to confirm once all tokens are collected.
-func (m tuiModel) advancePersonaChannelToken() (tea.Model, tea.Cmd) {
+// advancePersonaChannelAction runs post-confirm channel-specific actions.
+// It prompts for required channel tokens, then applies the PersonaPack.
+func (m tuiModel) advancePersonaChannelAction() (tea.Model, tea.Cmd) {
 	w := &m.wizard
 	for w.personaChannelIdx < len(w.personaChannels) {
 		ch := w.personaChannels[w.personaChannelIdx]
@@ -7420,15 +7448,17 @@ func (m tuiModel) advancePersonaChannelToken() (tea.Model, tea.Cmd) {
 			// This channel needs a token.
 			w.step = wizStepPersonaChannelToken
 			m.input.SetValue("")
-			m.input.Placeholder = fmt.Sprintf("%s token (%s)", ch.chType, ch.tokenKey)
+			m.input.Placeholder = fmt.Sprintf("%s token (%s, Enter to skip)", ch.chType, ch.tokenKey)
 			return m, nil
 		}
 		w.personaChannelIdx++
 	}
-	// All tokens collected — proceed to confirm.
-	w.step = wizStepPersonaConfirm
-	m.input.Placeholder = "Proceed? [Y/n]"
-	return m, nil
+	// All channel actions complete — apply.
+	w.step = wizStepPersonaApplying
+	ns := m.namespace
+	return m, m.asyncCmd(func() (string, error) {
+		return tuiPersonaApply(ns, w)
+	})
 }
 
 // renderWizardPanel renders the full wizard overlay panel.
@@ -7443,8 +7473,8 @@ func (m tuiModel) renderWizardPanel(h int) string {
 	hintStyle := tuiDimStyle
 	stepStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#FAB387")).Bold(true)
 
-	// Persona wizard has its own renderer.
-	if w.personaMode {
+	// Persona wizard has its own renderer, except for shared QR/done screens.
+	if w.personaMode && w.step != wizStepWhatsAppQR && w.step != wizStepDone {
 		return m.renderPersonaWizardPanel(h, titleStyle, labelStyle, valueStyle, menuStyle, menuNumStyle, hintStyle, stepStyle)
 	}
 
@@ -7480,7 +7510,7 @@ func (m tuiModel) renderWizardPanel(h int) string {
 			lines = append(lines, hintStyle.Render("  API Key:  ")+valueStyle.Render("••••••••"))
 		}
 	}
-	if w.step > wizStepChannelToken && w.step > wizStepChannel {
+	if w.step > wizStepChannel {
 		stepNum = 4
 		if w.channelType != "" {
 			lines = append(lines, hintStyle.Render("  Channel:  ")+valueStyle.Render(w.channelType))
@@ -7620,9 +7650,10 @@ func (m tuiModel) renderWizardPanel(h int) string {
 		lines = append(lines, menuNumStyle.Render("  4)")+menuStyle.Render(" WhatsApp  — scan a QR code to link"))
 		lines = append(lines, menuNumStyle.Render("  5)")+menuStyle.Render(" Skip — I'll add a channel later"))
 
-	case wizStepChannelToken:
-		lines = append(lines, stepStyle.Render("  📋 Step 3/6 — Connect a Channel (continued)"))
+	case wizStepChannelActionToken:
+		lines = append(lines, stepStyle.Render("  📋 Finalize Channel Setup"))
 		lines = append(lines, labelStyle.Render(fmt.Sprintf("  Paste your %s token:", w.channelType)))
+		lines = append(lines, hintStyle.Render("  Press Enter to skip and configure it later."))
 
 	case wizStepPolicy:
 		lines = append(lines, stepStyle.Render("  📋 Step 4/6 — Default Policy"))
@@ -7873,7 +7904,7 @@ func (m tuiModel) renderPersonaWizardPanel(h int,
 	case wizStepPersonaChannelToken:
 		if w.personaChannelIdx < len(w.personaChannels) {
 			ch := w.personaChannels[w.personaChannelIdx]
-			lines = append(lines, stepStyle.Render(fmt.Sprintf("  Step 5b: %s Token", strings.Title(ch.chType))))
+			lines = append(lines, stepStyle.Render(fmt.Sprintf("  Step 6b: Finalize %s", strings.Title(ch.chType))))
 			lines = append(lines, "")
 			lines = append(lines, hintStyle.Render(fmt.Sprintf("  Paste %s or press Enter to skip.", ch.tokenKey)))
 		}
