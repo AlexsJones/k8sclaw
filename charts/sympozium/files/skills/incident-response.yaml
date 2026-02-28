@@ -1,0 +1,157 @@
+---
+# Sympozium built-in SkillPack: Incident Response
+apiVersion: sympozium.ai/v1alpha1
+kind: SkillPack
+metadata:
+  name: incident-response
+  namespace: sympozium-system
+  labels:
+    sympozium.ai/builtin: "true"
+    sympozium.ai/category: sre
+spec:
+  category: sre
+  version: "0.1.0"
+  source: builtin
+  skills:
+    - name: triage
+      description: Structured incident triage runbook
+      content: |
+        # Incident Triage
+
+        When an alert fires or a user reports an issue, follow this runbook.
+
+        ## Step 1: Assess Blast Radius
+        1. Which namespace/service is affected?
+        2. How many pods are unhealthy?
+        3. Is this user-facing? Check ingress/service endpoints.
+
+        ```
+        kubectl get pods -n <ns> --field-selector=status.phase!=Running
+        kubectl get events -n <ns> --sort-by=.lastTimestamp | head -20
+        kubectl get endpoints <service> -n <ns>
+        ```
+
+        ## Step 2: Classify Severity
+        | Severity | Criteria |
+        |----------|----------|
+        | P1 Critical | User-facing outage, data at risk |
+        | P2 High | Degraded performance, partial outage |
+        | P3 Medium | Non-critical service down, workaround available |
+        | P4 Low | Cosmetic, logging, non-urgent |
+
+        ## Step 3: Isolate
+        - Is the issue spreading? Check if other deployments in the namespace
+          are affected.
+        - Check node health: `kubectl get nodes` — is this a node-level issue?
+        - Check recent deployments: `kubectl rollout history` — was something
+          just deployed?
+
+        ## Step 4: Communicate
+        Provide a structured status update:
+        ```
+        **Incident**: [brief description]
+        **Severity**: P[1-4]
+        **Impact**: [what is affected]
+        **Status**: [investigating/mitigating/resolved]
+        **Next step**: [what you are doing now]
+        ```
+      requires:
+        bins:
+          - kubectl
+        tools:
+          - bash
+
+    - name: log-analysis
+      description: Systematic log analysis for Kubernetes workloads
+      content: |
+        # Log Analysis
+
+        ## Collect Logs
+        ```
+        # Current logs
+        kubectl logs <pod> -n <ns> --tail=100
+
+        # Previous crash logs
+        kubectl logs <pod> -n <ns> --previous
+
+        # All containers in a pod
+        kubectl logs <pod> -n <ns> --all-containers
+
+        # Logs since a time
+        kubectl logs <pod> -n <ns> --since=1h
+
+        # Stream/follow logs
+        kubectl logs <pod> -n <ns> -f
+        ```
+
+        ## Pattern Recognition
+        When analysing logs, look for these patterns:
+        - **Error spikes**: Sudden increase in ERROR/FATAL lines.
+        - **Connection refused**: Downstream service is down or misconfigured.
+        - **Timeout**: Network issues or slow dependencies.
+        - **OOM/memory**: Application memory leak or insufficient limits.
+        - **Permission denied**: RBAC, file permissions, or SA misconfiguration.
+        - **Certificate errors**: Expired or misconfigured TLS.
+
+        ## Cross-Reference
+        - Compare timestamps between pod logs and `kubectl get events`.
+        - Check if multiple pods show the same error (systemic vs isolated).
+        - Look at init container logs if the main container never starts.
+
+        ## Summarise Findings
+        Present as:
+        1. **Root Cause**: What is actually broken.
+        2. **Evidence**: The specific log lines.
+        3. **Impact**: What is affected.
+        4. **Remediation**: Suggested fix.
+      requires:
+        bins:
+          - kubectl
+        tools:
+          - bash
+
+    - name: rollback-guide
+      description: Safe rollback procedures
+      content: |
+        # Rollback Guide
+
+        ## Deployment Rollback
+        ```
+        # Check rollout history
+        kubectl rollout history deployment/<name> -n <ns>
+
+        # Rollback to previous
+        kubectl rollout undo deployment/<name> -n <ns>
+
+        # Rollback to specific revision
+        kubectl rollout undo deployment/<name> -n <ns> --to-revision=<n>
+
+        # Watch rollback progress
+        kubectl rollout status deployment/<name> -n <ns>
+        ```
+
+        ## Pre-Rollback Checklist
+        1. Confirm the current broken revision number.
+        2. Identify the last known good revision.
+        3. Check if the rollback will affect database migrations (they may not
+           be reversible).
+        4. Warn the user if PVCs or StatefulSets are involved.
+
+        ## Post-Rollback Verification
+        1. All pods Running and Ready?
+        2. Endpoints populated for Services?
+        3. No new error events?
+        4. User-facing health check passes?
+
+        ## If Rollback Fails
+        - Check if the previous image is still available in the registry.
+        - Check if config/secrets have changed since the previous revision.
+        - Consider scaling to 0 and back up as a last resort.
+      requires:
+        bins:
+          - kubectl
+        tools:
+          - bash
+  runtimeRequirements:
+    minMemory: 256Mi
+    minCPU: 100m

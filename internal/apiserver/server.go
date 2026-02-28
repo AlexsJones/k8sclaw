@@ -251,12 +251,13 @@ func (s *Server) deleteInstance(w http.ResponseWriter, r *http.Request) {
 
 // CreateInstanceRequest is the request body for creating a new SympoziumInstance.
 type CreateInstanceRequest struct {
-	Name       string `json:"name"`
-	Provider   string `json:"provider"`
-	Model      string `json:"model"`
-	BaseURL    string `json:"baseURL,omitempty"`
-	SecretName string `json:"secretName,omitempty"`
-	PolicyRef  string `json:"policyRef,omitempty"`
+	Name       string   `json:"name"`
+	Provider   string   `json:"provider"`
+	Model      string   `json:"model"`
+	BaseURL    string   `json:"baseURL,omitempty"`
+	SecretName string   `json:"secretName,omitempty"`
+	PolicyRef  string   `json:"policyRef,omitempty"`
+	Skills     []string `json:"skills,omitempty"`
 }
 
 func (s *Server) createInstance(w http.ResponseWriter, r *http.Request) {
@@ -302,6 +303,23 @@ func (s *Server) createInstance(w http.ResponseWriter, r *http.Request) {
 
 	if req.PolicyRef != "" {
 		inst.Spec.PolicyRef = req.PolicyRef
+	}
+	if len(req.Skills) > 0 {
+		inst.Spec.Skills = make([]sympoziumv1alpha1.SkillRef, 0, len(req.Skills))
+		seen := make(map[string]struct{}, len(req.Skills))
+		for _, sk := range req.Skills {
+			sk = strings.TrimSpace(sk)
+			if sk == "" {
+				continue
+			}
+			if _, ok := seen[sk]; ok {
+				continue
+			}
+			seen[sk] = struct{}{}
+			inst.Spec.Skills = append(inst.Spec.Skills, sympoziumv1alpha1.SkillRef{
+				SkillPackRef: sk,
+			})
+		}
 	}
 
 	if err := s.client.Create(r.Context(), inst); err != nil {
@@ -685,6 +703,7 @@ type PatchPersonaPackRequest struct {
 	BaseURL        string            `json:"baseURL,omitempty"`
 	ChannelConfigs map[string]string `json:"channelConfigs,omitempty"`
 	PolicyRef      string            `json:"policyRef,omitempty"`
+	Skills         []string          `json:"skills,omitempty"`
 }
 
 func (s *Server) patchPersonaPack(w http.ResponseWriter, r *http.Request) {
@@ -757,6 +776,24 @@ func (s *Server) patchPersonaPack(w http.ResponseWriter, r *http.Request) {
 	if req.Model != "" {
 		for i := range pp.Spec.Personas {
 			pp.Spec.Personas[i].Model = req.Model
+		}
+	}
+	if req.Skills != nil {
+		normalized := make([]string, 0, len(req.Skills))
+		seen := make(map[string]struct{}, len(req.Skills))
+		for _, sk := range req.Skills {
+			sk = strings.TrimSpace(sk)
+			if sk == "" {
+				continue
+			}
+			if _, ok := seen[sk]; ok {
+				continue
+			}
+			seen[sk] = struct{}{}
+			normalized = append(normalized, sk)
+		}
+		for i := range pp.Spec.Personas {
+			pp.Spec.Personas[i].Skills = append([]string(nil), normalized...)
 		}
 	}
 

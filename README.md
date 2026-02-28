@@ -257,6 +257,7 @@ Skills are mounted as files into agent pods and optionally inject sidecar contai
 | SkillPack | Category | Sidecar | Description | Status |
 |-----------|----------|---------|-------------|--------|
 | `k8s-ops` | Kubernetes | ✅ `kubectl`, `curl`, `jq` | Cluster inspection, workload management, troubleshooting, scaling. Full admin RBAC auto-provisioned per run. | **Stable** |
+| `sre-observability` | SRE | ✅ `kubectl`, `curl`, `jq` | Prometheus/Loki/Kubernetes observability workflows: health triage, metrics queries, and deep log/event correlation. Read-only observability RBAC auto-provisioned per run. | **Alpha** |
 | `incident-response` | SRE | ✅ | Structured incident triage — gather context, diagnose root cause, suggest remediation. | **Alpha** |
 | `code-review` | Development | — | Code review guidelines and best practices for pull request analysis. | **Alpha** |
 
@@ -402,7 +403,7 @@ SympoziumInstance has skills: [k8s-ops]
     → On completion/deletion: all skill RBAC cleaned up
 ```
 
-The `k8s-ops` built-in skill is the first proof of concept — it provides a sidecar with `kubectl`, `curl`, and `jq` with full admin access to workload resources (pods, deployments, services, etc.) and cluster-wide read access to nodes, namespaces, and more. See the **[Skill Authoring Guide](docs/writing-skills.md)** for a full walkthrough of building your own skills. To enable a skill, toggle it on your instance:
+The `k8s-ops` and `sre-observability` built-in skills provide sidecars with `kubectl`, `curl`, and `jq` for cluster operations and observability runbooks. `k8s-ops` is designed for active workload management, while `sre-observability` is read-only for metrics/logs/events triage. See the **[Skill Authoring Guide](docs/writing-skills.md)** for a full walkthrough of building your own skills. To enable a skill, toggle it on your instance:
 
 ```
 # In the TUI: press 's' on an instance → Space to toggle k8s-ops

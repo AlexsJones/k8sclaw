@@ -1,0 +1,194 @@
+---
+# Sympozium built-in SkillPack: Kubernetes Operations
+apiVersion: sympozium.ai/v1alpha1
+kind: SkillPack
+metadata:
+  name: k8s-ops
+  namespace: sympozium-system
+  labels:
+    sympozium.ai/builtin: "true"
+    sympozium.ai/category: kubernetes
+spec:
+  category: kubernetes
+  version: "0.1.0"
+  source: builtin
+  skills:
+    - name: cluster-overview
+      description: Inspect cluster state and summarise health
+      content: |
+        # Cluster Overview
+
+        You are running inside a Kubernetes pod with full cluster admin access
+        via an in-cluster ServiceAccount token. kubectl works out of the box —
+        do NOT check kubeconfig or contexts. Just run kubectl commands directly.
+        You have RBAC permissions to read all resources cluster-wide and manage
+        workloads in any namespace. Commands like `kubectl get pods -A` work.
+
+        When asked to inspect or summarise a Kubernetes cluster, follow these
+        steps in order:
+
+        ## Quick Health Check
+        1. `kubectl get nodes -o wide` — are all nodes Ready?
+        2. `kubectl get pods -A --field-selector=status.phase!=Running,status.phase!=Succeeded` — any unhealthy pods?
+        3. `kubectl top nodes` (if metrics-server available) — resource pressure?
+
+        ## Namespace Scan
+        - List namespaces: `kubectl get ns`
+        - For each namespace with workloads, count pods by status.
+
+        ## Event Correlation
+        - `kubectl get events -A --sort-by=.lastTimestamp | tail -30`
+        - Highlight Warning-type events and correlate with unhealthy pods.
+
+        ## Output Format
+        Summarise as a table:
+        | Dimension | Status | Details |
+        |-----------|--------|---------|
+        | Nodes     | ✅/⚠️/❌ | … |
+        | Pods      | ✅/⚠️/❌ | … |
+        | Events    | ✅/⚠️/❌ | … |
+      requires:
+        bins:
+          - kubectl
+        tools:
+          - bash
+          - read_file
+
+    - name: pod-troubleshoot
+      description: Diagnose and fix pod issues
+      content: |
+        # Pod Troubleshooting
+
+        When a pod is failing, unhealthy, or stuck, use this systematic approach:
+
+        ## 1. Identify the Problem
+        ```
+        kubectl describe pod <name> -n <ns>
+        ```
+        Look for:
+        - **Pending**: Check Events for scheduling failures (insufficient resources,
+          node affinity, taints).
+        - **CrashLoopBackOff**: Check container logs and exit codes.
+        - **ImagePullBackOff**: Verify image name, tag, and pull secrets.
+        - **OOMKilled**: Container exceeded memory limits.
+
+        ## 2. Inspect Logs
+        ```
+        kubectl logs <pod> -n <ns> --previous   # crashed container
+        kubectl logs <pod> -n <ns> -c <container> # specific container
+        ```
+
+        ## 3. Resource Analysis
+        ```
+        kubectl top pod <pod> -n <ns>
+        kubectl get pod <pod> -n <ns> -o jsonpath='{.spec.containers[*].resources}'
+        ```
+
+        ## 4. Common Fixes
+        - **OOMKilled**: Increase memory limits or investigate memory leaks.
+        - **CrashLoop**: Check application config, env vars, mounted secrets.
+        - **Pending**: Scale up nodes, adjust resource requests, or fix affinity rules.
+        - **ImagePull**: Fix image reference or create/update imagePullSecrets.
+
+        ## 5. Network Issues
+        ```
+        kubectl exec <pod> -n <ns> -- nslookup <service>
+        kubectl get networkpolicies -n <ns>
+        kubectl get svc -n <ns>
+        ```
+      requires:
+        bins:
+          - kubectl
+        tools:
+          - bash
+
+    - name: resource-management
+      description: Scale, update, and manage Kubernetes resources
+      content: |
+        # Resource Management
+
+        ## Deployments
+        - Scale: `kubectl scale deployment/<name> --replicas=<n> -n <ns>`
+        - Rollout status: `kubectl rollout status deployment/<name> -n <ns>`
+        - Rollback: `kubectl rollout undo deployment/<name> -n <ns>`
+        - History: `kubectl rollout history deployment/<name> -n <ns>`
+
+        ## Debugging Live
+        - Exec into pod: `kubectl exec -it <pod> -n <ns> -- /bin/sh`
+        - Port forward: `kubectl port-forward pod/<pod> <local>:<remote> -n <ns>`
+        - Copy files: `kubectl cp <pod>:<path> <local-path> -n <ns>`
+
+        ## Resource Inspection
+        - Get all resources: `kubectl get all -n <ns>`
+        - YAML output: `kubectl get <resource> <name> -n <ns> -o yaml`
+        - JSONPath: `kubectl get pods -o jsonpath='{.items[*].metadata.name}'`
+
+        ## Labels & Selectors
+        - Filter: `kubectl get pods -l app=myapp -n <ns>`
+        - Label: `kubectl label pod <pod> env=debug -n <ns>`
+        - Annotate: `kubectl annotate pod <pod> description="debugging" -n <ns>`
+
+        ## Danger Zone (always confirm with user)
+        - Delete pod: `kubectl delete pod <pod> -n <ns>`
+        - Drain node: `kubectl drain <node> --ignore-daemonsets`
+        - Delete namespace: NEVER do this without explicit confirmation.
+      requires:
+        bins:
+          - kubectl
+        tools:
+          - bash
+  runtimeRequirements:
+    minMemory: 256Mi
+    minCPU: 100m
+  sidecar:
+    image: ghcr.io/alexsjones/sympozium/skill-k8s-ops:latest
+    mountWorkspace: true
+    resources:
+      cpu: "100m"
+      memory: "128Mi"
+    # Namespace-scoped RBAC: full admin on workloads and core resources
+    rbac:
+      - apiGroups: [""]
+        resources: ["pods", "pods/log", "pods/exec", "pods/portforward", "services", "configmaps", "secrets", "events", "endpoints", "persistentvolumeclaims", "serviceaccounts", "replicationcontrollers", "resourcequotas", "limitranges"]
+        verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+      - apiGroups: ["apps"]
+        resources: ["deployments", "statefulsets", "replicasets", "daemonsets", "controllerrevisions"]
+        verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+      - apiGroups: ["batch"]
+        resources: ["jobs", "cronjobs"]
+        verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+      - apiGroups: ["networking.k8s.io"]
+        resources: ["networkpolicies", "ingresses", "ingressclasses"]
+        verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+      - apiGroups: ["autoscaling"]
+        resources: ["horizontalpodautoscalers"]
+        verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+      - apiGroups: ["policy"]
+        resources: ["poddisruptionbudgets"]
+        verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+      - apiGroups: ["rbac.authorization.k8s.io"]
+        resources: ["roles", "rolebindings"]
+        verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+    # Cluster-scoped RBAC: full read + node/namespace management
+    clusterRBAC:
+      - apiGroups: [""]
+        resources: ["nodes", "namespaces", "persistentvolumes", "pods", "pods/log", "services", "configmaps", "secrets", "events", "endpoints"]
+        verbs: ["get", "list", "watch"]
+      - apiGroups: ["apps"]
+        resources: ["deployments", "statefulsets", "replicasets", "daemonsets"]
+        verbs: ["get", "list", "watch"]
+      - apiGroups: ["batch"]
+        resources: ["jobs", "cronjobs"]
+        verbs: ["get", "list", "watch"]
+      - apiGroups: ["networking.k8s.io"]
+        resources: ["networkpolicies", "ingresses", "ingressclasses"]
+        verbs: ["get", "list", "watch"]
+      - apiGroups: ["rbac.authorization.k8s.io"]
+        resources: ["clusterroles", "clusterrolebindings", "roles", "rolebindings"]
+        verbs: ["get", "list", "watch"]
+      - apiGroups: ["storage.k8s.io"]
+        resources: ["storageclasses", "volumeattachments"]
+        verbs: ["get", "list", "watch"]
+      - apiGroups: ["apiextensions.k8s.io"]
+        resources: ["customresourcedefinitions"]
+        verbs: ["get", "list", "watch"]

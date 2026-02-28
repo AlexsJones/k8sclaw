@@ -1,0 +1,192 @@
+---
+# Sympozium built-in SkillPack: SRE Observability
+apiVersion: sympozium.ai/v1alpha1
+kind: SkillPack
+metadata:
+  name: sre-observability
+  namespace: sympozium-system
+  labels:
+    sympozium.ai/builtin: "true"
+    sympozium.ai/category: sre
+spec:
+  category: sre
+  version: "0.1.0"
+  source: builtin
+  skills:
+    - name: observability-triage
+      description: Baseline cluster and workload health using events, restarts, and resource pressure
+      content: |
+        # Observability Triage
+
+        You are running in-cluster with `kubectl`, `curl`, and `jq`. Use
+        `execute_command` for all shell commands.
+
+        ## 1. Cluster and Node Health
+        ```
+        kubectl get nodes -o wide
+        kubectl top nodes
+        kubectl get events -A --field-selector type=Warning --sort-by=.lastTimestamp | tail -30
+        ```
+
+        ## 2. Failing Workloads
+        ```
+        kubectl get pods -A --field-selector=status.phase!=Running,status.phase!=Succeeded
+        kubectl get pods -A -o json | jq -r '.items[] | [.metadata.namespace, .metadata.name, ([.status.containerStatuses[]?.restartCount] | add // 0), .status.phase] | @tsv' | sort -k3 -nr | head -20
+        kubectl get deploy,statefulset,daemonset -A
+        ```
+
+        ## 3. Namespace Focus
+        If a namespace is reported as broken, drill down:
+        ```
+        kubectl get pods -n <namespace> -o wide
+        kubectl get events -n <namespace> --sort-by=.lastTimestamp | tail -30
+        kubectl logs <pod> -n <namespace> --since=30m --tail=200
+        ```
+
+        ## Output Format
+        Return:
+        1. What is unhealthy right now.
+        2. Evidence (commands + key findings).
+        3. Immediate mitigation options ordered by risk.
+      requires:
+        bins:
+          - kubectl
+          - curl
+          - jq
+        tools:
+          - execute_command
+
+    - name: prometheus-query
+      description: Query Prometheus and kube-state-metrics for error rate, latency, restarts, and saturation
+      content: |
+        # Prometheus Query Workflow
+
+        Use this workflow to query Prometheus directly through its HTTP API.
+
+        ## 1. Discover Prometheus endpoint
+        ```
+        kubectl get svc -A | grep -Ei 'prometheus|kube-state-metrics'
+        ```
+        Prefer known service names if available:
+        - `prometheus-operated.monitoring.svc:9090`
+        - `kube-prometheus-stack-prometheus.monitoring.svc:9090`
+        - `prometheus-server.monitoring.svc:80`
+
+        Set a shell variable in your command:
+        ```
+        export PROM_URL="http://<prometheus-service>:<port>"
+        ```
+
+        ## 2. Run instant PromQL queries
+        ```
+        curl -sG "$PROM_URL/api/v1/query" --data-urlencode 'query=up' | jq
+        curl -sG "$PROM_URL/api/v1/query" --data-urlencode 'query=sum(rate(container_cpu_usage_seconds_total{container!=\"\"}[5m])) by (namespace,pod)' | jq
+        curl -sG "$PROM_URL/api/v1/query" --data-urlencode 'query=sum(container_memory_working_set_bytes{container!=\"\"}) by (namespace,pod)' | jq
+        curl -sG "$PROM_URL/api/v1/query" --data-urlencode 'query=topk(20, increase(kube_pod_container_status_restarts_total[1h]))' | jq
+        ```
+
+        ## 3. Run range query for trends
+        ```
+        NOW=$(date +%s); START=$((NOW-3600))
+        curl -sG "$PROM_URL/api/v1/query_range" \
+          --data-urlencode 'query=histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket[5m])) by (le, job))' \
+          --data-urlencode "start=$START" \
+          --data-urlencode "end=$NOW" \
+          --data-urlencode 'step=60' | jq
+        ```
+
+        ## 4. Interpret carefully
+        - Confirm labels (`job`, `namespace`, `pod`, `service`) in results before concluding.
+        - If a query returns empty, report that metric may not be scraped in this cluster.
+      requires:
+        bins:
+          - curl
+          - jq
+          - kubectl
+        tools:
+          - execute_command
+
+    - name: loki-and-logs
+      description: Deep log analysis via Loki API or kubectl logs fallback
+      content: |
+        # Loki and Kubernetes Logs
+
+        ## 1. Discover Loki endpoint
+        ```
+        kubectl get svc -A | grep -Ei 'loki|grafana'
+        ```
+        Common Loki service names:
+        - `loki.monitoring.svc:3100`
+        - `loki-gateway.monitoring.svc:80`
+
+        ## 2. Query Loki (if present)
+        Set:
+        ```
+        export LOKI_URL="http://<loki-service>:<port>"
+        ```
+        Recent error logs:
+        ```
+        START_NS=$((($(date +%s)-1800)*1000000000))
+        END_NS=$(($(date +%s)*1000000000))
+        curl -sG "$LOKI_URL/loki/api/v1/query_range" \
+          --data-urlencode 'query={namespace="<namespace>"} |= "error"' \
+          --data-urlencode "start=$START_NS" \
+          --data-urlencode "end=$END_NS" \
+          --data-urlencode 'limit=500' | jq
+        ```
+
+        ## 3. Fallback to kubectl logs
+        ```
+        kubectl logs -n <namespace> <pod> --all-containers --since=30m --tail=500
+        kubectl logs -n <namespace> <pod> --previous --tail=200
+        ```
+
+        ## 4. Correlate with events
+        ```
+        kubectl get events -n <namespace> --sort-by=.lastTimestamp | tail -40
+        ```
+        Correlate by timestamps and pod names before proposing root cause.
+      requires:
+        bins:
+          - curl
+          - jq
+          - kubectl
+        tools:
+          - execute_command
+  runtimeRequirements:
+    minMemory: 256Mi
+    minCPU: 100m
+  sidecar:
+    image: ghcr.io/alexsjones/sympozium/skill-sre-observability:latest
+    mountWorkspace: true
+    resources:
+      cpu: "100m"
+      memory: "128Mi"
+    # Namespace-scoped read-only observability permissions.
+    rbac:
+      - apiGroups: [""]
+        resources: ["pods", "pods/log", "events", "services", "endpoints", "configmaps"]
+        verbs: ["get", "list", "watch"]
+      - apiGroups: ["apps"]
+        resources: ["deployments", "statefulsets", "daemonsets", "replicasets"]
+        verbs: ["get", "list", "watch"]
+      - apiGroups: ["autoscaling"]
+        resources: ["horizontalpodautoscalers"]
+        verbs: ["get", "list", "watch"]
+      - apiGroups: ["metrics.k8s.io"]
+        resources: ["pods"]
+        verbs: ["get", "list"]
+    # Cluster-scoped read-only observability permissions.
+    clusterRBAC:
+      - apiGroups: [""]
+        resources: ["nodes", "namespaces", "pods", "pods/log", "events", "services", "endpoints"]
+        verbs: ["get", "list", "watch"]
+      - apiGroups: ["apps"]
+        resources: ["deployments", "statefulsets", "daemonsets", "replicasets"]
+        verbs: ["get", "list", "watch"]
+      - apiGroups: ["autoscaling"]
+        resources: ["horizontalpodautoscalers"]
+        verbs: ["get", "list", "watch"]
+      - apiGroups: ["metrics.k8s.io"]
+        resources: ["nodes", "pods"]
+        verbs: ["get", "list"]

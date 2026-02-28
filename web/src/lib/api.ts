@@ -437,6 +437,7 @@ export const api = {
       baseURL?: string;
       secretName?: string;
       policyRef?: string;
+      skills?: string[];
     }) =>
       apiFetch<SympoziumInstance>("/api/v1/instances", {
         method: "POST",
@@ -510,6 +511,7 @@ export const api = {
         baseURL?: string;
         channelConfigs?: Record<string, string>;
         policyRef?: string;
+        skills?: string[];
       }
     ) =>
       apiFetch<PersonaPack>(`/api/v1/personapacks/${name}`, {

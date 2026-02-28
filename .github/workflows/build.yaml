@@ -118,6 +118,7 @@ jobs:
           - channel-discord
           - channel-slack
           - skill-k8s-ops
+          - skill-sre-observability
     steps:
       - uses: actions/checkout@v4
 

@@ -30,6 +30,7 @@ import {
   MessageSquare,
   Loader2,
   Search,
+  Wrench,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -59,6 +60,7 @@ export interface WizardResult {
   secretName: string;
   model: string;
   baseURL: string;
+  skills: string[];
   channelConfigs: Record<string, string>;
 }
 
@@ -71,6 +73,8 @@ interface OnboardingWizardProps {
   targetName?: string;
   /** Number of personas in the pack (persona mode only) */
   personaCount?: number;
+  /** Available SkillPacks to choose from */
+  availableSkills?: string[];
   /** Pre-fill form values */
   defaults?: Partial<WizardResult>;
   /** Called when the user clicks Activate / Create */
@@ -80,13 +84,13 @@ interface OnboardingWizardProps {
 
 // ── Steps ────────────────────────────────────────────────────────────────────
 
-type WizardStep = "name" | "provider" | "apikey" | "model" | "channels" | "confirm";
+type WizardStep = "name" | "provider" | "apikey" | "model" | "skills" | "channels" | "confirm";
 
 function stepsForMode(mode: "instance" | "persona"): WizardStep[] {
   if (mode === "instance") {
-    return ["name", "provider", "apikey", "model", "channels", "confirm"];
+    return ["name", "provider", "apikey", "model", "skills", "channels", "confirm"];
   }
-  return ["provider", "apikey", "model", "channels", "confirm"];
+  return ["provider", "apikey", "model", "skills", "channels", "confirm"];
 }
 
 // ── Step indicator ───────────────────────────────────────────────────────────
@@ -97,6 +101,7 @@ function StepIndicator({ steps, current }: { steps: WizardStep[]; current: Wizar
     provider: "Provider",
     apikey: "Auth",
     model: "Model",
+    skills: "Skills",
     channels: "Channels",
     confirm: "Confirm",
   };
@@ -105,6 +110,7 @@ function StepIndicator({ steps, current }: { steps: WizardStep[]; current: Wizar
     provider: <Bot className="h-3.5 w-3.5" />,
     apikey: <Key className="h-3.5 w-3.5" />,
     model: <Sparkles className="h-3.5 w-3.5" />,
+    skills: <Wrench className="h-3.5 w-3.5" />,
     channels: <MessageSquare className="h-3.5 w-3.5" />,
     confirm: <Check className="h-3.5 w-3.5" />,
   };
@@ -235,6 +241,7 @@ export function OnboardingWizard({
   mode,
   targetName,
   personaCount,
+  availableSkills = [],
   defaults,
   onComplete,
   isPending,
@@ -248,6 +255,7 @@ export function OnboardingWizard({
     secretName: defaults?.secretName || "",
     model: defaults?.model || "",
     baseURL: defaults?.baseURL || "",
+    skills: defaults?.skills || [],
     channelConfigs: defaults?.channelConfigs || {},
   });
 
@@ -263,6 +271,8 @@ export function OnboardingWizard({
         return !!form.secretName || !!form.apiKey;
       case "model":
         return !!form.model;
+      case "skills":
+        return true;
       default:
         return true;
     }
@@ -293,6 +303,7 @@ export function OnboardingWizard({
       secretName: d.secretName || "",
       model: d.model || "",
       baseURL: d.baseURL || "",
+      skills: d.skills || [],
       channelConfigs: d.channelConfigs || {},
     });
     setStep(steps[0]);
@@ -345,8 +356,8 @@ export function OnboardingWizard({
           </DialogTitle>
           <DialogDescription>
             {mode === "instance"
-              ? "Configure a new SympoziumInstance with provider and model."
-              : "Configure provider, model, and optional channels to activate this persona pack."}
+              ? "Configure a new SympoziumInstance with provider, model, and skills."
+              : "Configure provider, model, skills, and optional channels to activate this persona pack."}
           </DialogDescription>
         </DialogHeader>
 
@@ -471,6 +482,54 @@ export function OnboardingWizard({
           </div>
         )}
 
+        {/* ── Skills step ───────────────────────────────────────────── */}
+        {step === "skills" && (
+          <div className="space-y-3">
+            <p className="text-sm text-muted-foreground">
+              Select SkillPacks to attach.
+            </p>
+            {availableSkills.length === 0 ? (
+              <p className="rounded-md border border-border/50 bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
+                No SkillPacks found in cluster.
+              </p>
+            ) : (
+              <ScrollArea className="h-52 rounded-md border border-border/50">
+                <div className="p-1 space-y-1">
+                  {availableSkills.map((skill) => {
+                    const selected = form.skills.includes(skill);
+                    return (
+                      <button
+                        key={skill}
+                        type="button"
+                        onClick={() => {
+                          const next = selected
+                            ? form.skills.filter((s) => s !== skill)
+                            : [...form.skills, skill];
+                          setForm({ ...form, skills: next });
+                        }}
+                        className={cn(
+                          "flex w-full items-center justify-between rounded-md border px-2.5 py-2 text-left text-xs transition-colors",
+                          selected
+                            ? "border-indigo-500/40 bg-indigo-500/15 text-indigo-300"
+                            : "border-transparent hover:border-border/60 hover:bg-white/5"
+                        )}
+                      >
+                        <span className="font-mono">{skill}</span>
+                        <span className="text-[10px]">{selected ? "Selected" : "Select"}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </ScrollArea>
+            )}
+            <p className="text-xs text-muted-foreground">
+              {form.skills.length > 0
+                ? `${form.skills.length} skill${form.skills.length === 1 ? "" : "s"} selected`
+                : "No skills selected"}
+            </p>
+          </div>
+        )}
+
         {/* ── Channels step ─────────────────────────────────────────── */}
         {step === "channels" && (
           <div className="space-y-4">
@@ -526,6 +585,12 @@ export function OnboardingWizard({
               <div className="flex justify-between">
                 <span className="text-muted-foreground">Model</span>
                 <span className="font-mono">{form.model}</span>
+              </div>
+              <div className="flex justify-between gap-4">
+                <span className="text-muted-foreground">Skills</span>
+                <span className="font-mono text-right">
+                  {form.skills.length > 0 ? form.skills.join(", ") : "—"}
+                </span>
               </div>
               {form.baseURL && (
                 <div className="flex justify-between">

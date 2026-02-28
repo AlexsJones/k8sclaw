@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
-import { usePersonaPacks, useActivatePersonaPack } from "@/hooks/use-api";
+import { usePersonaPacks, useActivatePersonaPack, useSkills } from "@/hooks/use-api";
 import { StatusBadge } from "@/components/status-badge";
 import { OnboardingWizard, type WizardResult } from "@/components/onboarding-wizard";
 import {
@@ -28,6 +28,7 @@ import type { PersonaPack } from "@/lib/api";
 
 export function PersonasPage() {
   const { data, isLoading } = usePersonaPacks();
+  const { data: skillPacks } = useSkills();
   const activatePack = useActivatePersonaPack();
   const [search, setSearch] = useState("");
 
@@ -67,6 +68,7 @@ export function PersonasPage() {
           Object.keys(result.channelConfigs).length > 0
             ? result.channelConfigs
             : undefined,
+        skills: result.skills,
       },
       { onSuccess: closeWizard }
     );
@@ -213,10 +215,16 @@ export function PersonasPage() {
         mode="persona"
         targetName={wizardPack?.metadata.name}
         personaCount={wizardPack?.spec.personas?.length ?? 0}
+        availableSkills={(skillPacks || []).map((s) => s.metadata.name)}
         defaults={{
           provider: wizardPack?.spec.authRefs?.[0]?.provider || "",
           secretName: wizardPack?.spec.authRefs?.[0]?.secret || "",
           model: wizardPack?.spec.personas?.[0]?.model || "",
+          skills: Array.from(
+            new Set(
+              (wizardPack?.spec.personas || []).flatMap((p) => p.skills || [])
+            )
+          ),
           channelConfigs: wizardPack?.spec.channelConfigs || {},
         }}
         onComplete={handleComplete}

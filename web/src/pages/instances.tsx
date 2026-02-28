@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
-import { useInstances, useDeleteInstance, useCreateInstance } from "@/hooks/use-api";
+import { useInstances, useDeleteInstance, useCreateInstance, useSkills } from "@/hooks/use-api";
 import { StatusBadge } from "@/components/status-badge";
 import { OnboardingWizard, type WizardResult } from "@/components/onboarding-wizard";
 import {
@@ -19,6 +19,7 @@ import { formatAge } from "@/lib/utils";
 
 export function InstancesPage() {
   const { data, isLoading } = useInstances();
+  const { data: skillPacks } = useSkills();
   const deleteInstance = useDeleteInstance();
   const createInstance = useCreateInstance();
   const [wizardOpen, setWizardOpen] = useState(false);
@@ -36,6 +37,7 @@ export function InstancesPage() {
         model: result.model,
         baseURL: result.baseURL || undefined,
         secretName: result.secretName || undefined,
+        skills: result.skills,
       },
       { onSuccess: () => setWizardOpen(false) }
     );
@@ -146,7 +148,8 @@ export function InstancesPage() {
         open={wizardOpen}
         onClose={() => setWizardOpen(false)}
         mode="instance"
-        defaults={{ provider: "openai", model: "gpt-4o" }}
+        availableSkills={(skillPacks || []).map((s) => s.metadata.name)}
+        defaults={{ provider: "openai", model: "gpt-4o", skills: ["k8s-ops"] }}
         onComplete={handleComplete}
         isPending={createInstance.isPending}
       />

@@ -1,0 +1,140 @@
+---
+# Sympozium built-in SkillPack: Code Review
+apiVersion: sympozium.ai/v1alpha1
+kind: SkillPack
+metadata:
+  name: code-review
+  namespace: sympozium-system
+  labels:
+    sympozium.ai/builtin: "true"
+    sympozium.ai/category: development
+spec:
+  category: development
+  version: "0.1.0"
+  source: builtin
+  skills:
+    - name: review-guidelines
+      description: Structured code review methodology
+      content: |
+        # Code Review Guidelines
+
+        ## Review Approach
+        1. Understand the intent — read the PR description / task first.
+        2. Skim the diff for overall shape before diving into details.
+        3. Focus on correctness first, style second.
+
+        ## Checklist
+        - [ ] **Correctness**: Does the logic handle all edge cases?
+        - [ ] **Error handling**: Are errors propagated, not swallowed?
+        - [ ] **Naming**: Are variables/functions descriptive and consistent?
+        - [ ] **Tests**: Are new code paths covered by tests?
+        - [ ] **Security**: No hardcoded secrets, SQL injection, XSS vectors?
+        - [ ] **Performance**: No N+1 queries, unbounded allocations, or hot loops?
+        - [ ] **Documentation**: Are public APIs documented?
+        - [ ] **Breaking changes**: Are API contracts preserved?
+
+        ## Severity Levels
+        | Level | Meaning | Action |
+        |-------|---------|--------|
+        | 🔴 Critical | Security issue, data corruption, crash | Must fix |
+        | 🟠 Major | Logic error, performance issue | Should fix |
+        | 🟡 Minor | Style, naming, documentation | Nice to fix |
+        | 🟢 Suggestion | Alternative approach, nice-to-have | Optional |
+
+        ## Feedback Format
+        For each finding:
+        ```
+        **[Severity]** File:Line — Brief description
+        Why: Explanation of the issue
+        Suggest: Proposed fix or alternative
+        ```
+      requires:
+        tools:
+          - read_file
+          - grep_search
+          - list_dir
+
+    - name: security-patterns
+      description: Common security anti-patterns to detect in code review
+      content: |
+        # Security Review Patterns
+
+        ## Input Validation
+        - All user inputs validated and sanitised before use.
+        - No string concatenation in SQL queries (use parameterised queries).
+        - HTML templates use auto-escaping (check for `| safe` / `{!! !!}` / `dangerouslySetInnerHTML`).
+        - File paths validated against directory traversal (`../`).
+
+        ## Authentication & Authorization
+        - Every API endpoint has auth middleware.
+        - No hardcoded credentials, API keys, or tokens in source code.
+        - Tokens have expiration and are rotated.
+        - RBAC checks happen at the handler level, not just the UI.
+
+        ## Data Protection
+        - PII is never logged (emails, IPs, tokens in log output).
+        - Secrets use Kubernetes Secrets, not ConfigMaps or env literals.
+        - Encryption at rest for sensitive data.
+        - TLS for all external communication.
+
+        ## Kubernetes-Specific
+        - Containers run as non-root (`runAsNonRoot: true`).
+        - Read-only root filesystem where possible.
+        - No `privileged: true` or `ALL` capabilities.
+        - Network policies restrict pod-to-pod traffic.
+        - ServiceAccount tokens not auto-mounted unless needed.
+        - Resource limits set to prevent DoS.
+
+        ## Dependency Security
+        - Check for known CVEs in dependencies.
+        - Pin dependency versions (no floating tags like `latest`).
+        - Verify base images are from trusted registries.
+      requires:
+        tools:
+          - read_file
+          - grep_search
+
+    - name: go-review
+      description: Go-specific code review patterns
+      content: |
+        # Go Code Review Patterns
+
+        ## Error Handling
+        - Errors are checked, not discarded with `_`.
+        - Errors wrapped with context: `fmt.Errorf("doing X: %w", err)`.
+        - Custom error types implement `Error()` and optionally `Unwrap()`.
+        - No `panic()` in library code.
+
+        ## Concurrency
+        - Goroutines have clear ownership and shutdown paths.
+        - Channels are closed by the sender, not the receiver.
+        - `sync.WaitGroup` or `errgroup.Group` for goroutine lifecycle.
+        - No goroutine leaks (check for missing cancellation).
+        - Shared state protected by mutex or channel, not both.
+
+        ## Performance
+        - Pre-allocate slices when length is known: `make([]T, 0, n)`.
+        - Avoid `append` in hot loops without pre-allocation.
+        - Use `strings.Builder` instead of `+` for string concatenation.
+        - `sync.Pool` for frequently allocated temporary objects.
+        - Watch for unnecessary `reflect` usage.
+
+        ## Testing
+        - Table-driven tests for multiple cases.
+        - `t.Helper()` in test helper functions.
+        - `t.Parallel()` where safe.
+        - Meaningful test names: `TestFoo_WhenBar_ShouldBaz`.
+
+        ## Style
+        - Exported types and functions have doc comments.
+        - Receiver names are short and consistent (not `this` or `self`).
+        - Package names are lowercase, single-word.
+        - `context.Context` is the first parameter.
+      requires:
+        tools:
+          - read_file
+          - grep_search
+          - list_dir
+  runtimeRequirements:
+    minMemory: 256Mi
+    minCPU: 100m

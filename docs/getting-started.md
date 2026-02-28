@@ -320,8 +320,10 @@ Show me the top 5 resource-hungry pods across the cluster.
 ```
 
 The `k8s-ops` skill gives the agent kubectl access through a sidecar container
-with scoped RBAC. The `incident-response` skill provides structured triage,
-log analysis, and rollback runbooks so the agent follows a consistent process.
+with scoped RBAC. The `sre-observability` skill adds Prometheus/Loki/Kubernetes
+metrics and log triage workflows with read-only observability RBAC.
+`incident-response` provides structured triage, log analysis, and rollback
+runbooks so the agent follows a consistent process.
 
 ---
 
@@ -449,12 +451,13 @@ iteration without approval gates.
 
 ## Built-in SkillPacks
 
-Sympozium ships with three built-in SkillPacks. Enable them on any
+Sympozium ships with four built-in SkillPacks. Enable them on any
 SympoziumInstance:
 
 | SkillPack | Category | What it includes |
 |-----------|----------|------------------|
 | **k8s-ops** | Kubernetes | Cluster overview, pod troubleshooting, resource management. Comes with a sidecar that has kubectl and cluster-scoped RBAC. |
+| **sre-observability** | SRE | Observability triage with Prometheus queries, Loki/kubectl log analysis, and event correlation. Comes with a sidecar and read-only observability RBAC. |
 | **incident-response** | SRE | Structured incident triage, log analysis, rollback procedures. |
 | **code-review** | Development | Code review checklist, security anti-patterns, Go-specific review patterns. |
 

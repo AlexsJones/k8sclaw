@@ -1,0 +1,7 @@
+{{- if .Values.defaultSkills.enabled }}
+{{- range $path, $_ := .Files.Glob "files/skills/*.yaml" }}
+---
+{{ $content := $.Files.Get $path | replace "namespace: sympozium-system" (printf "namespace: %s" (include "sympozium.namespace" $)) -}}
+{{ $content }}
+{{- end }}
+{{- end }}

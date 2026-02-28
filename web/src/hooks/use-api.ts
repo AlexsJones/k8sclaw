@@ -220,6 +220,7 @@ export function useActivatePersonaPack() {
       baseURL?: string;
       channelConfigs?: Record<string, string>;
       policyRef?: string;
+      skills?: string[];
     }) => api.personaPacks.patch(name, data),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["personaPacks"] });
