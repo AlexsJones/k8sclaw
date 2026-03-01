@@ -26,10 +26,6 @@
 <p align="center">
   <img src="demo.gif" alt="Sympozium TUI demo" width="800px;">
 </p>
-<p align="center">
-  <img src="web.gif" alt="Sympozium Web demo" width="800px;">
-</p>
-
 
 ---
 ### Quick Install (macOS / Linux)
