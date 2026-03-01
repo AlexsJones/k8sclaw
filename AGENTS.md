@@ -101,7 +101,7 @@ make docker-build TAG=v0.0.32
 # Load images into Kind (all components)
 for img in controller apiserver ipc-bridge webhook agent-runner \
            channel-telegram channel-slack channel-discord channel-whatsapp \
-           skill-k8s-ops; do
+           skill-k8s-ops skill-sre-observability; do
   kind load docker-image ghcr.io/alexsjones/sympozium/$img:v0.0.32 --name kind
 done
 
@@ -169,6 +169,7 @@ TEST_MODEL=gpt-5.2 TEST_TIMEOUT=180 ./test/integration/test-write-file.sh
 | Test | What it validates |
 |------|-------------------|
 | `test-write-file.sh` | `write_file` tool — agent writes a file, script verifies content |
+| `test-anthropic-write-file.sh` | `write_file` tool using Anthropic provider — validates provider parity |
 | `test-k8s-ops-nodes.sh` | `k8s-ops` skill — agent runs kubectl via sidecar |
 | `test-telegram-channel.sh` | Telegram channel deployment + message flow |
 | `test-slack-channel.sh` | Slack channel deployment (Socket Mode) |
@@ -225,7 +226,7 @@ Key topics in `internal/eventbus/types.go`:
 
 ### Memory
 
-Each SympoziumInstance has a ConfigMap (`<name>-memory`) mounted at `/memory/MEMORY.md`. The controller extracts memory markers (`<<<MEMORY_START>>>...<<<MEMORY_END>>>`) from agent output and patches the ConfigMap.
+Each SympoziumInstance has a ConfigMap (`<name>-memory`) mounted at `/memory/MEMORY.md`. The controller extracts memory markers (`__SYMPOZIUM_MEMORY__...__SYMPOZIUM_MEMORY_END__`) from agent output and patches the ConfigMap.
 
 ### Skills
 

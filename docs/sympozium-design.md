@@ -759,8 +759,10 @@ plane. It replaces three current mechanisms:
 ├── tools/
 │   ├── exec-request-*.json # Bash exec requests (agent → bridge → sandbox sidecar)
 │   └── exec-result-*.json  # Exec results (sandbox → bridge → agent)
-└── messages/
-    └── send-*.json         # Outbound messages to channels (agent → bridge → channel pod)
+├── messages/
+│   └── send-*.json         # Outbound messages to channels (agent → bridge → channel pod)
+└── schedules/
+    └── request-*.json      # Schedule upsert/suspend/resume/delete requests (agent → bridge → schedule router)
 ```
 
 The bridge watches these directories with `inotify`/`fswatch` and translates

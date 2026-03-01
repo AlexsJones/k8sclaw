@@ -175,8 +175,8 @@ pass "Test complete"
 
 ### 3. Add to the Makefile (optional)
 
-If you want it to run as part of `make test-integration`, it already runs all scripts
-in `test/integration/`. Or add a specific target:
+If you want it to run as part of `make test-integration`, add your script to that
+target in the `Makefile` (it currently lists scripts explicitly). Or add a specific target:
 
 ```makefile
 test-integration-my-tool: ## Run my-tool integration test

@@ -26,6 +26,10 @@
 <p align="center">
   <img src="demo.gif" alt="Sympozium TUI demo" width="800px;">
 </p>
+<p align="center">
+  <img src="web.gif" alt="Sympozium Web demo" width="800px;">
+</p>
+
 
 ---
 ### Quick Install (macOS / Linux)
@@ -247,6 +251,7 @@ Every agent pod has these tools available out of the box (no skill sidecar requi
 | `list_directory` | Native | List directory contents with type, size, and name. |
 | `fetch_url` | Native | Fetch web pages or API endpoints. HTML is converted to readable plain text; JSON returned as-is. Supports custom headers, configurable max chars (default 50k). |
 | `send_channel_message` | IPC (bridge) | Send a message through a connected channel (WhatsApp, Telegram, Discord, Slack). Routes via IPC bridge → NATS → channel pod. |
+| `schedule_task` | IPC (bridge) | Create, update, suspend, resume, or delete recurring `SympoziumSchedule` tasks. Routes via IPC bridge → NATS → schedule router. |
 
 > **Native** tools run directly in the agent container. **IPC** tools communicate with sidecars or the IPC bridge via the shared `/ipc` volume. See the **[Tool Authoring Guide](docs/writing-tools.md)** for how to add your own.
 
