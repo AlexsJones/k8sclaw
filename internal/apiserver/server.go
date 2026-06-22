@@ -39,6 +39,7 @@ import (
 	"github.com/sympozium-ai/sympozium/internal/collector"
 	"github.com/sympozium-ai/sympozium/internal/controller"
 	"github.com/sympozium-ai/sympozium/internal/eventbus"
+	"github.com/sympozium-ai/sympozium/internal/sessionkey"
 )
 
 const systemNamespace = "sympozium-system"
@@ -1089,7 +1090,7 @@ func (s *Server) createRun(w http.ResponseWriter, r *http.Request) {
 		req.AgentID = "primary"
 	}
 	if req.SessionKey == "" {
-		req.SessionKey = fmt.Sprintf("session-%d", time.Now().UnixNano())
+		req.SessionKey = sessionkey.ForAPIServerDefault()
 	}
 	if req.Timeout == "" {
 		req.Timeout = "5m"
