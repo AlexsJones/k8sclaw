@@ -6238,38 +6238,19 @@ func (r *AgentRunReconciler) publishGatedCompletion(ctx context.Context, agentRu
 // /workspace/.sympozium/state.json before the agent container starts.
 // Harness wrappers and the agent-runner read this marker to detect
 // whether the workspace is fresh or carried over from a prior run.
-// The script preserves the previous marker as `previousRun` so wrappers
+// The marker preserves the previous state as `previousRun` so wrappers
 // can surface "your workspace was reclaimed" / "this is turn N" UX.
+//
+// The logic runs as the `workspace-marker` subcommand of the agent-runner
+// binary rather than a shell script: the agent-runner image is distroless
+// and has no shell (/bin/sh does not exist).
 func (r *AgentRunReconciler) buildWorkspaceMarkerInit(agentRun *sympoziumv1alpha1.AgentRun) corev1.Container {
 	noPrivEsc := false
-	script := `set -eu
-DIR=/workspace/.sympozium
-mkdir -p "$DIR"
-PREV=""
-if [ -f "$DIR/state.json" ]; then
-  PREV=$(cat "$DIR/state.json")
-fi
-{
-  printf '{'
-  printf '"runName":"%s",' "$AGENT_RUN_ID"
-  printf '"sessionKey":"%s",' "$SESSION_KEY"
-  printf '"agent":"%s",' "$AGENT_NAME"
-  printf '"namespace":"%s",' "$AGENT_NAMESPACE"
-  printf '"workspaceSession":"%s",' "$WORKSPACE_SESSION"
-  printf '"workspacePVC":"%s",' "$WORKSPACE_PVC"
-  printf '"startedAt":"%s"' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-  if [ -n "$PREV" ]; then
-    printf ',"previousRun":%s' "$PREV"
-  fi
-  printf '}'
-} > "$DIR/state.json.tmp"
-mv "$DIR/state.json.tmp" "$DIR/state.json"
-`
 	return corev1.Container{
 		Name:            "workspace-marker",
 		Image:           r.imageRef("agent-runner"),
 		ImagePullPolicy: corev1.PullIfNotPresent,
-		Command:         []string{"/bin/sh", "-c", script},
+		Command:         []string{"/agent-runner", "workspace-marker"},
 		Env: []corev1.EnvVar{
 			{Name: "AGENT_RUN_ID", Value: agentRun.Name},
 			{Name: "SESSION_KEY", Value: agentRun.Spec.SessionKey},
