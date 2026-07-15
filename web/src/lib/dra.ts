@@ -50,6 +50,10 @@ export interface DraGroup {
   healthy: boolean;
   names: string[];
   reasons: string[];
+  /** The devices behind the ×N count. Identical devices collapse for
+   * inventory, but power is per-device — a view showing watts must expand
+   * the group rather than attribute one reading to N accelerators. */
+  devices: DraDevice[];
 }
 
 export function groupAccelerators(devices: DraDevice[]): DraGroup[] {
@@ -62,6 +66,7 @@ export function groupAccelerators(devices: DraDevice[]): DraGroup[] {
     if (g) {
       g.count++;
       g.names.push(d.name);
+      g.devices.push(d);
       g.healthy = g.healthy && d.healthy;
       if (!d.healthy && d.healthReason) g.reasons.push(d.healthReason);
     } else {
@@ -73,6 +78,7 @@ export function groupAccelerators(devices: DraDevice[]): DraGroup[] {
         healthy: d.healthy,
         names: [d.name],
         reasons: !d.healthy && d.healthReason ? [d.healthReason] : [],
+        devices: [d],
       });
     }
   }

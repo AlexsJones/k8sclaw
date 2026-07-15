@@ -143,7 +143,7 @@ export function ModelDensityPage() {
                           ))}
                       </div>
                     )}
-                    <AcceleratorLeaves devices={draByNode.get(node.nodeName) || []} />
+                    <AcceleratorLeaves devices={draByNode.get(node.nodeName) || []} node={node.nodeName} />
                   </CardContent>
                 </Card>
               ))}
@@ -158,7 +158,7 @@ export function ModelDensityPage() {
                     </CardTitle>
                   </CardHeader>
                   <CardContent className="space-y-2 text-sm">
-                    <AcceleratorLeaves devices={n.devices} />
+                    <AcceleratorLeaves devices={n.devices} node={n.nodeName} />
                   </CardContent>
                 </Card>
               ))}

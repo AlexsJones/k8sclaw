@@ -763,6 +763,25 @@ export function useDraNodes() {
   });
 }
 
+// ── Accelerator power (energy collector) ─────────────────────────────────────
+
+/** Live per-accelerator power draw. Polls fast because watts are the one thing
+ * on these views that genuinely moves; the apiserver caches so this does not
+ * hammer the collector. Returns available:false when no collector is
+ * installed, and callers omit the power surface rather than showing 0 W.
+ *
+ * `enabled` is false when a caller supplies its own readings (the topology
+ * demo's simulation) — there is no cluster to ask, so don't ask it. Prefer
+ * usePowerIndex() in lib/power-context over calling this directly. */
+export function usePower(enabled = true) {
+  return useQuery({
+    queryKey: ["power", "fleet"],
+    queryFn: api.power.fleet,
+    refetchInterval: 2000,
+    enabled,
+  });
+}
+
 // ── Model Density (llmfit DaemonSet) ─────────────────────────────────────────────
 
 export function useDensityNodes() {
