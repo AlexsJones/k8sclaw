@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -21,6 +22,7 @@ import (
 
 	sympoziumv1alpha1 "github.com/sympozium-ai/sympozium/api/v1alpha1"
 	"github.com/sympozium-ai/sympozium/internal/apiserver"
+	"github.com/sympozium-ai/sympozium/internal/collector"
 	"github.com/sympozium-ai/sympozium/internal/controller"
 	"github.com/sympozium-ai/sympozium/internal/eventbus"
 	"github.com/sympozium-ai/sympozium/pkg/telemetry"
@@ -127,6 +129,27 @@ func main() {
 		}()
 		server.SetDensityCache(densityCache)
 		log.Info("llmfit density poller enabled for API server")
+	}
+
+	// Energy collector (optional): discovers any Service labelled
+	// sympozium.ai/collector=energy in an allowlisted namespace and serves its
+	// per-accelerator power readings on GET /api/v1/power. Absent collector ⇒
+	// the endpoint reports unavailable and the UI omits the power surface.
+	//
+	// The namespace list is an allowlist, not a filter: it is what prevents an
+	// arbitrary pod from labelling itself a collector and forging power data.
+	// See internal/collector.New.
+	if nsList := os.Getenv("SYMPOZIUM_ENERGY_COLLECTOR_NAMESPACES"); nsList != "" {
+		var namespaces []string
+		for _, ns := range strings.Split(nsList, ",") {
+			if ns = strings.TrimSpace(ns); ns != "" {
+				namespaces = append(namespaces, ns)
+			}
+		}
+		if len(namespaces) > 0 {
+			server.SetPowerClient(collector.New(kubeClient, namespaces, 2*time.Second))
+			log.Info("energy collector discovery enabled", "namespaces", namespaces)
+		}
 	}
 
 	// Build the token reader. Prefer the file (production path: Secret

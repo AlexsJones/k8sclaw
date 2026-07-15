@@ -124,6 +124,32 @@ certManager:
     renewBefore: 720h  # 30 days
 
 # -- Model pricing for AgentRun cost estimation
+# Accelerator power draw, read from an out-of-tree energy collector.
+#
+# Discovery is zero-config: any Service labelled `sympozium.ai/collector=energy`
+# in one of the namespaces below is used. Installing a collector is enough — no
+# further configuration, no restart. When none is present, the power surface is
+# simply absent from the UI.
+#
+# ergoz (a collector for accelerator power draw) is the reference
+# implementation and ships in `ergoz-system`. It is not privileged by
+# sympozium in any way: anything serving the same fleet-snapshot shape works,
+# and no implementation name appears anywhere in the controller or apiserver.
+energyCollector:
+  # -- Master switch for collector discovery. When false, sympozium never
+  # probes for a collector and GET /api/v1/power always reports unavailable.
+  enabled: true
+  discovery:
+    # -- Namespaces sympozium will trust a collector from.
+    #
+    # SECURITY: this is an allowlist, not a convenience filter. Discovery keys
+    # on a label, and labels are cheap — listing collectors cluster-wide would
+    # let anyone able to create a Service forge power readings. Only add
+    # namespaces an administrator already controls.
+    namespaces:
+      - sympozium-system
+      - ergoz-system
+
 pricing:
   # -- Ship the sympozium-model-pricing ConfigMap and enable run cost
   # estimates. Estimates are display-only and never gate runs. Local

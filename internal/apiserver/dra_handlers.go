@@ -42,6 +42,9 @@ type draDevice struct {
 	ComputeTFLOPS      int64  `json:"computeTFLOPS,omitempty"`
 	Healthy            bool   `json:"healthy"`
 	HealthReason       string `json:"healthReason,omitempty"`
+	// PCIAddress (full-domain form "0000:c3:00.0") is the join key against
+	// energy-collector power readings, which identify a device by node+PCI.
+	PCIAddress string `json:"pciAddress,omitempty"`
 	// NIC-only link facts (fabric endpoints).
 	LinkLayer string `json:"linkLayer,omitempty"`
 	RateGbps  int64  `json:"rateGbps,omitempty"`
@@ -101,6 +104,9 @@ func flattenDevice(dev resourceapi.Device) draDevice {
 	}
 	if v := strAttr(dev, "linkLayer"); v != nil {
 		out.LinkLayer = *v
+	}
+	if v := strAttr(dev, "pciAddress"); v != nil {
+		out.PCIAddress = *v
 	}
 	if v := strAttr(dev, "healthReason"); v != nil {
 		out.HealthReason = *v

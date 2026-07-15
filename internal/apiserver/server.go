@@ -36,6 +36,7 @@ import (
 
 	sympoziumv1alpha1 "github.com/sympozium-ai/sympozium/api/v1alpha1"
 	"github.com/sympozium-ai/sympozium/internal/agentedit"
+	"github.com/sympozium-ai/sympozium/internal/collector"
 	"github.com/sympozium-ai/sympozium/internal/controller"
 	"github.com/sympozium-ai/sympozium/internal/eventbus"
 )
@@ -62,6 +63,7 @@ type Server struct {
 	log          logr.Logger
 	upgrader     websocket.Upgrader
 	densityCache *controller.DensityCache // optional: set when llmfit DaemonSet is enabled
+	powerClient  *collector.Client        // optional: nil when energy collection is disabled
 	authEnabled  bool                     // set by buildMux; gates pricing writes
 }
 
@@ -76,6 +78,12 @@ func NewServer(c client.Client, bus eventbus.EventBus, kube kubernetes.Interface
 			CheckOrigin: func(r *http.Request) bool { return true },
 		},
 	}
+}
+
+// SetPowerClient sets the energy collector client for power API endpoints.
+// Leaving it nil disables the power surface entirely.
+func (s *Server) SetPowerClient(c *collector.Client) {
+	s.powerClient = c
 }
 
 // SetDensityCache sets the fitness cache for fitness API endpoints.
@@ -225,6 +233,9 @@ func (s *Server) buildMux(frontendFS fs.FS, expected *tokenReader) http.Handler 
 	mux.HandleFunc("DELETE /api/v1/pricing/simulated", s.deleteSimulatedPrices)
 
 	// Provider discovery endpoints (model listing, node discovery)
+	// Accelerator power draw from a discovered energy collector (optional).
+	mux.HandleFunc("GET /api/v1/power", s.listPower)
+
 	mux.HandleFunc("GET /api/v1/providers/nodes", s.listProviderNodes)
 	mux.HandleFunc("GET /api/v1/providers/models", s.proxyProviderModels)
 	mux.HandleFunc("POST /api/v1/providers/bedrock/models", s.listBedrockModels)
