@@ -200,9 +200,9 @@ func TestAgentRunQualifiesForSessionPVC(t *testing.T) {
 	}
 }
 
-// --- listLiveSessionPeers --------------------------------------------------
+// --- listBlockingSessionPeers ----------------------------------------------
 
-func TestListLiveSessionPeers_FiltersTerminalAndSelf(t *testing.T) {
+func TestListBlockingSessionPeers_FiltersTerminalAndSelf(t *testing.T) {
 	hash := sessionkey.Hash("sess-X")
 	mkRun := func(name string, phase sympoziumv1alpha1.AgentRunPhase) *sympoziumv1alpha1.AgentRun {
 		return &sympoziumv1alpha1.AgentRun{
@@ -248,7 +248,7 @@ func TestListLiveSessionPeers_FiltersTerminalAndSelf(t *testing.T) {
 	failed := mkRun("alice-failed", sympoziumv1alpha1.AgentRunPhaseFailed)
 
 	_, cl := newWorkspaceSessionTestReconciler(t, self, running, serving, succeeded, failed, otherAgent, otherSession)
-	peers, err := listLiveSessionPeers(context.Background(), cl, "ns1", "alice", hash, self.Name)
+	peers, err := listBlockingSessionPeers(context.Background(), cl, self, "alice", hash)
 	if err != nil {
 		t.Fatalf("list peers: %v", err)
 	}
@@ -270,6 +270,90 @@ func TestListLiveSessionPeers_FiltersTerminalAndSelf(t *testing.T) {
 		if !want[name] {
 			t.Errorf("unexpected peer %q in result (terminal/self/unrelated should be filtered)", name)
 		}
+	}
+}
+
+func TestPeerBlocksAdmission_FIFOOrdering(t *testing.T) {
+	t0 := metav1.NewTime(time.Date(2026, 7, 16, 10, 0, 0, 0, time.UTC))
+	t1 := metav1.NewTime(t0.Add(time.Minute))
+	mkRun := func(name string, created metav1.Time, status sympoziumv1alpha1.AgentRunStatus) *sympoziumv1alpha1.AgentRun {
+		return &sympoziumv1alpha1.AgentRun{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "ns1", CreationTimestamp: created},
+			Status:     status,
+		}
+	}
+	pending := func(name string, created metav1.Time) *sympoziumv1alpha1.AgentRun {
+		return mkRun(name, created, sympoziumv1alpha1.AgentRunStatus{Phase: sympoziumv1alpha1.AgentRunPhasePending})
+	}
+	started := metav1.Now()
+
+	cases := []struct {
+		name string
+		self *sympoziumv1alpha1.AgentRun
+		peer *sympoziumv1alpha1.AgentRun
+		want bool
+	}{
+		{
+			"running peer always blocks",
+			pending("self", t0),
+			mkRun("peer", t1, sympoziumv1alpha1.AgentRunStatus{Phase: sympoziumv1alpha1.AgentRunPhaseRunning}),
+			true,
+		},
+		{
+			"serving peer always blocks",
+			pending("self", t0),
+			mkRun("peer", t1, sympoziumv1alpha1.AgentRunStatus{Phase: sympoziumv1alpha1.AgentRunPhaseServing}),
+			true,
+		},
+		{
+			"pending peer with a Job holds the lock",
+			pending("self", t0),
+			mkRun("peer", t1, sympoziumv1alpha1.AgentRunStatus{Phase: sympoziumv1alpha1.AgentRunPhasePending, JobName: "peer-job"}),
+			true,
+		},
+		{
+			"pending peer with StartedAt holds the lock",
+			pending("self", t0),
+			mkRun("peer", t1, sympoziumv1alpha1.AgentRunStatus{Phase: sympoziumv1alpha1.AgentRunPhasePending, StartedAt: &started}),
+			true,
+		},
+		{
+			"older waiter blocks a younger one",
+			pending("self", t1),
+			pending("peer", t0),
+			true,
+		},
+		{
+			"younger waiter does NOT block an older one",
+			pending("self", t0),
+			pending("peer", t1),
+			false,
+		},
+		{
+			"equal timestamps tie-break by name: lexically smaller peer blocks",
+			pending("z-self", t0),
+			pending("a-peer", t0),
+			true,
+		},
+		{
+			"equal timestamps tie-break by name: lexically larger peer does not block",
+			pending("a-self", t0),
+			pending("z-peer", t0),
+			false,
+		},
+		{
+			"terminal peer never blocks",
+			pending("self", t1),
+			mkRun("peer", t0, sympoziumv1alpha1.AgentRunStatus{Phase: sympoziumv1alpha1.AgentRunPhaseSucceeded}),
+			false,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := peerBlocksAdmission(tc.self, tc.peer); got != tc.want {
+				t.Errorf("peerBlocksAdmission() = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }
 

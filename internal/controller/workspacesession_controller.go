@@ -642,17 +642,43 @@ func touchWorkspaceSession(
 	return c.Status().Patch(ctx, ws, patch)
 }
 
-// listLiveSessionPeers returns AgentRuns in the namespace that share the
-// given (agent, sessionKeyHash) and are NOT in a terminal phase, excluding
-// the run with selfName. Used by the session lock to detect a busy peer.
-func listLiveSessionPeers(
+// peerBlocksAdmission reports whether peer should prevent self from
+// acquiring the session lock. A peer blocks when it already holds the
+// lock (Running/Serving, or it has a Job / start time recorded), or when
+// it is a fellow waiter that is older than self — creationTimestamp
+// first, name as a deterministic tie-break. This gives waiters a strict
+// FIFO order, so two Pending runs can never block each other forever.
+func peerBlocksAdmission(self, peer *sympoziumv1alpha1.AgentRun) bool {
+	if isTerminalPhase(peer.Status.Phase) {
+		return false
+	}
+	switch peer.Status.Phase {
+	case sympoziumv1alpha1.AgentRunPhaseRunning, sympoziumv1alpha1.AgentRunPhaseServing:
+		return true
+	}
+	if peer.Status.JobName != "" || peer.Status.StartedAt != nil {
+		return true
+	}
+	// Both are waiters: only an older peer blocks (FIFO admission).
+	if !peer.CreationTimestamp.Time.Equal(self.CreationTimestamp.Time) {
+		return peer.CreationTimestamp.Time.Before(self.CreationTimestamp.Time)
+	}
+	return peer.Name < self.Name
+}
+
+// listBlockingSessionPeers returns AgentRuns in the namespace that share
+// self's (agent, sessionKeyHash) and block self from acquiring the
+// session lock: peers that already hold the lock, plus older waiters.
+// See peerBlocksAdmission for the exact rules.
+func listBlockingSessionPeers(
 	ctx context.Context,
 	c client.Client,
-	namespace, agentRef, sessionKeyHash, selfName string,
+	self *sympoziumv1alpha1.AgentRun,
+	agentRef, sessionKeyHash string,
 ) ([]sympoziumv1alpha1.AgentRun, error) {
 	runs := &sympoziumv1alpha1.AgentRunList{}
 	if err := c.List(ctx, runs,
-		client.InNamespace(namespace),
+		client.InNamespace(self.Namespace),
 		client.MatchingLabels{
 			"sympozium.ai/instance": agentRef,
 			SessionKeyHashLabel:     sessionKeyHash,
@@ -660,14 +686,15 @@ func listLiveSessionPeers(
 	); err != nil {
 		return nil, err
 	}
-	live := make([]sympoziumv1alpha1.AgentRun, 0, len(runs.Items))
-	for _, run := range runs.Items {
-		if run.Name == selfName {
+	blocking := make([]sympoziumv1alpha1.AgentRun, 0, len(runs.Items))
+	for i := range runs.Items {
+		run := &runs.Items[i]
+		if run.Name == self.Name {
 			continue
 		}
-		if !isTerminalPhase(run.Status.Phase) {
-			live = append(live, run)
+		if peerBlocksAdmission(self, run) {
+			blocking = append(blocking, *run)
 		}
 	}
-	return live, nil
+	return blocking, nil
 }

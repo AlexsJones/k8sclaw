@@ -848,8 +848,9 @@ func (r *AgentRunReconciler) reconcilePending(ctx context.Context, log logr.Logg
 		}
 
 		// Session lock: refuse to admit while a peer with the same
-		// session is non-terminal.
-		peers, err := listLiveSessionPeers(ctx, r.Client, agentRun.Namespace, agentRun.Spec.AgentRef, hash, agentRun.Name)
+		// session holds the lock (Running/Serving or Job created) or
+		// an older waiter is queued ahead of us (FIFO admission).
+		peers, err := listBlockingSessionPeers(ctx, r.Client, agentRun, agentRun.Spec.AgentRef, hash)
 		if err != nil {
 			return ctrl.Result{}, fmt.Errorf("checking session peers: %w", err)
 		}
