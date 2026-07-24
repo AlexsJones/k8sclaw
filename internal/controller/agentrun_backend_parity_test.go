@@ -278,6 +278,20 @@ func parityScenarios() []parityScenario {
 			wantAgentEnv: []string{"MEMORY_SERVER_URL"},
 		},
 		{
+			name:   "memory_auto_store_disabled",
+			guards: "MEMORY_AUTO_STORE from the Agent's memory.autoStore opt-out (#310)",
+			objects: func() []client.Object {
+				agent := parityAgent()
+				autoStore := false
+				agent.Spec.Memory = &sympoziumv1alpha1.MemorySpec{Enabled: true, AutoStore: &autoStore}
+				return []client.Object{agent, readyMemoryDeployment("my-instance")}
+			},
+			mutate: func(run *sympoziumv1alpha1.AgentRun) {
+				run.Spec.Skills = []sympoziumv1alpha1.SkillRef{{SkillPackRef: "memory"}}
+			},
+			wantAgentEnv: []string{"MEMORY_AUTO_STORE"},
+		},
+		{
 			name:    "lifecycle_prerun_hooks",
 			guards:  "preRun hook containers rendered as init containers by buildContainers",
 			objects: func() []client.Object { return []client.Object{parityAgent()} },

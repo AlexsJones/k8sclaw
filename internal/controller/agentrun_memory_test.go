@@ -1,11 +1,116 @@
 package controller
 
 import (
+	"context"
 	"strings"
 	"testing"
 
+	"github.com/go-logr/logr"
+	batchv1 "k8s.io/api/batch/v1"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+
 	sympoziumv1alpha1 "github.com/sympozium-ai/sympozium/api/v1alpha1"
 )
+
+// newAgentRunReconcilerWithAgent builds an AgentRunReconciler backed by a fake
+// client pre-loaded with an Agent whose memory.autoStore is set to the supplied
+// pointer (nil = field unset).
+func newAgentRunReconcilerWithAgent(t *testing.T, autoStore *bool) *AgentRunReconciler {
+	t.Helper()
+	scheme := runtime.NewScheme()
+	if err := corev1.AddToScheme(scheme); err != nil {
+		t.Fatalf("add corev1 scheme: %v", err)
+	}
+	if err := sympoziumv1alpha1.AddToScheme(scheme); err != nil {
+		t.Fatalf("add sympozium scheme: %v", err)
+	}
+	agent := &sympoziumv1alpha1.Agent{
+		ObjectMeta: metav1.ObjectMeta{Name: "my-instance", Namespace: "default"},
+		Spec: sympoziumv1alpha1.AgentSpec{
+			Memory: &sympoziumv1alpha1.MemorySpec{Enabled: true, AutoStore: autoStore},
+		},
+	}
+	cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(agent).Build()
+	return &AgentRunReconciler{Client: cl, Scheme: scheme, Log: logr.Discard()}
+}
+
+func memoryRun() *sympoziumv1alpha1.AgentRun {
+	run := newTestRun()
+	run.Spec.Skills = []sympoziumv1alpha1.SkillRef{{SkillPackRef: "memory"}}
+	return run
+}
+
+func jobEnvValue(job *batchv1.Job, name string) (string, bool) {
+	for _, e := range job.Spec.Template.Spec.Containers[0].Env {
+		if e.Name == name {
+			return e.Value, true
+		}
+	}
+	return "", false
+}
+
+// ── injectMemoryConfig: MEMORY_AUTO_STORE opt-out ────────────────────────────
+
+func TestInjectMemoryConfig_DisablesAutoStore(t *testing.T) {
+	r := newAgentRunReconcilerWithAgent(t, boolPtr(false))
+	run := memoryRun()
+	job, err := r.buildJob(context.Background(), run, false, nil, nil, nil, nil)
+	if err != nil {
+		t.Fatalf("buildJob: %v", err)
+	}
+
+	r.injectMemoryConfig(context.Background(), run, job)
+
+	v, ok := jobEnvValue(job, "MEMORY_AUTO_STORE")
+	if !ok || v != "false" {
+		t.Errorf("MEMORY_AUTO_STORE = %q (present=%v), want \"false\"", v, ok)
+	}
+}
+
+func TestInjectMemoryConfig_EnabledByDefault(t *testing.T) {
+	// AutoStore nil (unset) and AutoStore=true must both leave the env var off,
+	// preserving the default-enabled behaviour.
+	for _, tc := range []struct {
+		name string
+		val  *bool
+	}{
+		{"nil", nil},
+		{"true", boolPtr(true)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newAgentRunReconcilerWithAgent(t, tc.val)
+			run := memoryRun()
+			job, err := r.buildJob(context.Background(), run, false, nil, nil, nil, nil)
+			if err != nil {
+				t.Fatalf("buildJob: %v", err)
+			}
+
+			r.injectMemoryConfig(context.Background(), run, job)
+
+			if _, ok := jobEnvValue(job, "MEMORY_AUTO_STORE"); ok {
+				t.Error("MEMORY_AUTO_STORE should not be injected when auto-store is enabled")
+			}
+		})
+	}
+}
+
+func TestInjectMemoryConfig_NoopWithoutMemorySkill(t *testing.T) {
+	r := newAgentRunReconcilerWithAgent(t, boolPtr(false))
+	run := newTestRun() // no memory skill
+	job, err := r.buildJob(context.Background(), run, false, nil, nil, nil, nil)
+	if err != nil {
+		t.Fatalf("buildJob: %v", err)
+	}
+
+	r.injectMemoryConfig(context.Background(), run, job)
+
+	if _, ok := jobEnvValue(job, "MEMORY_AUTO_STORE"); ok {
+		t.Error("MEMORY_AUTO_STORE should not be injected when the run has no memory skill")
+	}
+}
 
 // ── buildContainers: MEMORY_SERVER_URL env injection ─────────────────────────
 

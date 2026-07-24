@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -356,14 +357,22 @@ func autoStoreMemory(parent context.Context, task, response string) {
 	if memoryServerURL == "" {
 		return
 	}
+	// Opt-out: MEMORY_AUTO_STORE=false disables the automatic per-run write
+	// while keeping the memory skill's /store endpoint available for curated
+	// memory management. Defaults to enabled when the var is unset.
+	if !autoStoreEnabled() {
+		return
+	}
 
-	// Truncate to keep stored entries reasonably sized.
-	const maxTask = 500
-	const maxResponse = 1000
-	if len(task) > maxTask {
+	// Truncate to keep stored entries reasonably sized. The byte limits can be
+	// overridden via env vars; a non-positive limit disables truncation for
+	// that field.
+	maxTask := envInt("MEMORY_AUTO_STORE_MAX_TASK_BYTES", 500)
+	maxResponse := envInt("MEMORY_AUTO_STORE_MAX_RESPONSE_BYTES", 1000)
+	if maxTask > 0 && len(task) > maxTask {
 		task = task[:maxTask] + "..."
 	}
-	if len(response) > maxResponse {
+	if maxResponse > 0 && len(response) > maxResponse {
 		response = response[:maxResponse] + "..."
 	}
 
@@ -388,6 +397,29 @@ func autoStoreMemory(parent context.Context, task, response string) {
 		return
 	}
 	log.Printf("auto-stored memory for task (%d bytes)", len(content))
+}
+
+// autoStoreEnabled reports whether the automatic per-run memory write is on.
+// It defaults to enabled; only an explicit falsey MEMORY_AUTO_STORE value
+// ("false", "0", "no", "off") turns it off.
+func autoStoreEnabled() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("MEMORY_AUTO_STORE"))) {
+	case "false", "0", "no", "off":
+		return false
+	default:
+		return true
+	}
+}
+
+// envInt returns the integer value of the named env var, or fallback when unset
+// or unparseable.
+func envInt(key string, fallback int) int {
+	if v := strings.TrimSpace(os.Getenv(key)); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			return n
+		}
+	}
+	return fallback
 }
 
 func initMemoryTools() []ToolDef {

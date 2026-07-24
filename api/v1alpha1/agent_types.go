@@ -135,6 +135,15 @@ type MemorySpec struct {
 	// +optional
 	MaxSizeKB int `json:"maxSizeKB,omitempty"`
 
+	// AutoStore controls whether each successful agent run automatically writes
+	// a truncated task/response summary to the memory server (tagged "auto",
+	// "agent-run"). Defaults to true. Set to false to disable automatic memory
+	// writes while keeping the memory skill and its /store endpoint available
+	// for deliberate, curated memory management. Nil is treated as true so
+	// existing agents keep their current behaviour.
+	// +optional
+	AutoStore *bool `json:"autoStore,omitempty"`
+
 	// SystemPrompt is injected into every agent run for this instance
 	// to instruct the agent on how to use memory.
 	// +optional

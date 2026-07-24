@@ -353,6 +353,46 @@ func TestResolveModel_Precedence(t *testing.T) {
 	})
 }
 
+func TestResolveAutoStoreMemory_Precedence(t *testing.T) {
+	tr := func() *bool { b := true; return &b }
+	fa := func() *bool { b := false; return &b }
+
+	t.Run("persona override wins over ensemble default", func(t *testing.T) {
+		pack := &sympoziumv1alpha1.Ensemble{Spec: sympoziumv1alpha1.EnsembleSpec{AutoStoreMemory: tr()}}
+		persona := &sympoziumv1alpha1.AgentConfigSpec{Memory: &sympoziumv1alpha1.AgentConfigMemory{AutoStore: fa()}}
+		got := resolveAutoStoreMemory(pack, persona)
+		if got == nil || *got != false {
+			t.Fatalf("got %v, want false", got)
+		}
+	})
+
+	t.Run("ensemble default applies when persona unset", func(t *testing.T) {
+		pack := &sympoziumv1alpha1.Ensemble{Spec: sympoziumv1alpha1.EnsembleSpec{AutoStoreMemory: fa()}}
+		persona := &sympoziumv1alpha1.AgentConfigSpec{}
+		got := resolveAutoStoreMemory(pack, persona)
+		if got == nil || *got != false {
+			t.Fatalf("got %v, want false", got)
+		}
+	})
+
+	t.Run("persona memory present but AutoStore nil falls through to ensemble", func(t *testing.T) {
+		pack := &sympoziumv1alpha1.Ensemble{Spec: sympoziumv1alpha1.EnsembleSpec{AutoStoreMemory: fa()}}
+		persona := &sympoziumv1alpha1.AgentConfigSpec{Memory: &sympoziumv1alpha1.AgentConfigMemory{Enabled: true}}
+		got := resolveAutoStoreMemory(pack, persona)
+		if got == nil || *got != false {
+			t.Fatalf("got %v, want false", got)
+		}
+	})
+
+	t.Run("nil at both levels leaves field unset (Agent default)", func(t *testing.T) {
+		pack := &sympoziumv1alpha1.Ensemble{Spec: sympoziumv1alpha1.EnsembleSpec{}}
+		persona := &sympoziumv1alpha1.AgentConfigSpec{}
+		if got := resolveAutoStoreMemory(pack, persona); got != nil {
+			t.Fatalf("got %v, want nil", got)
+		}
+	})
+}
+
 func TestResolveBaseURL_Precedence(t *testing.T) {
 	pack := &sympoziumv1alpha1.Ensemble{
 		Spec: sympoziumv1alpha1.EnsembleSpec{BaseURL: "https://pack.example/v1"},

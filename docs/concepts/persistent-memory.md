@@ -24,6 +24,55 @@ graph LR
     M -- "reads / writes" --> DB[("SQLite + FTS5<br/>on PVC")]
 ```
 
+## Automatic Memory Storage
+
+When the `memory` SkillPack is attached, the agent-runner **automatically stores a summary of every successful run** — a truncated `Task: … / Response: …` entry tagged `auto` and `agent-run` — so future runs have context without the agent having to call `memory_store` explicitly.
+
+### Opting out
+
+Some teams prefer to curate memory deliberately rather than log every run. Set `autoStore: false` to disable the automatic write while **keeping the memory skill and its `memory_store` tool** for manual/curated entries — only the automatic per-run write stops.
+
+On a single `Agent`:
+
+```yaml
+apiVersion: sympozium.ai/v1alpha1
+kind: Agent
+metadata:
+  name: my-agent
+spec:
+  skills:
+    - skillPackRef: memory
+  memory:
+    autoStore: false   # keep the skill, stop the automatic per-run write
+```
+
+On an `Ensemble` — `autoStoreMemory` sets the team-wide default, overridable per member via `agentConfigs[].memory.autoStore`:
+
+```yaml
+apiVersion: sympozium.ai/v1alpha1
+kind: Ensemble
+metadata:
+  name: research-team
+spec:
+  autoStoreMemory: false        # default for every generated agent
+  agentConfigs:
+    - name: archivist
+      memory:
+        autoStore: true          # this member still auto-stores (overrides the default)
+```
+
+Precedence: per-agent-config `memory.autoStore` → ensemble `autoStoreMemory` → default (`true`). Omitting the field everywhere preserves the existing auto-store behaviour.
+
+### Tuning truncation limits
+
+Auto-stored entries are truncated to keep the database small. The byte limits default to **500 bytes** (task) and **1000 bytes** (response) and can be overridden per pod via environment variables (set through `spec.agents.default.env` on the Agent, or `env` on an ensemble agent-config):
+
+| Env var | Default | Effect |
+|---------|---------|--------|
+| `MEMORY_AUTO_STORE_MAX_TASK_BYTES` | `500` | Max stored bytes of the task; a value ≤ 0 disables task truncation |
+| `MEMORY_AUTO_STORE_MAX_RESPONSE_BYTES` | `1000` | Max stored bytes of the response; a value ≤ 0 disables response truncation |
+| `MEMORY_AUTO_STORE` | `true` | Set to `false` to disable auto-store directly (the controller sets this from `memory.autoStore`) |
+
 ## Enabling Memory
 
 Add the `memory` SkillPack to your instance's skills list:

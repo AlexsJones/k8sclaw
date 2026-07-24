@@ -29,6 +29,7 @@ export interface SecretRef {
 export interface MemorySpec {
   enabled: boolean;
   maxSizeKB?: number;
+  autoStore?: boolean;
   systemPrompt?: string;
 }
 
@@ -480,6 +481,7 @@ export interface AgentConfigSchedule {
 
 export interface AgentConfigMemory {
   enabled: boolean;
+  autoStore?: boolean;
   seeds?: string[];
 }
 
@@ -607,6 +609,8 @@ export interface EnsembleSpec {
   relationships?: AgentConfigRelationship[];
   workflowType?: "autonomous" | "pipeline" | "delegation";
   sharedMemory?: SharedMemorySpec;
+  /** Default for whether generated agents auto-store each run's summary. */
+  autoStoreMemory?: boolean;
   /** Base URL for the inference endpoint. */
   baseURL?: string;
   /** References a Model CR for cluster-local inference. */
