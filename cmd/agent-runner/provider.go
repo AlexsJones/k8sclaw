@@ -36,11 +36,28 @@ type ToolResult struct {
 //     Text may still be non-empty (reasoning preamble) but is ignored in that
 //     case — the loop only surfaces text from the terminal turn.
 type ChatResult struct {
-	Text         string
-	ToolCalls    []ToolCall
-	InputTokens  int
-	OutputTokens int
-	FinishReason string
+	Text      string
+	ToolCalls []ToolCall
+	// InputTokens is the prompt size as the provider reports it. Note the
+	// providers disagree on whether cached tokens are included: OpenAI counts
+	// them inside prompt_tokens, Anthropic reports the uncached remainder in
+	// input_tokens and the cached portion separately.
+	InputTokens int
+	// CachedInputTokens is the portion of the prompt served from the
+	// provider's prefix cache. Without this the loop cannot tell an expensive
+	// full read from a cheap cached one, which is the signal needed to judge
+	// whether history rewriting is paying for itself.
+	//
+	// Only OpenAI (and OpenAI-compatible proxies such as OpenRouter) populates
+	// this today, because it caches automatically above a token threshold.
+	// Anthropic and Bedrock both require explicit cache breakpoints —
+	// cache_control on a content block, and a cachePoint content block
+	// respectively — which this runner does not yet emit, so the field is
+	// always 0 on those paths. It is not a measurement bug: there is genuinely
+	// no caching happening there to report.
+	CachedInputTokens int
+	OutputTokens      int
+	FinishReason      string
 }
 
 // LLMProvider is a stateful adapter for one chat conversation with a
@@ -63,6 +80,13 @@ type LLMProvider interface {
 	// AddToolResults records tool execution results in the conversation so
 	// the next Chat call can reference them.
 	AddToolResults(results []ToolResult)
+	// ReplaceToolResults rewrites the content of previously-recorded tool
+	// results, keyed by call ID, so the loop can reclaim context occupied by
+	// stale output. Implementations MUST preserve the message and its call-ID
+	// linkage and only swap the content — OpenAI rejects an assistant message
+	// carrying tool_calls that has no matching tool reply. Unknown call IDs
+	// are ignored.
+	ReplaceToolResults(replacements map[string]string)
 
 	// ResetContext wipes the conversation history. After
 	// ResetContext the next Chat call behaves like a first-turn conversation.
@@ -100,8 +124,26 @@ type LLMProvider interface {
 func runAgentLoop(ctx context.Context, p LLMProvider) (string, int, int, int, error) {
 	totalInputTokens := 0
 	totalOutputTokens := 0
+	totalCachedTokens := 0
 	totalToolCalls := 0
 	var accumulated strings.Builder
+
+	// Context policy: bounds how much tool output accumulates in history and
+	// is re-sent on every subsequent round.
+	policy := loadContextPolicy()
+	ledger := &toolResultLedger{}
+	if policy.elisionEnabled() {
+		log.Printf("context policy: per-result cap=%dB budget=%dB low=%dB keep_recent=%d",
+			policy.ToolResultMaxBytes, policy.HistoryBudgetBytes, policy.HistoryLowBytes, policy.KeepRecent)
+	}
+
+	// Report cached tokens separately rather than as a ratio: providers
+	// disagree on whether cached tokens are inside the input count, so a
+	// percentage would mean different things on OpenAI and Anthropic.
+	defer func() {
+		log.Printf("token_usage: input=%d cached=%d output=%d tool_result_bytes=%d",
+			totalInputTokens, totalCachedTokens, totalOutputTokens, ledger.liveBytes())
+	}()
 
 	// Per-run token budget enforcement from membrane config.
 	maxTokensPerRun := int64(0)
@@ -140,20 +182,24 @@ func runAgentLoop(ctx context.Context, p LLMProvider) (string, int, int, int, er
 		}
 
 		detailedLog.LogLLM("response", map[string]any{
-			"provider":      p.Name(),
-			"model":         p.Model(),
-			"round":         round,
-			"finish_reason": res.FinishReason,
-			"text":          res.Text,
-			"tool_calls":    len(res.ToolCalls),
-			"input_tokens":  res.InputTokens,
-			"output_tokens": res.OutputTokens,
+			"provider":            p.Name(),
+			"model":               p.Model(),
+			"round":               round,
+			"finish_reason":       res.FinishReason,
+			"text":                res.Text,
+			"tool_calls":          len(res.ToolCalls),
+			"input_tokens":        res.InputTokens,
+			"cached_input_tokens": res.CachedInputTokens,
+			"output_tokens":       res.OutputTokens,
+			"tool_result_bytes":   ledger.liveBytes(),
 		})
 
 		totalInputTokens += res.InputTokens
 		totalOutputTokens += res.OutputTokens
+		totalCachedTokens += res.CachedInputTokens
 		chatSpan.SetAttributes(
 			attribute.Int("gen_ai.usage.input_tokens", res.InputTokens),
+			attribute.Int("gen_ai.usage.cached_input_tokens", res.CachedInputTokens),
 			attribute.Int("gen_ai.usage.output_tokens", res.OutputTokens),
 		)
 		if res.FinishReason != "" {
@@ -218,13 +264,42 @@ func runAgentLoop(ctx context.Context, p LLMProvider) (string, int, int, int, er
 			totalToolCalls++
 			log.Printf("tool_call [%d]: %s id=%s", totalToolCalls, call.Name, call.ID)
 			out := executeToolCallWithTelemetry(ctx, call.Name, call.Input, call.ID)
+			isError := strings.HasPrefix(out, "Error:")
+
+			// Clamp before insertion. This is the cheap half of the context
+			// policy: it shapes content that has not been sent yet, so it
+			// costs nothing in cache terms.
+			clamped, dropped := policy.clampToolResult(call.Name, out)
+			if dropped > 0 {
+				log.Printf("tool_result clamped: %s dropped=%dB kept=%dB", call.Name, dropped, len(clamped))
+			}
+
 			results = append(results, ToolResult{
 				CallID:  call.ID,
-				Content: out,
-				IsError: strings.HasPrefix(out, "Error:"),
+				Content: clamped,
+				IsError: isError,
 			})
+			ledger.add(call.ID, call.Name, len(clamped), round)
 		}
 		p.AddToolResults(results)
+
+		// Retroactive elision. Deliberately batched behind a high-water mark:
+		// rewriting history invalidates the provider's cached prefix, so we
+		// drain all the way to the low-water mark in one pass and pay that
+		// cost once rather than trimming a little every round.
+		if replacements, reclaimed := ledger.selectForElision(policy); len(replacements) > 0 {
+			p.ReplaceToolResults(replacements)
+			log.Printf("context elision: reclaimed %dB across %d tool result(s), live=%dB",
+				reclaimed, len(replacements), ledger.liveBytes())
+			detailedLog.LogLLM("elision", map[string]any{
+				"provider":          p.Name(),
+				"model":             p.Model(),
+				"round":             round,
+				"elided_count":      len(replacements),
+				"reclaimed_bytes":   reclaimed,
+				"tool_result_bytes": ledger.liveBytes(),
+			})
+		}
 	}
 
 	return "", totalInputTokens, totalOutputTokens, totalToolCalls,

@@ -21,6 +21,9 @@ type mockProvider struct {
 	toolLog     [][]ToolResult
 	chatCalls   int
 	promptTurns []mockPromptTurn
+	// replaceLog records every ReplaceToolResults call so elision tests can
+	// assert both what was rewritten and how many passes it took.
+	replaceLog []map[string]string
 }
 
 func (p *mockProvider) Name() string  { return p.name }
@@ -42,6 +45,10 @@ func (p *mockProvider) Chat(ctx context.Context) (ChatResult, error) {
 
 func (p *mockProvider) AddToolResults(results []ToolResult) {
 	p.toolLog = append(p.toolLog, results)
+}
+
+func (p *mockProvider) ReplaceToolResults(replacements map[string]string) {
+	p.replaceLog = append(p.replaceLog, replacements)
 }
 
 // ResetContext is a no-op for the mock because the test loop

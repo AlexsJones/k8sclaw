@@ -1,0 +1,115 @@
+# Controlling Context Cost
+
+An agent run is a loop: the model asks for tools, the runner executes them, and
+the results are appended to the conversation. Because every round re-sends the
+whole conversation, **a tool result added at round 5 is billed again on every
+remaining round**. With `MAX_TOOL_ITERATIONS` at its default of 50, a single
+50 KB page fetch can be paid for dozens of times.
+
+This is usually the dominant cost in a long run — not the system prompt. A
+typical run's input tokens climb steadily round over round; the gap between the
+first request and the last is accumulated tool output.
+
+## What the knobs do
+
+**All of this is off by default.** An unconfigured run sends exactly what it
+always did — both mechanisms change what the model can see, so neither is
+imposed silently. Individual tools keep their own output caps (`execute_command`
+and `read_file` at 8 KB, `fetch_url` at 50 KB).
+
+| Variable | Default | Effect |
+|---|---|---|
+| `CONTEXT_TOOL_RESULT_MAX_BYTES` | `0` (off) | Truncates each tool result as it enters the conversation. |
+| `CONTEXT_HISTORY_BUDGET_BYTES` | `0` (off) | Once live tool-result bytes exceed this, older results are replaced with short placeholders. |
+| `CONTEXT_HISTORY_BUDGET_LOW_BYTES` | half the budget | How far down to drain when elision fires. |
+| `CONTEXT_KEEP_RECENT_RESULTS` | `3` | Newest results never elided — the model is still reasoning over these. The in-flight round's results are protected on top of this window. Only applies when elision is on. |
+
+Set them via `spec.env` on an AgentRun, or on the Agent so every run inherits them.
+
+```yaml
+spec:
+  env:
+    - name: CONTEXT_HISTORY_BUDGET_BYTES
+      value: "60000"
+    - name: CONTEXT_KEEP_RECENT_RESULTS
+      value: "3"
+```
+
+The two knobs are independent and address different things. The per-result cap
+stops one enormous result from entering at all — most useful for sidecar tools,
+which have no output limit of their own (native tools and MCP tool output are
+already capped at 8 KB each). The history budget addresses accumulation: many
+individually-reasonable results adding up over a long run. For most cases the
+history budget alone is the one worth setting.
+
+## Why elision is batched, not continuous
+
+Providers cache prompts by exact byte prefix. Appending to the end of the
+conversation leaves the prefix intact, which is why long runs on a
+cache-enabled provider still report high cache-hit rates. **Rewriting anything
+mid-conversation invalidates the cache from that point on.**
+
+So elision deliberately does not trim a little each round. When the high-water
+mark is crossed it drains all the way to the low-water mark in one pass, paying
+a single cache write and then running every remaining round against a much
+smaller prefix. An entry is never elided twice, so a pass over unchanged history
+does nothing at all.
+
+This matters most on OpenAI-compatible providers, the only ones where the
+runner currently benefits from prefix caching (see
+[Reading `cached_input_tokens`](#reading-cached_input_tokens)). On Anthropic and
+Bedrock there is no cache to invalidate yet, so batching costs nothing there and
+keeps the behaviour identical once caching is turned on.
+
+Results from the round currently in flight are never elided, regardless of
+`CONTEXT_KEEP_RECENT_RESULTS`. A single round can issue more parallel tool calls
+than that window, and handing the model a placeholder for a call it just made —
+before it has seen the answer — would invite it to simply run the tool again.
+
+For the same reason, the tool *set* is never subsetted per round: the tool
+schemas sit in the cached prefix, and shrinking them dynamically would
+invalidate the cache on every call to save something the cache already makes
+cheap.
+
+## Choosing a budget
+
+Start by measuring. With `DETAILED_LOG_PATH` set, every round writes a `response`
+event to `llm.jsonl` carrying `input_tokens`, `cached_input_tokens`, and
+`tool_result_bytes`:
+
+```bash
+jq -c 'select(.event=="response")
+       | {round, input_tokens, cached_input_tokens, tool_result_bytes}' llm.jsonl
+```
+
+If `tool_result_bytes` climbs steadily, set `CONTEXT_HISTORY_BUDGET_BYTES` to
+roughly where you want it to plateau. Elision events are logged too:
+
+```bash
+jq -c 'select(.event=="elision")' llm.jsonl
+```
+
+### Reading `cached_input_tokens`
+
+**Today this is only ever non-zero on OpenAI and OpenAI-compatible providers
+such as OpenRouter**, which cache automatically once a prompt is large enough.
+Anthropic and Bedrock both require the request to carry explicit cache
+breakpoints (`cache_control` blocks and `cachePoint` blocks respectively), and
+the agent runner does not emit them yet — so on those providers the field
+reports `0` every round. That is an accurate reading, not a broken metric:
+there is no caching happening to report. The field is plumbed through all three
+providers so that enabling caching later is a one-line change.
+
+Where it is populated, note that the number means different things per
+provider: OpenAI and OpenRouter count cached tokens *inside* `input_tokens`,
+while Anthropic reports the uncached remainder in `input_tokens` and the cached
+portion separately. That is why the runner logs the two side by side rather
+than as a hit-rate percentage.
+
+## Trade-off
+
+Elided results are gone from the model's view — it sees a placeholder naming the
+tool and the reclaimed size, and can re-run the tool if it still needs the
+output. On tasks where the agent must correlate evidence gathered early with
+findings much later, set `CONTEXT_KEEP_RECENT_RESULTS` higher or leave elision
+off and rely on the per-result cap alone.
