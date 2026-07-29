@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"context"
 	"os"
 	"strings"
 	"testing"
@@ -156,7 +157,7 @@ func TestBuildChannelDeployment_ImageRegistry(t *testing.T) {
 func TestBuildJob_AgentRunComponentLabel(t *testing.T) {
 	r := &AgentRunReconciler{}
 	run := newTestRun()
-	job, _ := r.buildJob(run, false, nil, nil, nil, nil)
+	job, _ := r.buildJob(context.Background(), run, false, nil, nil, nil, nil)
 
 	labels := job.Spec.Template.Labels
 	if labels["sympozium.ai/component"] != "agent-run" {
@@ -167,7 +168,7 @@ func TestBuildJob_AgentRunComponentLabel(t *testing.T) {
 func TestBuildJob_AgentRunInstanceLabel(t *testing.T) {
 	r := &AgentRunReconciler{}
 	run := newTestRun()
-	job, _ := r.buildJob(run, false, nil, nil, nil, nil)
+	job, _ := r.buildJob(context.Background(), run, false, nil, nil, nil, nil)
 
 	labels := job.Spec.Template.Labels
 	if labels["sympozium.ai/instance"] != "my-instance" {
@@ -190,7 +191,7 @@ func TestComponentLabels_ChannelAndAgentRunAreDifferent(t *testing.T) {
 	// Build an agent-run job
 	ar := &AgentRunReconciler{}
 	run := newTestRun()
-	job, _ := ar.buildJob(run, false, nil, nil, nil, nil)
+	job, _ := ar.buildJob(context.Background(), run, false, nil, nil, nil, nil)
 	agentComponent := job.Spec.Template.Labels["sympozium.ai/component"]
 
 	if channelComponent == agentComponent {

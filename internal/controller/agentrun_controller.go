@@ -340,6 +340,301 @@ func (r *AgentRunReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	return result, err
 }
 
+// agentRunInputs holds the values derived from the backing Agent that both
+// execution backends need in order to render a pod.
+type agentRunInputs struct {
+	memoryEnabled bool
+	observability *sympoziumv1alpha1.ObservabilitySpec
+	mcpServers    []sympoziumv1alpha1.MCPServerRef
+	// allowedOutboundChannels bounds where the agent's send_channel_message
+	// tool may deliver: only channel types actually configured on the Agent.
+	// Threaded into the ipc-bridge, which drops tool sends to any other channel
+	// (agents are adversarial — this limits the data-exfil surface).
+	allowedOutboundChannels []string
+}
+
+// resolveAgentRunInputs looks up the backing Agent, folds its configuration into
+// the AgentRun in place (skills, ensemble label, run timeout), and returns the
+// derived values buildAgentPodTemplate needs.
+//
+// Called by both reconcilePending and reconcilePendingAgentSandbox before the
+// backend fork; Agent-derived setup belongs here rather than in either caller.
+//
+// A missing Agent is not an error: manually-applied AgentRun CRs need not
+// reference one, and every value below has a default. Any other Get failure is
+// returned, because proceeding would render a pod with memory, observability,
+// skills, the ensemble label, and the run timeout all silently dropped — a
+// degraded run that looks successful. Requeueing is the correct response to a
+// transient apiserver error.
+func (r *AgentRunReconciler) resolveAgentRunInputs(ctx context.Context, agentRun *sympoziumv1alpha1.AgentRun) (agentRunInputs, error) {
+	var out agentRunInputs
+
+	instance := &sympoziumv1alpha1.Agent{}
+	if err := r.Get(ctx, client.ObjectKey{
+		Namespace: agentRun.Namespace,
+		Name:      agentRun.Spec.AgentRef,
+	}, instance); err != nil {
+		if errors.IsNotFound(err) {
+			return out, nil
+		}
+		return out, fmt.Errorf("resolving agent %q: %w", agentRun.Spec.AgentRef, err)
+	}
+
+	if instance.Spec.Memory != nil && instance.Spec.Memory.Enabled {
+		out.memoryEnabled = true
+	}
+	for _, ch := range instance.Spec.Channels {
+		if t := strings.TrimSpace(ch.Type); t != "" {
+			out.allowedOutboundChannels = append(out.allowedOutboundChannels, t)
+		}
+	}
+	if instance.Spec.Observability != nil && instance.Spec.Observability.Enabled {
+		obsCopy := *instance.Spec.Observability
+		if len(instance.Spec.Observability.ResourceAttributes) > 0 {
+			obsCopy.ResourceAttributes = make(map[string]string, len(instance.Spec.Observability.ResourceAttributes))
+			for k, v := range instance.Spec.Observability.ResourceAttributes {
+				obsCopy.ResourceAttributes[k] = v
+			}
+		}
+		out.observability = &obsCopy
+	}
+	// If the AgentRun has no skills, inherit from the Agent.
+	// This is a safety net — tuiCreateRun and the schedule controller
+	// should already copy skills, but older runs or manual CRs may not.
+	// Skip inheritance for web-proxy child runs — they intentionally omit
+	// server-mode skills (like web-endpoint) to run as one-shot Jobs.
+	if len(agentRun.Spec.Skills) == 0 && len(instance.Spec.Skills) > 0 {
+		if agentRun.Labels["sympozium.ai/source"] != "web-proxy" {
+			agentRun.Spec.Skills = instance.Spec.Skills
+		}
+	}
+	out.mcpServers = instance.Spec.MCPServers
+
+	// Extract the owning Ensemble name for persona-aware delegation. The
+	// sharedMemory and relationshipContext mutators key off this label.
+	if packName := instance.Labels["sympozium.ai/ensemble"]; packName != "" {
+		if agentRun.Labels == nil {
+			agentRun.Labels = make(map[string]string)
+		}
+		agentRun.Labels["sympozium.ai/ensemble"] = packName
+	}
+
+	// Propagate RunTimeout from instance config to AgentRun spec if not already set.
+	// This is a fallback for manually-applied AgentRun CRs; the run creators
+	// (schedule/channel/delegation/etc.) persist Spec.Timeout at creation time.
+	if agentRun.Spec.Timeout == nil {
+		agentRun.Spec.Timeout = instance.Spec.Agents.Default.ParseRunTimeout()
+	}
+
+	return out, nil
+}
+
+// resolveProviderHeaders merges the providerHeadersSecretRef contents into
+// spec.model.providerHeaders in memory, so buildContainers can pass them to the
+// agent-runner. Shared by both execution backends; never persisted back to the CR.
+func (r *AgentRunReconciler) resolveProviderHeaders(ctx context.Context, log logr.Logger, agentRun *sympoziumv1alpha1.AgentRun) {
+	if agentRun.Spec.Model.ProviderHeadersSecretRef == "" {
+		return
+	}
+	var headerSecret corev1.Secret
+	if err := r.Get(ctx, client.ObjectKey{
+		Namespace: agentRun.Namespace,
+		Name:      agentRun.Spec.Model.ProviderHeadersSecretRef,
+	}, &headerSecret); err != nil {
+		log.Error(err, "failed to resolve providerHeadersSecretRef",
+			"secret", agentRun.Spec.Model.ProviderHeadersSecretRef)
+		return
+	}
+	if agentRun.Spec.Model.ProviderHeaders == nil {
+		agentRun.Spec.Model.ProviderHeaders = make(map[string]string)
+	}
+	for k, v := range headerSecret.Data {
+		agentRun.Spec.Model.ProviderHeaders[k] = string(v)
+	}
+}
+
+// runPrerequisites holds what both execution backends need once the setup common
+// to every pending run has completed.
+type runPrerequisites struct {
+	inputs     agentRunInputs
+	mcpServers []sympoziumv1alpha1.MCPServerRef
+	// sidecars is the unfiltered resolved set. Server mode needs the
+	// RequiresServer entries; task mode drops them in prepareTaskPrerequisites.
+	sidecars []resolvedSidecar
+}
+
+// prepareRunPrerequisites performs the setup every pending AgentRun needs before a
+// pod can be rendered, whichever backend renders it: the agent ServiceAccount, the
+// input and MCP ConfigMaps, the traceparent annotation, and resolution of the
+// Agent's configuration, MCP server URLs, and skill sidecars.
+//
+// Called by both reconcilePending and reconcilePendingAgentSandbox. It deliberately
+// stops before anything mode-specific so the Job path can still branch to server
+// mode; the task-mode remainder is prepareTaskPrerequisites. Keeping both here is
+// what stops the two reconcile paths drifting apart again — the parity tests compare
+// pod specs and cannot see a missing ConfigMap or RBAC object.
+func (r *AgentRunReconciler) prepareRunPrerequisites(
+	ctx context.Context,
+	log logr.Logger,
+	span trace.Span,
+	agentRun *sympoziumv1alpha1.AgentRun,
+) (runPrerequisites, error) {
+	var out runPrerequisites
+
+	// Ensure the sympozium-agent ServiceAccount exists in the target namespace.
+	if err := r.ensureAgentServiceAccount(ctx, agentRun.Namespace); err != nil {
+		return out, fmt.Errorf("ensuring agent service account: %w", err)
+	}
+
+	// Create the input ConfigMap with the task.
+	if err := r.createInputConfigMap(ctx, agentRun); err != nil {
+		return out, fmt.Errorf("creating input ConfigMap: %w", err)
+	}
+
+	// Fold the backing Agent's configuration into the run.
+	inputs, err := r.resolveAgentRunInputs(ctx, agentRun)
+	if err != nil {
+		return out, err
+	}
+	out.inputs = inputs
+	out.mcpServers = inputs.mcpServers
+
+	// Resolve MCPServer CRs: for any mcpServer entry without a URL, look up the
+	// MCPServer CR by name and use its status.url, then write the MCP ConfigMap.
+	if len(out.mcpServers) > 0 {
+		out.mcpServers = r.resolveMCPServerURLs(ctx, agentRun.Namespace, out.mcpServers)
+		if err := r.ensureMCPConfigMap(ctx, agentRun, out.mcpServers); err != nil {
+			return out, fmt.Errorf("creating MCP ConfigMap: %w", err)
+		}
+	}
+
+	// Write traceparent annotation so buildContainers can inject TRACEPARENT env var.
+	if traceparent := formatTraceparent(span.SpanContext()); traceparent != "" {
+		if agentRun.Annotations == nil {
+			agentRun.Annotations = map[string]string{}
+		}
+		agentRun.Annotations["otel.dev/traceparent"] = traceparent
+	}
+
+	// Resolve skill sidecars from SkillPack CRDs.
+	out.sidecars = r.resolveSkillSidecars(ctx, log, agentRun)
+
+	return out, nil
+}
+
+// prepareTaskPrerequisites completes the setup for a task-mode run, for both the
+// Job and the Sandbox CR backend, and returns the sidecars the pod should carry.
+//
+// A non-nil requeue must be returned by the caller verbatim without rendering a
+// pod: the run is either waiting on the memory server or has already been marked
+// Failed.
+func (r *AgentRunReconciler) prepareTaskPrerequisites(
+	ctx context.Context,
+	log logr.Logger,
+	agentRun *sympoziumv1alpha1.AgentRun,
+	resolved []resolvedSidecar,
+) ([]resolvedSidecar, *ctrl.Result, error) {
+	// Filter out server-only sidecars (RequiresServer) — they are not meaningful
+	// in a task-mode pod and would waste resources.
+	sidecars := make([]resolvedSidecar, 0, len(resolved))
+	for _, sc := range resolved {
+		if sc.sidecar.RequiresServer {
+			log.V(1).Info("Skipping server-only sidecar in task mode", "skillPack", sc.skillPackName)
+			continue
+		}
+		sidecars = append(sidecars, sc)
+	}
+
+	// Write the native sidecar-tools manifest as a read-only ConfigMap when any
+	// attached sidecar declares tools. The definitions come from the SkillPack CRD
+	// (admission-validated), so they live outside the agent's reach and the running
+	// agent can consume but never forge them.
+	//
+	// Built from the filtered list, so the manifest describes exactly the sidecars
+	// the pod runs; the unfiltered list would advertise tools whose RequiresServer
+	// sidecar is absent from the pod.
+	if sidecarsHaveTools(sidecars) {
+		if err := r.ensureSidecarToolsConfigMap(ctx, agentRun, sidecars); err != nil {
+			return nil, &ctrl.Result{}, fmt.Errorf("creating sidecar tools ConfigMap: %w", err)
+		}
+	}
+
+	// If the memory skill is attached, verify the memory server Deployment exists
+	// AND has at least one ready replica before creating the pod. The instance
+	// controller creates it asynchronously — if it hasn't reconciled yet or the pod
+	// isn't ready, requeue rather than creating a pod that hangs on the
+	// wait-for-memory init container. Give up after 120s to avoid infinite requeues.
+	if agentRunHasMemorySkill(agentRun) {
+		memoryDeployName := fmt.Sprintf("%s-memory", agentRun.Spec.AgentRef)
+		var memoryDeploy appsv1.Deployment
+		if err := r.Get(ctx, client.ObjectKey{
+			Namespace: agentRun.Namespace,
+			Name:      memoryDeployName,
+		}, &memoryDeploy); err != nil {
+			age := time.Since(agentRun.CreationTimestamp.Time)
+			if age > 120*time.Second {
+				return nil, &ctrl.Result{}, r.failRun(ctx, agentRun,
+					fmt.Sprintf("memory server deployment %q not found after %s — ensure the instance has been reconciled", memoryDeployName, age.Truncate(time.Second)))
+			}
+			log.Info("Memory server deployment not found, requeueing", "deployment", memoryDeployName, "age", age.Truncate(time.Second))
+			return nil, &ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+		}
+		if memoryDeploy.Status.ReadyReplicas < 1 {
+			age := time.Since(agentRun.CreationTimestamp.Time)
+			if age > 120*time.Second {
+				return nil, &ctrl.Result{}, r.failRun(ctx, agentRun,
+					fmt.Sprintf("memory server deployment %q has no ready replicas after %s", memoryDeployName, age.Truncate(time.Second)))
+			}
+			log.Info("Memory server not ready, requeueing", "deployment", memoryDeployName, "readyReplicas", memoryDeploy.Status.ReadyReplicas, "age", age.Truncate(time.Second))
+			return nil, &ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+		}
+	}
+
+	// Mirror skill ConfigMaps from sympozium-system into the agent namespace so
+	// projected volumes can reference them (ConfigMaps are namespace-local).
+	if err := r.mirrorSkillConfigMaps(ctx, log, agentRun); err != nil {
+		log.Error(err, "Failed to mirror skill ConfigMaps, skills may be missing")
+	}
+
+	// Create RBAC resources for skill sidecars that need them.
+	// This is fatal: without RBAC the agent pod will run but every kubectl/API
+	// call inside the skill sidecar will fail with "forbidden". Common causes:
+	//   - Expired ServiceAccount tokens (check kube-apiserver logs for
+	//     "service account token has expired")
+	//   - Clock skew between cluster nodes (`date` on each node vs NTP)
+	//   - Controller ClusterRole missing RBAC delegation permissions
+	//     (re-run `helm upgrade` to sync the latest chart RBAC)
+	if err := r.ensureSkillRBAC(ctx, log, agentRun, sidecars); err != nil {
+		return nil, &ctrl.Result{}, r.failRun(ctx, agentRun,
+			fmt.Sprintf("failed to create skill RBAC — the agent would run without Kubernetes permissions. "+
+				"Check controller logs and kube-apiserver for authentication errors. "+
+				"Common causes: expired ServiceAccount tokens, clock skew between nodes, "+
+				"or missing RBAC permissions on the controller ClusterRole (re-run helm upgrade). "+
+				"Underlying error: %v", err))
+	}
+
+	// Create RBAC for lifecycle hook containers if needed.
+	if err := r.ensureLifecycleRBAC(ctx, log, agentRun); err != nil {
+		return nil, &ctrl.Result{}, r.failRun(ctx, agentRun,
+			fmt.Sprintf("failed to create lifecycle RBAC — hook containers would lack Kubernetes permissions. "+
+				"Check controller logs and kube-apiserver for authentication errors. "+
+				"Underlying error: %v", err))
+	}
+
+	// Create a workspace PVC when postRun lifecycle hooks are defined, so the
+	// workspace persists between the main pod and the postRun Job.
+	if agentRun.Spec.Lifecycle != nil && len(agentRun.Spec.Lifecycle.PostRun) > 0 {
+		if err := r.ensureWorkspacePVC(ctx, agentRun); err != nil {
+			return nil, &ctrl.Result{}, fmt.Errorf("creating workspace PVC: %w", err)
+		}
+	}
+
+	// Resolve provider headers secret and merge into inline headers (in-memory only).
+	r.resolveProviderHeaders(ctx, log, agentRun)
+
+	return sidecars, nil, nil
+}
+
 // reconcilePending handles an AgentRun that needs a Job created.
 func (r *AgentRunReconciler) reconcilePending(ctx context.Context, log logr.Logger, agentRun *sympoziumv1alpha1.AgentRun) (ctrl.Result, error) {
 	ctx, span := controllerTracer.Start(ctx, "agentrun.create_job",
@@ -388,225 +683,36 @@ func (r *AgentRunReconciler) reconcilePending(ctx context.Context, log logr.Logg
 		return r.reconcilePendingAgentSandbox(ctx, log, agentRun)
 	}
 
-	// Ensure the sympozium-agent ServiceAccount exists in the target namespace.
-	if err := r.ensureAgentServiceAccount(ctx, agentRun.Namespace); err != nil {
-		return ctrl.Result{}, fmt.Errorf("ensuring agent service account: %w", err)
+	// Setup shared with the agentSandbox backend — see prepareRunPrerequisites.
+	prereqs, err := r.prepareRunPrerequisites(ctx, log, span, agentRun)
+	if err != nil {
+		return ctrl.Result{}, err
 	}
-
-	// Create the input ConfigMap with the task
-	if err := r.createInputConfigMap(ctx, agentRun); err != nil {
-		return ctrl.Result{}, fmt.Errorf("creating input ConfigMap: %w", err)
-	}
-
-	// Look up the Agent to check for memory configuration.
-	instance := &sympoziumv1alpha1.Agent{}
-	memoryEnabled := false
-	var observability *sympoziumv1alpha1.ObservabilitySpec
-	var mcpServers []sympoziumv1alpha1.MCPServerRef
-	// allowedOutboundChannels bounds where the agent's send_channel_message
-	// tool may deliver: only channel types actually configured on the Agent.
-	// Threaded into the ipc-bridge, which drops tool sends to any other channel
-	// (agents are adversarial — this limits the data-exfil surface).
-	var allowedOutboundChannels []string
-	if err := r.Get(ctx, client.ObjectKey{
-		Namespace: agentRun.Namespace,
-		Name:      agentRun.Spec.AgentRef,
-	}, instance); err == nil {
-		if instance.Spec.Memory != nil && instance.Spec.Memory.Enabled {
-			memoryEnabled = true
-		}
-		for _, ch := range instance.Spec.Channels {
-			if t := strings.TrimSpace(ch.Type); t != "" {
-				allowedOutboundChannels = append(allowedOutboundChannels, t)
-			}
-		}
-		if instance.Spec.Observability != nil && instance.Spec.Observability.Enabled {
-			obsCopy := *instance.Spec.Observability
-			if len(instance.Spec.Observability.ResourceAttributes) > 0 {
-				obsCopy.ResourceAttributes = make(map[string]string, len(instance.Spec.Observability.ResourceAttributes))
-				for k, v := range instance.Spec.Observability.ResourceAttributes {
-					obsCopy.ResourceAttributes[k] = v
-				}
-			}
-			observability = &obsCopy
-		}
-		// If the AgentRun has no skills, inherit from the Agent.
-		// This is a safety net — tuiCreateRun and the schedule controller
-		// should already copy skills, but older runs or manual CRs may not.
-		// Skip inheritance for web-proxy child runs — they intentionally omit
-		// server-mode skills (like web-endpoint) to run as one-shot Jobs.
-		if len(agentRun.Spec.Skills) == 0 && len(instance.Spec.Skills) > 0 {
-			if agentRun.Labels["sympozium.ai/source"] != "web-proxy" {
-				agentRun.Spec.Skills = instance.Spec.Skills
-			}
-		}
-		mcpServers = instance.Spec.MCPServers
-
-		// Extract the owning Ensemble name for persona-aware delegation.
-		if packName := instance.Labels["sympozium.ai/ensemble"]; packName != "" {
-			if agentRun.Labels == nil {
-				agentRun.Labels = make(map[string]string)
-			}
-			agentRun.Labels["sympozium.ai/ensemble"] = packName
-		}
-
-		// Propagate RunTimeout from instance config to AgentRun spec if not already set.
-		// This is a fallback for manually-applied AgentRun CRs; the run creators
-		// (schedule/channel/delegation/etc.) persist Spec.Timeout at creation time.
-		if agentRun.Spec.Timeout == nil {
-			agentRun.Spec.Timeout = instance.Spec.Agents.Default.ParseRunTimeout()
-		}
-	}
-
-	// Resolve MCPServer CRs: for any mcpServer entry without a URL,
-	// look up the MCPServer CR by name and use its status.url.
-	if len(mcpServers) > 0 {
-		mcpServers = r.resolveMCPServerURLs(ctx, agentRun.Namespace, mcpServers)
-	}
-
-	// Create MCP ConfigMap if MCP servers are configured.
-	if len(mcpServers) > 0 {
-		if err := r.ensureMCPConfigMap(ctx, agentRun, mcpServers); err != nil {
-			return ctrl.Result{}, fmt.Errorf("creating MCP ConfigMap: %w", err)
-		}
-	}
-
-	// Write traceparent annotation so buildContainers can inject TRACEPARENT env var.
-	traceparent := formatTraceparent(span.SpanContext())
-	if traceparent != "" {
-		if agentRun.Annotations == nil {
-			agentRun.Annotations = map[string]string{}
-		}
-		agentRun.Annotations["otel.dev/traceparent"] = traceparent
-	}
-
-	// Resolve skill sidecars from SkillPack CRDs.
-	sidecars := r.resolveSkillSidecars(ctx, log, agentRun)
 
 	// Server mode is only used when explicitly set on the spec (e.g. by the
-	// web-endpoint reconciler).  Do not auto-promote task runs to server mode
-	// just because a RequiresServer sidecar is attached — feed/one-shot runs
-	// inherit all instance skills and must remain task-scoped.
+	// web-endpoint reconciler). Do not auto-promote task runs to server mode just
+	// because a RequiresServer sidecar is attached — feed/one-shot runs inherit all
+	// instance skills and must remain task-scoped.
+	//
+	// Checked before prepareTaskPrerequisites so a server-mode run does not leave an
+	// orphan sidecar-tools ConfigMap behind.
 	if agentRun.Spec.Mode == "server" {
-		return r.reconcilePendingServer(ctx, log, agentRun, sidecars)
+		return r.reconcilePendingServer(ctx, log, agentRun, prereqs.sidecars)
 	}
 
-	// Write the native sidecar-tools manifest as a read-only ConfigMap when any
-	// attached sidecar declares tools. The definitions come from the SkillPack
-	// CRD (admission-validated), so they live outside the agent's reach and the
-	// running agent can consume but never forge them. Only the task (Job) path
-	// mounts this manifest, so it is created after the server-mode branch to
-	// avoid an orphan ConfigMap on server-mode runs.
-	if sidecarsHaveTools(sidecars) {
-		if err := r.ensureSidecarToolsConfigMap(ctx, agentRun, sidecars); err != nil {
-			return ctrl.Result{}, fmt.Errorf("creating sidecar tools ConfigMap: %w", err)
-		}
+	sidecars, requeue, err := r.prepareTaskPrerequisites(ctx, log, agentRun, prereqs.sidecars)
+	if requeue != nil {
+		return *requeue, err
+	}
+	if err != nil {
+		return ctrl.Result{}, err
 	}
 
-	// Filter out server-only sidecars (RequiresServer) — they are not
-	// meaningful in a task-mode Job and would waste resources.
-	taskSidecars := make([]resolvedSidecar, 0, len(sidecars))
-	for _, sc := range sidecars {
-		if sc.sidecar.RequiresServer {
-			log.V(1).Info("Skipping server-only sidecar in task mode", "skillPack", sc.skillPackName)
-			continue
-		}
-		taskSidecars = append(taskSidecars, sc)
-	}
-	sidecars = taskSidecars
-
-	// If the memory skill is attached, verify the memory server Deployment
-	// exists AND has at least one ready replica before creating the Job.
-	// The instance controller creates it asynchronously — if it hasn't
-	// reconciled yet or the pod isn't ready, requeue rather than creating
-	// a pod that hangs on the wait-for-memory init container.
-	// Give up after 120s to avoid infinite requeue loops.
-	if agentRunHasMemorySkill(agentRun) {
-		memoryDeployName := fmt.Sprintf("%s-memory", agentRun.Spec.AgentRef)
-		var memoryDeploy appsv1.Deployment
-		if err := r.Get(ctx, client.ObjectKey{
-			Namespace: agentRun.Namespace,
-			Name:      memoryDeployName,
-		}, &memoryDeploy); err != nil {
-			age := time.Since(agentRun.CreationTimestamp.Time)
-			if age > 120*time.Second {
-				return ctrl.Result{}, r.failRun(ctx, agentRun,
-					fmt.Sprintf("memory server deployment %q not found after %s — ensure the instance has been reconciled", memoryDeployName, age.Truncate(time.Second)))
-			}
-			log.Info("Memory server deployment not found, requeueing", "deployment", memoryDeployName, "age", age.Truncate(time.Second))
-			return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
-		}
-		if memoryDeploy.Status.ReadyReplicas < 1 {
-			age := time.Since(agentRun.CreationTimestamp.Time)
-			if age > 120*time.Second {
-				return ctrl.Result{}, r.failRun(ctx, agentRun,
-					fmt.Sprintf("memory server deployment %q has no ready replicas after %s", memoryDeployName, age.Truncate(time.Second)))
-			}
-			log.Info("Memory server not ready, requeueing", "deployment", memoryDeployName, "readyReplicas", memoryDeploy.Status.ReadyReplicas, "age", age.Truncate(time.Second))
-			return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
-		}
-	}
-
-	// Mirror skill ConfigMaps from sympozium-system into the agent namespace
-	// so projected volumes can reference them (ConfigMaps are namespace-local).
-	if err := r.mirrorSkillConfigMaps(ctx, log, agentRun); err != nil {
-		log.Error(err, "Failed to mirror skill ConfigMaps, skills may be missing")
-	}
-
-	// Create RBAC resources for skill sidecars that need them.
-	// This is fatal: without RBAC the agent pod will run but every kubectl/API
-	// call inside the skill sidecar will fail with "forbidden". Common causes:
-	//   - Expired ServiceAccount tokens (check kube-apiserver logs for
-	//     "service account token has expired")
-	//   - Clock skew between cluster nodes (`date` on each node vs NTP)
-	//   - Controller ClusterRole missing RBAC delegation permissions
-	//     (re-run `helm upgrade` to sync the latest chart RBAC)
-	if err := r.ensureSkillRBAC(ctx, log, agentRun, sidecars); err != nil {
-		return ctrl.Result{}, r.failRun(ctx, agentRun,
-			fmt.Sprintf("failed to create skill RBAC — the agent would run without Kubernetes permissions. "+
-				"Check controller logs and kube-apiserver for authentication errors. "+
-				"Common causes: expired ServiceAccount tokens, clock skew between nodes, "+
-				"or missing RBAC permissions on the controller ClusterRole (re-run helm upgrade). "+
-				"Underlying error: %v", err))
-	}
-
-	// Create RBAC for lifecycle hook containers if needed.
-	if err := r.ensureLifecycleRBAC(ctx, log, agentRun); err != nil {
-		return ctrl.Result{}, r.failRun(ctx, agentRun,
-			fmt.Sprintf("failed to create lifecycle RBAC — hook containers would lack Kubernetes permissions. "+
-				"Check controller logs and kube-apiserver for authentication errors. "+
-				"Underlying error: %v", err))
-	}
-
-	// Create a workspace PVC when postRun lifecycle hooks are defined,
-	// so the workspace persists between the main Job and the postRun Job.
-	if agentRun.Spec.Lifecycle != nil && len(agentRun.Spec.Lifecycle.PostRun) > 0 {
-		if err := r.ensureWorkspacePVC(ctx, agentRun); err != nil {
-			return ctrl.Result{}, fmt.Errorf("creating workspace PVC: %w", err)
-		}
-	}
-
-	// Resolve provider headers secret and merge into inline headers (in-memory only).
-	if agentRun.Spec.Model.ProviderHeadersSecretRef != "" {
-		var headerSecret corev1.Secret
-		if err := r.Get(ctx, client.ObjectKey{
-			Namespace: agentRun.Namespace,
-			Name:      agentRun.Spec.Model.ProviderHeadersSecretRef,
-		}, &headerSecret); err == nil {
-			if agentRun.Spec.Model.ProviderHeaders == nil {
-				agentRun.Spec.Model.ProviderHeaders = make(map[string]string)
-			}
-			for k, v := range headerSecret.Data {
-				agentRun.Spec.Model.ProviderHeaders[k] = string(v)
-			}
-		} else {
-			log.Error(err, "failed to resolve providerHeadersSecretRef",
-				"secret", agentRun.Spec.Model.ProviderHeadersSecretRef)
-		}
-	}
-
-	// Build and create the Job
-	job, err := r.buildJob(agentRun, memoryEnabled, observability, sidecars, mcpServers, allowedOutboundChannels)
+	// Build and create the Job. buildJob delegates to buildAgentPodTemplate, which
+	// applies the pod mutators; register a podMutator rather than injecting here,
+	// so the agentSandbox backend is covered too.
+	job, err := r.buildJob(ctx, agentRun, prereqs.inputs.memoryEnabled, prereqs.inputs.observability,
+		sidecars, prereqs.mcpServers, prereqs.inputs.allowedOutboundChannels)
 	if err != nil {
 		// buildJob (which calls buildContainers) rejected the spec — most
 		// commonly an unknown task.mode or a handler validation failure.
@@ -621,16 +727,6 @@ func (r *AgentRunReconciler) reconcilePending(ctx context.Context, log logr.Logg
 		})
 		return ctrl.Result{}, nil
 	}
-
-	// Inject shared workflow memory env vars and init container if the pack has shared memory.
-	r.injectSharedMemory(ctx, agentRun, job)
-
-	// Inject ensemble relationship context so the agent-runner can auto-generate
-	// delegation/supervision instructions in the system prompt.
-	r.injectRelationshipContext(ctx, agentRun, job)
-
-	// Inject subagents configuration so the spawn_subagents tool is enabled.
-	r.injectSubagentsConfig(ctx, agentRun, job)
 
 	if err := controllerutil.SetControllerReference(agentRun, job, r.Scheme); err != nil {
 		return ctrl.Result{}, fmt.Errorf("setting owner reference: %w", err)
@@ -2253,19 +2349,10 @@ func seccompProfileForPod(agentRun *sympoziumv1alpha1.AgentRun) *corev1.SeccompP
 	}
 }
 
-// buildJob constructs the Kubernetes Job for an AgentRun. Returns an
-// (nil, err) when the spec is rejected at render time — for example an
-// unknown task.mode or a failed per-mode validation. The reconcile loop
-// surfaces the error on AgentRun.status and marks the run Failed.
-func (r *AgentRunReconciler) buildJob(
-	agentRun *sympoziumv1alpha1.AgentRun,
-	memoryEnabled bool,
-	observability *sympoziumv1alpha1.ObservabilitySpec,
-	sidecars []resolvedSidecar,
-	mcpServers []sympoziumv1alpha1.MCPServerRef,
-	allowedOutboundChannels []string,
-) (*batchv1.Job, error) {
-	labels := map[string]string{
+// agentPodLabels returns the labels stamped on both the agent pod and its
+// owning workload object, for either execution backend.
+func agentPodLabels(agentRun *sympoziumv1alpha1.AgentRun) map[string]string {
+	return map[string]string{
 		"sympozium.ai/agent-run":       agentRun.Name,
 		"sympozium.ai/instance":        agentRun.Spec.AgentRef,
 		"sympozium.ai/component":       "agent-run",
@@ -2273,18 +2360,32 @@ func (r *AgentRunReconciler) buildJob(
 		"app.kubernetes.io/part-of":    "sympozium",
 		"app.kubernetes.io/managed-by": "sympozium-controller",
 	}
+}
 
-	ttl := int32(300)
-	deadline := int64(600)
-	if agentRun.Spec.Timeout != nil {
-		deadline = int64(agentRun.Spec.Timeout.Duration.Seconds()) + 60
-	}
-	backoffLimit := int32(0)
-
+// buildAgentPodTemplate renders the pod template used by both AgentRun execution
+// backends: buildJob wraps it in a batchv1.Job, buildSandboxCR converts it into a
+// Sandbox CR.
+//
+// It sits below the backend fork and owns containers, volumes, host access, pod
+// security, and the podMutators registry, so both backends render the same pod.
+// Fields set in a caller apply to that backend only; TestBackendParity covers this.
+//
+// Returns an error when the spec is rejected at render time (unknown task.mode,
+// failed per-mode validation); the reconcile loop surfaces it on
+// AgentRun.status and marks the run Failed.
+func (r *AgentRunReconciler) buildAgentPodTemplate(
+	ctx context.Context,
+	agentRun *sympoziumv1alpha1.AgentRun,
+	memoryEnabled bool,
+	observability *sympoziumv1alpha1.ObservabilitySpec,
+	sidecars []resolvedSidecar,
+	mcpServers []sympoziumv1alpha1.MCPServerRef,
+	allowedOutboundChannels []string,
+) (corev1.PodTemplateSpec, error) {
 	// Build containers (task-mode dispatch happens inside buildContainers)
 	containers, initContainers, err := r.buildContainers(agentRun, memoryEnabled, observability, sidecars, mcpServers, allowedOutboundChannels)
 	if err != nil {
-		return nil, err
+		return corev1.PodTemplateSpec{}, err
 	}
 	volumes := r.buildVolumes(agentRun, memoryEnabled, sidecars, mcpServers)
 	hostNetwork, hostPID := derivePodHostAccess(sidecars)
@@ -2297,39 +2398,75 @@ func (r *AgentRunReconciler) buildJob(
 	runAsUser := int64(1000)
 	fsGroup := int64(1000)
 
+	tmpl := corev1.PodTemplateSpec{
+		ObjectMeta: metav1.ObjectMeta{
+			Labels: agentPodLabels(agentRun),
+		},
+		Spec: corev1.PodSpec{
+			RestartPolicy:      corev1.RestartPolicyNever,
+			ServiceAccountName: "sympozium-agent",
+			ImagePullSecrets:   agentRun.Spec.ImagePullSecrets,
+			HostNetwork:        hostNetwork,
+			HostPID:            hostPID,
+			DNSPolicy:          dnsPolicy,
+			NodeSelector:       agentRun.Spec.Model.NodeSelector,
+			SecurityContext: &corev1.PodSecurityContext{
+				RunAsNonRoot:   &runAsNonRoot,
+				RunAsUser:      &runAsUser,
+				FSGroup:        &fsGroup,
+				SeccompProfile: seccompProfileForPod(agentRun),
+			},
+			InitContainers: initContainers,
+			Containers:     containers,
+			Volumes:        volumes,
+		},
+	}
+
+	// Shared pod mutators (shared memory, relationship context, subagents, …),
+	// registered in agentrun_pod_mutators.go.
+	r.applyPodMutators(ctx, agentRun, &tmpl.Spec)
+
+	return tmpl, nil
+}
+
+// buildJob constructs the Kubernetes Job for an AgentRun. Returns an
+// (nil, err) when the spec is rejected at render time — for example an
+// unknown task.mode or a failed per-mode validation. The reconcile loop
+// surfaces the error on AgentRun.status and marks the run Failed.
+func (r *AgentRunReconciler) buildJob(
+	ctx context.Context,
+	agentRun *sympoziumv1alpha1.AgentRun,
+	memoryEnabled bool,
+	observability *sympoziumv1alpha1.ObservabilitySpec,
+	sidecars []resolvedSidecar,
+	mcpServers []sympoziumv1alpha1.MCPServerRef,
+	allowedOutboundChannels []string,
+) (*batchv1.Job, error) {
+	template, err := r.buildAgentPodTemplate(ctx, agentRun, memoryEnabled, observability, sidecars, mcpServers, allowedOutboundChannels)
+	if err != nil {
+		return nil, err
+	}
+
+	// Job-only knobs — the Sandbox CR has no equivalent, so they stay here
+	// rather than in the shared template.
+	ttl := int32(300)
+	deadline := int64(600)
+	if agentRun.Spec.Timeout != nil {
+		deadline = int64(agentRun.Spec.Timeout.Duration.Seconds()) + 60
+	}
+	backoffLimit := int32(0)
+
 	return &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      agentRun.Name,
 			Namespace: agentRun.Namespace,
-			Labels:    labels,
+			Labels:    agentPodLabels(agentRun),
 		},
 		Spec: batchv1.JobSpec{
 			TTLSecondsAfterFinished: &ttl,
 			ActiveDeadlineSeconds:   &deadline,
 			BackoffLimit:            &backoffLimit,
-			Template: corev1.PodTemplateSpec{
-				ObjectMeta: metav1.ObjectMeta{
-					Labels: labels,
-				},
-				Spec: corev1.PodSpec{
-					RestartPolicy:      corev1.RestartPolicyNever,
-					ServiceAccountName: "sympozium-agent",
-					ImagePullSecrets:   agentRun.Spec.ImagePullSecrets,
-					HostNetwork:        hostNetwork,
-					HostPID:            hostPID,
-					DNSPolicy:          dnsPolicy,
-					NodeSelector:       agentRun.Spec.Model.NodeSelector,
-					SecurityContext: &corev1.PodSecurityContext{
-						RunAsNonRoot:   &runAsNonRoot,
-						RunAsUser:      &runAsUser,
-						FSGroup:        &fsGroup,
-						SeccompProfile: seccompProfileForPod(agentRun),
-					},
-					InitContainers: initContainers,
-					Containers:     containers,
-					Volumes:        volumes,
-				},
-			},
+			Template:                template,
 		},
 	}, nil
 }
@@ -3159,234 +3296,6 @@ func buildObservabilityEnv(agentRun *sympoziumv1alpha1.AgentRun, obs *sympoziumv
 	}
 
 	return env
-}
-
-// injectSharedMemory adds WORKFLOW_MEMORY_SERVER_URL, WORKFLOW_MEMORY_ACCESS env vars
-// and a wait-for-shared-memory init container to the Job's pod template if the
-// AgentRun belongs to a Ensemble with shared memory enabled.
-func (r *AgentRunReconciler) injectSharedMemory(ctx context.Context, agentRun *sympoziumv1alpha1.AgentRun, job *batchv1.Job) {
-	packName := agentRun.Labels["sympozium.ai/ensemble"]
-	if packName == "" {
-		return
-	}
-
-	var pack sympoziumv1alpha1.Ensemble
-	if err := r.Get(ctx, types.NamespacedName{Name: packName, Namespace: agentRun.Namespace}, &pack); err != nil {
-		return
-	}
-	if pack.Spec.SharedMemory == nil || !pack.Spec.SharedMemory.Enabled {
-		return
-	}
-
-	sharedMemoryURL := fmt.Sprintf("http://%s-shared-memory.%s.svc:8080", packName, agentRun.Namespace)
-
-	// Resolve access mode for this persona from the instance's label.
-	accessMode := "read-write"
-	if agentRun.Spec.AgentRef != "" {
-		var inst sympoziumv1alpha1.Agent
-		if err := r.Get(ctx, types.NamespacedName{Name: agentRun.Spec.AgentRef, Namespace: agentRun.Namespace}, &inst); err == nil {
-			personaName := inst.Labels["sympozium.ai/agent-config"]
-			for _, rule := range pack.Spec.SharedMemory.AccessRules {
-				if rule.AgentConfig == personaName {
-					accessMode = rule.Access
-					break
-				}
-			}
-		}
-	}
-
-	// Inject env vars into the agent container (first container).
-	podSpec := &job.Spec.Template.Spec
-	if len(podSpec.Containers) > 0 {
-		podSpec.Containers[0].Env = append(podSpec.Containers[0].Env,
-			corev1.EnvVar{Name: "WORKFLOW_MEMORY_SERVER_URL", Value: sharedMemoryURL},
-			corev1.EnvVar{Name: "WORKFLOW_MEMORY_ACCESS", Value: accessMode},
-		)
-
-		// Inject membrane env vars if configured.
-		if pack.Spec.SharedMemory.Membrane != nil {
-			personaName := ""
-			if agentRun.Spec.AgentRef != "" {
-				var inst sympoziumv1alpha1.Agent
-				if err := r.Get(ctx, types.NamespacedName{Name: agentRun.Spec.AgentRef, Namespace: agentRun.Namespace}, &inst); err == nil {
-					personaName = inst.Labels["sympozium.ai/agent-config"]
-				}
-			}
-
-			// Auto-derive permeability from relationships if not explicitly set.
-			membrane := pack.Spec.SharedMemory.Membrane
-			if len(membrane.Permeability) == 0 && len(pack.Spec.Relationships) > 0 {
-				membrane = membrane.DeepCopy()
-				membrane.Permeability = derivePermeability(pack.Spec.AgentConfigs, pack.Spec.Relationships, membrane.DefaultVisibility)
-			}
-
-			membraneEnvs := resolveMembraneEnvVars(personaName, membrane, pack.Spec.Relationships)
-			podSpec.Containers[0].Env = append(podSpec.Containers[0].Env, membraneEnvs...)
-
-			// Inject evidence policy env var if configured.
-			if membrane.EvidencePolicy != nil && membrane.EvidencePolicy.MinKind != "" {
-				podSpec.Containers[0].Env = append(podSpec.Containers[0].Env,
-					corev1.EnvVar{Name: "WORKFLOW_MEMBRANE_MIN_EVIDENCE_KIND", Value: membrane.EvidencePolicy.MinKind},
-				)
-			}
-		}
-	}
-
-	// Add wait-for-shared-memory init container.
-	readOnly := true
-	noPrivEsc := false
-	podSpec.InitContainers = append(podSpec.InitContainers, corev1.Container{
-		Name:            "wait-for-shared-memory",
-		Image:           "busybox:1.36",
-		ImagePullPolicy: corev1.PullIfNotPresent,
-		SecurityContext: &corev1.SecurityContext{
-			ReadOnlyRootFilesystem:   &readOnly,
-			AllowPrivilegeEscalation: &noPrivEsc,
-			Capabilities: &corev1.Capabilities{
-				Drop: []corev1.Capability{"ALL"},
-			},
-		},
-		Command: []string{"sh", "-c",
-			fmt.Sprintf("elapsed=0; until wget -q --spider --timeout=2 %s/health; do echo 'waiting for shared memory server...'; sleep 2; elapsed=$((elapsed+2)); if [ $elapsed -ge 120 ]; then echo 'ERROR: shared memory server not ready after 120s'; exit 1; fi; done", sharedMemoryURL),
-		},
-		Resources: corev1.ResourceRequirements{
-			Requests: corev1.ResourceList{
-				corev1.ResourceCPU:    resource.MustParse("50m"),
-				corev1.ResourceMemory: resource.MustParse("32Mi"),
-			},
-			Limits: corev1.ResourceList{
-				corev1.ResourceCPU:    resource.MustParse("100m"),
-				corev1.ResourceMemory: resource.MustParse("64Mi"),
-			},
-		},
-	})
-}
-
-// injectRelationshipContext serialises the ensemble's relationships and persona
-// display names into env vars on the agent container so the agent-runner can
-// auto-generate delegation/supervision instructions in the system prompt.
-// This ensures user-created dynamic ensembles get correct routing guidance
-// without requiring manual system prompt edits.
-func (r *AgentRunReconciler) injectRelationshipContext(ctx context.Context, agentRun *sympoziumv1alpha1.AgentRun, job *batchv1.Job) {
-	packName := agentRun.Labels["sympozium.ai/ensemble"]
-	if packName == "" {
-		return
-	}
-
-	var pack sympoziumv1alpha1.Ensemble
-	if err := r.Get(ctx, types.NamespacedName{Name: packName, Namespace: agentRun.Namespace}, &pack); err != nil {
-		return
-	}
-	if len(pack.Spec.Relationships) == 0 {
-		return
-	}
-
-	// Resolve the persona name for this agent instance.
-	personaName := ""
-	if agentRun.Spec.AgentRef != "" {
-		var inst sympoziumv1alpha1.Agent
-		if err := r.Get(ctx, types.NamespacedName{Name: agentRun.Spec.AgentRef, Namespace: agentRun.Namespace}, &inst); err == nil {
-			personaName = inst.Labels["sympozium.ai/agent-config"]
-		}
-	}
-	if personaName == "" {
-		return
-	}
-
-	// Build a map of persona name → display name for human-readable context.
-	displayNames := make(map[string]string, len(pack.Spec.AgentConfigs))
-	for _, ac := range pack.Spec.AgentConfigs {
-		if ac.DisplayName != "" {
-			displayNames[ac.Name] = ac.DisplayName
-		}
-	}
-
-	// Filter relationships relevant to this persona (as source).
-	type relJSON struct {
-		Target      string `json:"target"`
-		DisplayName string `json:"displayName,omitempty"`
-		Type        string `json:"type"`
-		Condition   string `json:"condition,omitempty"`
-	}
-	var rels []relJSON
-	for _, rel := range pack.Spec.Relationships {
-		if rel.Source != personaName {
-			continue
-		}
-		rels = append(rels, relJSON{
-			Target:      rel.Target,
-			DisplayName: displayNames[rel.Target],
-			Type:        rel.Type,
-			Condition:   rel.Condition,
-		})
-	}
-	if len(rels) == 0 {
-		return
-	}
-
-	data, err := json.Marshal(rels)
-	if err != nil {
-		return
-	}
-
-	podSpec := &job.Spec.Template.Spec
-	if len(podSpec.Containers) > 0 {
-		podSpec.Containers[0].Env = append(podSpec.Containers[0].Env,
-			corev1.EnvVar{Name: "PERSONA_NAME", Value: personaName},
-			corev1.EnvVar{Name: "ENSEMBLE_RELATIONSHIPS", Value: string(data)},
-		)
-	}
-}
-
-// injectSubagentsConfig adds SUBAGENTS_ENABLED, SUBAGENTS_MAX_CHILDREN,
-// SUBAGENTS_MAX_CONCURRENT, and SUBAGENTS_MAX_DEPTH env vars to the agent
-// container when the "subagents" SkillPack is attached. Limits are taken from
-// SubagentsSpec if set, otherwise sensible defaults are used.
-func (r *AgentRunReconciler) injectSubagentsConfig(ctx context.Context, agentRun *sympoziumv1alpha1.AgentRun, job *batchv1.Job) {
-	if agentRun.Spec.AgentRef == "" {
-		return
-	}
-
-	// Check whether the "subagents" skill is attached to the AgentRun or
-	// the backing Agent. The skill attachment is the gate — users control
-	// access by adding/removing the SkillPack.
-	hasSkill := false
-	for _, s := range agentRun.Spec.Skills {
-		if s.SkillPackRef == "subagents" {
-			hasSkill = true
-			break
-		}
-	}
-	if !hasSkill {
-		return
-	}
-
-	// Look up the Agent for optional limit overrides.
-	var inst sympoziumv1alpha1.Agent
-	maxChildren, maxConcurrent, maxDepth := 3, 5, 2
-	if err := r.Get(ctx, types.NamespacedName{Name: agentRun.Spec.AgentRef, Namespace: agentRun.Namespace}, &inst); err == nil {
-		if sub := inst.Spec.Agents.Default.Subagents; sub != nil {
-			if sub.MaxChildrenPerAgent > 0 {
-				maxChildren = sub.MaxChildrenPerAgent
-			}
-			if sub.MaxConcurrent > 0 {
-				maxConcurrent = sub.MaxConcurrent
-			}
-			if sub.MaxDepth > 0 {
-				maxDepth = sub.MaxDepth
-			}
-		}
-	}
-
-	podSpec := &job.Spec.Template.Spec
-	if len(podSpec.Containers) > 0 {
-		podSpec.Containers[0].Env = append(podSpec.Containers[0].Env,
-			corev1.EnvVar{Name: "SUBAGENTS_ENABLED", Value: "true"},
-			corev1.EnvVar{Name: "SUBAGENTS_MAX_CHILDREN", Value: fmt.Sprintf("%d", maxChildren)},
-			corev1.EnvVar{Name: "SUBAGENTS_MAX_CONCURRENT", Value: fmt.Sprintf("%d", maxConcurrent)},
-			corev1.EnvVar{Name: "SUBAGENTS_MAX_DEPTH", Value: fmt.Sprintf("%d", maxDepth)},
-		)
-	}
 }
 
 // derivePermeability auto-generates permeability rules from the ensemble's
@@ -5318,6 +5227,9 @@ func (r *AgentRunReconciler) buildPostRunJob(
 						RunAsNonRoot: &runAsNonRoot,
 						RunAsUser:    &runAsUser,
 						FSGroup:      &fsGroup,
+						// postRun hooks are user-supplied containers and take the
+						// same seccomp floor as the agent pod.
+						SeccompProfile: seccompProfileForPod(agentRun),
 					},
 					InitContainers: initContainers,
 					Containers: []corev1.Container{

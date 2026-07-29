@@ -5,28 +5,48 @@ import (
 	"testing"
 
 	"github.com/go-logr/logr"
+	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	dynamicfake "k8s.io/client-go/dynamic/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	sympoziumv1alpha1 "github.com/sympozium-ai/sympozium/api/v1alpha1"
 )
 
-// newAgentRunTestReconciler builds an AgentRunReconciler backed by a fake
-// client. Both Client and APIReader point at the same fake so tests can mutate
-// objects via either field.
-func newAgentRunTestReconciler(t *testing.T, objs ...client.Object) *AgentRunReconciler {
+// newAgentRunTestScheme registers every group the AgentRun reconcile paths touch:
+// core (pods/configmaps/secrets/SAs), batch (Jobs), apps (the memory Deployment
+// readiness gate), rbac (skill and lifecycle RBAC), and the Sympozium CRDs.
+func newAgentRunTestScheme(t *testing.T) *runtime.Scheme {
 	t.Helper()
 
 	scheme := runtime.NewScheme()
 	_ = corev1.AddToScheme(scheme)
 	_ = batchv1.AddToScheme(scheme)
+	_ = appsv1.AddToScheme(scheme)
+	_ = rbacv1.AddToScheme(scheme)
 	if err := sympoziumv1alpha1.AddToScheme(scheme); err != nil {
 		t.Fatalf("add sympozium scheme: %v", err)
 	}
+	return scheme
+}
+
+// newAgentRunTestReconciler builds an AgentRunReconciler backed by a fake
+// client. Both Client and APIReader point at the same fake so tests can mutate
+// objects via either field.
+//
+// DynamicClient is wired to a fake too, so the agent-sandbox backend
+// (reconcilePendingAgentSandbox) is drivable without a cluster — see
+// agentrun_backend_parity_test.go.
+func newAgentRunTestReconciler(t *testing.T, objs ...client.Object) *AgentRunReconciler {
+	t.Helper()
+
+	scheme := newAgentRunTestScheme(t)
 
 	cl := fake.NewClientBuilder().
 		WithScheme(scheme).
@@ -34,11 +54,23 @@ func newAgentRunTestReconciler(t *testing.T, objs ...client.Object) *AgentRunRec
 		WithStatusSubresource(&sympoziumv1alpha1.AgentRun{}).
 		Build()
 
+	// The agent-sandbox CRDs are not in our scheme (they belong to
+	// kubernetes-sigs/agent-sandbox), so the list kinds have to be declared.
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(
+		scheme,
+		map[schema.GroupVersionResource]string{
+			sandboxGVR:      "SandboxList",
+			sandboxClaimGVR: "SandboxClaimList",
+			warmPoolGVR:     "SandboxWarmPoolList",
+		},
+	)
+
 	return &AgentRunReconciler{
-		Client:    cl,
-		APIReader: cl,
-		Scheme:    scheme,
-		Log:       logr.Discard(),
+		Client:        cl,
+		APIReader:     cl,
+		Scheme:        scheme,
+		Log:           logr.Discard(),
+		DynamicClient: dyn,
 	}
 }
 

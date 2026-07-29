@@ -45,7 +45,7 @@ func newTestRun() *sympoziumv1alpha1.AgentRun {
 func TestBuildJob_BasicMetadata(t *testing.T) {
 	r := &AgentRunReconciler{}
 	run := newTestRun()
-	job, _ := r.buildJob(run, false, nil, nil, nil, nil)
+	job, _ := r.buildJob(context.Background(), run, false, nil, nil, nil, nil)
 
 	if job.Name != "test-run" {
 		t.Errorf("name = %q, want test-run", job.Name)
@@ -58,7 +58,7 @@ func TestBuildJob_BasicMetadata(t *testing.T) {
 func TestBuildJob_Labels(t *testing.T) {
 	r := &AgentRunReconciler{}
 	run := newTestRun()
-	job, _ := r.buildJob(run, false, nil, nil, nil, nil)
+	job, _ := r.buildJob(context.Background(), run, false, nil, nil, nil, nil)
 
 	labels := job.Spec.Template.Labels
 	if labels["sympozium.ai/instance"] != "my-instance" {
@@ -74,7 +74,7 @@ func TestBuildJob_Labels(t *testing.T) {
 
 func TestBuildJob_TTLAndBackoff(t *testing.T) {
 	r := &AgentRunReconciler{}
-	job, _ := r.buildJob(newTestRun(), false, nil, nil, nil, nil)
+	job, _ := r.buildJob(context.Background(), newTestRun(), false, nil, nil, nil, nil)
 
 	if job.Spec.TTLSecondsAfterFinished == nil || *job.Spec.TTLSecondsAfterFinished != 300 {
 		t.Error("TTL should be 300")
@@ -86,7 +86,7 @@ func TestBuildJob_TTLAndBackoff(t *testing.T) {
 
 func TestBuildJob_DeadlineDefault(t *testing.T) {
 	r := &AgentRunReconciler{}
-	job, _ := r.buildJob(newTestRun(), false, nil, nil, nil, nil)
+	job, _ := r.buildJob(context.Background(), newTestRun(), false, nil, nil, nil, nil)
 
 	if job.Spec.ActiveDeadlineSeconds == nil || *job.Spec.ActiveDeadlineSeconds != 600 {
 		t.Errorf("deadline = %v, want 600", job.Spec.ActiveDeadlineSeconds)
@@ -97,7 +97,7 @@ func TestBuildJob_DeadlineWithTimeout(t *testing.T) {
 	r := &AgentRunReconciler{}
 	run := newTestRun()
 	run.Spec.Timeout = &metav1.Duration{Duration: 5 * time.Minute}
-	job, _ := r.buildJob(run, false, nil, nil, nil, nil)
+	job, _ := r.buildJob(context.Background(), run, false, nil, nil, nil, nil)
 
 	// 5min = 300s + 60 = 360
 	if job.Spec.ActiveDeadlineSeconds == nil || *job.Spec.ActiveDeadlineSeconds != 360 {
@@ -107,7 +107,7 @@ func TestBuildJob_DeadlineWithTimeout(t *testing.T) {
 
 func TestBuildJob_ServiceAccount(t *testing.T) {
 	r := &AgentRunReconciler{}
-	job, _ := r.buildJob(newTestRun(), false, nil, nil, nil, nil)
+	job, _ := r.buildJob(context.Background(), newTestRun(), false, nil, nil, nil, nil)
 
 	if job.Spec.Template.Spec.ServiceAccountName != "sympozium-agent" {
 		t.Errorf("SA = %q, want sympozium-agent", job.Spec.Template.Spec.ServiceAccountName)
@@ -116,7 +116,7 @@ func TestBuildJob_ServiceAccount(t *testing.T) {
 
 func TestBuildJob_PodSecurityContext(t *testing.T) {
 	r := &AgentRunReconciler{}
-	job, _ := r.buildJob(newTestRun(), false, nil, nil, nil, nil)
+	job, _ := r.buildJob(context.Background(), newTestRun(), false, nil, nil, nil, nil)
 
 	psc := job.Spec.Template.Spec.SecurityContext
 	if psc == nil {
@@ -132,7 +132,7 @@ func TestBuildJob_PodSecurityContext(t *testing.T) {
 
 func TestBuildJob_RestartPolicy(t *testing.T) {
 	r := &AgentRunReconciler{}
-	job, _ := r.buildJob(newTestRun(), false, nil, nil, nil, nil)
+	job, _ := r.buildJob(context.Background(), newTestRun(), false, nil, nil, nil, nil)
 
 	if job.Spec.Template.Spec.RestartPolicy != corev1.RestartPolicyNever {
 		t.Errorf("restart = %q, want Never", job.Spec.Template.Spec.RestartPolicy)
@@ -141,7 +141,7 @@ func TestBuildJob_RestartPolicy(t *testing.T) {
 
 func TestBuildJob_DefaultSeccompProfile(t *testing.T) {
 	r := &AgentRunReconciler{}
-	job, _ := r.buildJob(newTestRun(), false, nil, nil, nil, nil)
+	job, _ := r.buildJob(context.Background(), newTestRun(), false, nil, nil, nil, nil)
 
 	psc := job.Spec.Template.Spec.SecurityContext
 	if psc == nil {
@@ -166,7 +166,7 @@ func TestBuildJob_CustomSeccompProfile(t *testing.T) {
 			},
 		},
 	}
-	job, _ := r.buildJob(run, false, nil, nil, nil, nil)
+	job, _ := r.buildJob(context.Background(), run, false, nil, nil, nil, nil)
 
 	psc := job.Spec.Template.Spec.SecurityContext
 	if psc.SeccompProfile == nil {
@@ -959,7 +959,7 @@ func TestBuildJob_WithSkillSidecars(t *testing.T) {
 	sidecars := []resolvedSidecar{
 		{skillPackName: "k8s-ops", sidecar: sympoziumv1alpha1.SkillSidecar{Image: "k8s:latest", MountWorkspace: true}},
 	}
-	job, _ := r.buildJob(newTestRun(), false, nil, sidecars, nil, nil)
+	job, _ := r.buildJob(context.Background(), newTestRun(), false, nil, sidecars, nil, nil)
 	containers := job.Spec.Template.Spec.Containers
 	if len(containers) != 3 {
 		t.Fatalf("job container count = %d, want 3", len(containers))
@@ -1177,7 +1177,7 @@ func TestBuildJob_NodeSelector(t *testing.T) {
 		"kubernetes.io/hostname": "gpu-node-1",
 	}
 
-	job, _ := r.buildJob(run, false, nil, nil, nil, nil)
+	job, _ := r.buildJob(context.Background(), run, false, nil, nil, nil, nil)
 	ns := job.Spec.Template.Spec.NodeSelector
 
 	if ns == nil {
@@ -1193,7 +1193,7 @@ func TestBuildJob_NoNodeSelector(t *testing.T) {
 	run := newTestRun()
 	// No NodeSelector set.
 
-	job, _ := r.buildJob(run, false, nil, nil, nil, nil)
+	job, _ := r.buildJob(context.Background(), run, false, nil, nil, nil, nil)
 	ns := job.Spec.Template.Spec.NodeSelector
 
 	if ns != nil {

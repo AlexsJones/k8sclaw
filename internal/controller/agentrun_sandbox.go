@@ -6,22 +6,20 @@ package controller
 import (
 	"context"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/go-logr/logr"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 
-	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
 	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	sympoziumv1alpha1 "github.com/sympozium-ai/sympozium/api/v1alpha1"
 )
@@ -76,139 +74,29 @@ func (r *AgentRunReconciler) reconcilePendingAgentSandbox(
 
 	log.Info("Creating Agent Sandbox CR for AgentRun")
 
-	// Look up the Agent for memory/observability config.
-	instance := &sympoziumv1alpha1.Agent{}
-	memoryEnabled := false
-	var observability *sympoziumv1alpha1.ObservabilitySpec
-	var mcpServers []sympoziumv1alpha1.MCPServerRef
-	var allowedOutboundChannels []string
-	if err := r.Get(ctx, client.ObjectKey{
-		Namespace: agentRun.Namespace,
-		Name:      agentRun.Spec.AgentRef,
-	}, instance); err == nil {
-		if instance.Spec.Memory != nil && instance.Spec.Memory.Enabled {
-			memoryEnabled = true
-		}
-		for _, ch := range instance.Spec.Channels {
-			if t := strings.TrimSpace(ch.Type); t != "" {
-				allowedOutboundChannels = append(allowedOutboundChannels, t)
-			}
-		}
-		if instance.Spec.Observability != nil && instance.Spec.Observability.Enabled {
-			obsCopy := *instance.Spec.Observability
-			observability = &obsCopy
-		}
-		if len(agentRun.Spec.Skills) == 0 && len(instance.Spec.Skills) > 0 {
-			if agentRun.Labels["sympozium.ai/source"] != "web-proxy" {
-				agentRun.Spec.Skills = instance.Spec.Skills
-			}
-		}
-		mcpServers = instance.Spec.MCPServers
-	}
-
-	// Resolve MCP servers.
-	if len(mcpServers) > 0 {
-		mcpServers = r.resolveMCPServerURLs(ctx, agentRun.Namespace, mcpServers)
-	}
-
-	// Create input ConfigMap and MCP ConfigMap.
-	if err := r.createInputConfigMap(ctx, agentRun); err != nil {
-		return ctrl.Result{}, fmt.Errorf("creating input ConfigMap: %w", err)
-	}
-	if len(mcpServers) > 0 {
-		if err := r.ensureMCPConfigMap(ctx, agentRun, mcpServers); err != nil {
-			return ctrl.Result{}, fmt.Errorf("creating MCP ConfigMap: %w", err)
-		}
-	}
-
-	// Ensure ServiceAccount.
-	if err := r.ensureAgentServiceAccount(ctx, agentRun.Namespace); err != nil {
-		return ctrl.Result{}, fmt.Errorf("ensuring agent service account: %w", err)
-	}
-
-	// Write traceparent.
-	traceparent := formatTraceparent(span.SpanContext())
-	if traceparent != "" {
-		if agentRun.Annotations == nil {
-			agentRun.Annotations = map[string]string{}
-		}
-		agentRun.Annotations["otel.dev/traceparent"] = traceparent
-	}
-
-	// Resolve sidecars (filter server-only).
-	sidecars := r.resolveSkillSidecars(ctx, log, agentRun)
-	taskSidecars := make([]resolvedSidecar, 0, len(sidecars))
-	for _, sc := range sidecars {
-		if sc.sidecar.RequiresServer {
-			continue
-		}
-		taskSidecars = append(taskSidecars, sc)
-	}
-
-	// Wait for memory server if memory skill is attached.
-	if agentRunHasMemorySkill(agentRun) {
-		memoryDeployName := fmt.Sprintf("%s-memory", agentRun.Spec.AgentRef)
-		var memoryDeploy appsv1.Deployment
-		if err := r.Get(ctx, client.ObjectKey{
-			Namespace: agentRun.Namespace,
-			Name:      memoryDeployName,
-		}, &memoryDeploy); err != nil {
-			age := time.Since(agentRun.CreationTimestamp.Time)
-			if age > 120*time.Second {
-				return ctrl.Result{}, r.failRun(ctx, agentRun,
-					fmt.Sprintf("memory server deployment %q not found after %s", memoryDeployName, age.Truncate(time.Second)))
-			}
-			log.Info("Memory server deployment not found, requeueing", "deployment", memoryDeployName, "age", age.Truncate(time.Second))
-			return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
-		}
-		if memoryDeploy.Status.ReadyReplicas < 1 {
-			age := time.Since(agentRun.CreationTimestamp.Time)
-			if age > 120*time.Second {
-				return ctrl.Result{}, r.failRun(ctx, agentRun,
-					fmt.Sprintf("memory server deployment %q has no ready replicas after %s", memoryDeployName, age.Truncate(time.Second)))
-			}
-			log.Info("Memory server not ready, requeueing", "deployment", memoryDeployName, "readyReplicas", memoryDeploy.Status.ReadyReplicas, "age", age.Truncate(time.Second))
-			return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
-		}
-	}
-
-	// Mirror skills and create RBAC.
-	if err := r.mirrorSkillConfigMaps(ctx, log, agentRun); err != nil {
-		log.Error(err, "Failed to mirror skill ConfigMaps")
-	}
-	// RBAC creation is fatal: without it the agent sandbox will run but every
-	// kubectl/API call inside skill sidecars will fail with "forbidden".
-	// See reconcilePending in agentrun_controller.go for common causes.
-	if err := r.ensureSkillRBAC(ctx, log, agentRun, taskSidecars); err != nil {
-		return ctrl.Result{}, r.failRun(ctx, agentRun,
-			fmt.Sprintf("failed to create skill RBAC — the agent sandbox would run without Kubernetes permissions. "+
-				"Check controller logs and kube-apiserver for authentication errors. "+
-				"Common causes: expired ServiceAccount tokens, clock skew between nodes, "+
-				"or missing RBAC permissions on the controller ClusterRole (re-run helm upgrade). "+
-				"Underlying error: %v", err))
-	}
-
-	// Create RBAC for lifecycle hook containers if needed.
-	if err := r.ensureLifecycleRBAC(ctx, log, agentRun); err != nil {
-		return ctrl.Result{}, r.failRun(ctx, agentRun,
-			fmt.Sprintf("failed to create lifecycle RBAC — hook containers would lack Kubernetes permissions. "+
-				"Check controller logs and kube-apiserver for authentication errors. "+
-				"Underlying error: %v", err))
-	}
-
-	// Create workspace PVC when postRun lifecycle hooks are defined.
-	if agentRun.Spec.Lifecycle != nil && len(agentRun.Spec.Lifecycle.PostRun) > 0 {
-		if err := r.ensureWorkspacePVC(ctx, agentRun); err != nil {
-			return ctrl.Result{}, fmt.Errorf("creating workspace PVC: %w", err)
-		}
-	}
-
-	// Build containers/volumes using the existing shared logic.
-	containers, initContainers, err := r.buildContainers(agentRun, memoryEnabled, observability, taskSidecars, mcpServers, allowedOutboundChannels)
+	// Setup shared with the Job backend — see prepareRunPrerequisites. Server mode
+	// is not reachable here: reconcilePending forks to this backend before its
+	// spec.mode check, so an agentSandbox run is always task-mode.
+	prereqs, err := r.prepareRunPrerequisites(ctx, log, span, agentRun)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
-	volumes := r.buildVolumes(agentRun, memoryEnabled, taskSidecars, mcpServers)
+
+	taskSidecars, requeue, err := r.prepareTaskPrerequisites(ctx, log, agentRun, prereqs.sidecars)
+	if requeue != nil {
+		return *requeue, err
+	}
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+
+	// Render the pod via the same template the Job backend uses, so containers,
+	// volumes, pod security, and the registered pod mutators apply to both.
+	template, err := r.buildAgentPodTemplate(ctx, agentRun, prereqs.inputs.memoryEnabled,
+		prereqs.inputs.observability, taskSidecars, prereqs.mcpServers, prereqs.inputs.allowedOutboundChannels)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
 
 	// Build the Sandbox CR or SandboxClaim.
 	var sandboxObj *unstructured.Unstructured
@@ -216,7 +104,7 @@ func (r *AgentRunReconciler) reconcilePendingAgentSandbox(
 	if warmPoolRef != "" {
 		sandboxObj = r.buildSandboxClaimCR(agentRun, warmPoolRef)
 	} else {
-		sandboxObj = r.buildSandboxCR(agentRun, containers, initContainers, volumes)
+		sandboxObj = r.buildSandboxCR(agentRun, template)
 	}
 
 	// Create the CR via dynamic client.
@@ -377,61 +265,33 @@ func (r *AgentRunReconciler) reconcileRunningAgentSandbox(
 	}
 }
 
-// buildSandboxCR constructs an unstructured Sandbox CR from the AgentRun spec.
+// sandboxCRLabels renders the agent pod labels for an unstructured Sandbox CR or
+// SandboxClaim, plus the marker distinguishing sandbox-backed runs.
+//
+// Shares agentPodLabels with the Job backend so the label set has one definition.
+func sandboxCRLabels(agentRun *sympoziumv1alpha1.AgentRun) map[string]interface{} {
+	labels := map[string]interface{}{
+		"sympozium.ai/agent-sandbox": "true",
+	}
+	for k, v := range agentPodLabels(agentRun) {
+		labels[k] = v
+	}
+	return labels
+}
+
+// buildSandboxCR constructs an unstructured Sandbox CR from the shared agent pod
+// template.
+//
+// The template is the same one buildJob wraps in a batchv1.Job, so both backends
+// ship the same pod. Pod shaping belongs in buildAgentPodTemplate; fields set here
+// apply to sandbox-backed runs only. TestBackendParity covers this.
 func (r *AgentRunReconciler) buildSandboxCR(
 	agentRun *sympoziumv1alpha1.AgentRun,
-	containers []corev1.Container,
-	initContainers []corev1.Container,
-	volumes []corev1.Volume,
+	template corev1.PodTemplateSpec,
 ) *unstructured.Unstructured {
-	labels := map[string]interface{}{
-		"sympozium.ai/agent-run":       agentRun.Name,
-		"sympozium.ai/instance":        agentRun.Spec.AgentRef,
-		"sympozium.ai/component":       "agent-run",
-		"sympozium.ai/role":            "agent",
-		"sympozium.ai/agent-sandbox":   "true",
-		"app.kubernetes.io/part-of":    "sympozium",
-		"app.kubernetes.io/managed-by": "sympozium-controller",
-	}
+	labels := sandboxCRLabels(agentRun)
 
-	runAsNonRoot := true
-	runAsUser := int64(1000)
-	fsGroup := int64(1000)
-
-	// Build the pod template spec that goes inside the Sandbox CR.
-	podSpec := map[string]interface{}{
-		"serviceAccountName": "sympozium-agent",
-		"restartPolicy":      "Never",
-		"securityContext": map[string]interface{}{
-			"runAsNonRoot": runAsNonRoot,
-			"runAsUser":    runAsUser,
-			"fsGroup":      fsGroup,
-		},
-	}
-
-	// Convert containers to unstructured.
-	containerList := make([]interface{}, 0, len(containers))
-	for _, c := range containers {
-		containerList = append(containerList, containerToMap(c))
-	}
-	podSpec["containers"] = containerList
-
-	if len(initContainers) > 0 {
-		initList := make([]interface{}, 0, len(initContainers))
-		for _, c := range initContainers {
-			initList = append(initList, containerToMap(c))
-		}
-		podSpec["initContainers"] = initList
-	}
-
-	// Convert volumes.
-	volumeList := make([]interface{}, 0, len(volumes))
-	for _, v := range volumes {
-		volumeList = append(volumeList, volumeToMap(v))
-	}
-	if len(volumeList) > 0 {
-		podSpec["volumes"] = volumeList
-	}
+	podSpec := podSpecToMap(template.Spec)
 
 	// Set runtimeClassName if specified (lives inside podTemplate.spec for upstream CRD).
 	if rc := agentRun.Spec.AgentSandbox.RuntimeClass; rc != "" {
@@ -482,15 +342,7 @@ func (r *AgentRunReconciler) buildSandboxClaimCR(
 	agentRun *sympoziumv1alpha1.AgentRun,
 	warmPoolRef string,
 ) *unstructured.Unstructured {
-	labels := map[string]interface{}{
-		"sympozium.ai/agent-run":       agentRun.Name,
-		"sympozium.ai/instance":        agentRun.Spec.AgentRef,
-		"sympozium.ai/component":       "agent-run",
-		"sympozium.ai/role":            "agent",
-		"sympozium.ai/agent-sandbox":   "true",
-		"app.kubernetes.io/part-of":    "sympozium",
-		"app.kubernetes.io/managed-by": "sympozium-controller",
-	}
+	labels := sandboxCRLabels(agentRun)
 
 	ownerRefs := []interface{}{
 		map[string]interface{}{
@@ -699,6 +551,19 @@ func (r *AgentRunReconciler) refineSandboxPhaseFromPod(ctx context.Context, name
 	}
 }
 
+// ── typed → unstructured conversion ──────────────────────────────────────────
+//
+// The Sandbox CR carries its pod template as unstructured data, so the
+// corev1.PodTemplateSpec from buildAgentPodTemplate is converted on the way out.
+// A field these converters omit produces no output key and no error.
+//
+// podSpecToMap and containerToMap are explicit allowlists over structs Sympozium
+// authors, so the field set is bounded. TestPodSpecToMap_CoversEveryField and
+// TestContainerToMap_CoversEveryField fail on any field neither converted here nor
+// listed in the omit tables in agentrun_sandbox_convert_test.go.
+//
+// volumeToMap is lossless instead — see the note on that function.
+
 // containerToMap converts a corev1.Container to an unstructured map.
 func containerToMap(c corev1.Container) map[string]interface{} {
 	m := map[string]interface{}{
@@ -711,21 +576,22 @@ func containerToMap(c corev1.Container) map[string]interface{} {
 	}
 
 	if len(c.Command) > 0 {
-		cmds := make([]interface{}, len(c.Command))
-		for i, cmd := range c.Command {
-			cmds[i] = cmd
-		}
-		m["command"] = cmds
+		m["command"] = stringsToUnstructured(c.Command)
+	}
+
+	// Lifecycle hook containers set Args (see buildContainers).
+	if len(c.Args) > 0 {
+		m["args"] = stringsToUnstructured(c.Args)
+	}
+
+	if c.WorkingDir != "" {
+		m["workingDir"] = c.WorkingDir
 	}
 
 	if len(c.Env) > 0 {
 		envList := make([]interface{}, 0, len(c.Env))
 		for _, e := range c.Env {
-			envMap := map[string]interface{}{
-				"name":  e.Name,
-				"value": e.Value,
-			}
-			envList = append(envList, envMap)
+			envList = append(envList, envVarToMap(e))
 		}
 		m["env"] = envList
 	}
@@ -734,10 +600,22 @@ func containerToMap(c corev1.Container) map[string]interface{} {
 		envFromList := make([]interface{}, 0, len(c.EnvFrom))
 		for _, ef := range c.EnvFrom {
 			efMap := map[string]interface{}{}
+			if ef.Prefix != "" {
+				efMap["prefix"] = ef.Prefix
+			}
 			if ef.SecretRef != nil {
-				efMap["secretRef"] = map[string]interface{}{
-					"name": ef.SecretRef.Name,
+				ref := map[string]interface{}{"name": ef.SecretRef.Name}
+				if ef.SecretRef.Optional != nil {
+					ref["optional"] = *ef.SecretRef.Optional
 				}
+				efMap["secretRef"] = ref
+			}
+			if ef.ConfigMapRef != nil {
+				ref := map[string]interface{}{"name": ef.ConfigMapRef.Name}
+				if ef.ConfigMapRef.Optional != nil {
+					ref["optional"] = *ef.ConfigMapRef.Optional
+				}
+				efMap["configMapRef"] = ref
 			}
 			envFromList = append(envFromList, efMap)
 		}
@@ -754,104 +632,410 @@ func containerToMap(c corev1.Container) map[string]interface{} {
 			if vm.ReadOnly {
 				vmMap["readOnly"] = true
 			}
+			if vm.SubPath != "" {
+				vmMap["subPath"] = vm.SubPath
+			}
+			if vm.MountPropagation != nil {
+				vmMap["mountPropagation"] = string(*vm.MountPropagation)
+			}
 			vmList = append(vmList, vmMap)
 		}
 		m["volumeMounts"] = vmList
 	}
 
 	if c.SecurityContext != nil {
-		sc := map[string]interface{}{}
-		if c.SecurityContext.ReadOnlyRootFilesystem != nil {
-			sc["readOnlyRootFilesystem"] = *c.SecurityContext.ReadOnlyRootFilesystem
-		}
-		if c.SecurityContext.AllowPrivilegeEscalation != nil {
-			sc["allowPrivilegeEscalation"] = *c.SecurityContext.AllowPrivilegeEscalation
-		}
-		if c.SecurityContext.Capabilities != nil && len(c.SecurityContext.Capabilities.Drop) > 0 {
-			drop := make([]interface{}, len(c.SecurityContext.Capabilities.Drop))
-			for i, cap := range c.SecurityContext.Capabilities.Drop {
-				drop[i] = string(cap)
-			}
-			sc["capabilities"] = map[string]interface{}{
-				"drop": drop,
-			}
-		}
-		m["securityContext"] = sc
+		m["securityContext"] = containerSecurityContextToMap(c.SecurityContext)
 	}
 
-	res := map[string]interface{}{}
-	if c.Resources.Requests != nil {
-		reqs := map[string]interface{}{}
-		for k, v := range c.Resources.Requests {
-			reqs[string(k)] = v.String()
-		}
-		res["requests"] = reqs
-	}
-	if c.Resources.Limits != nil {
-		lims := map[string]interface{}{}
-		for k, v := range c.Resources.Limits {
-			lims[string(k)] = v.String()
-		}
-		res["limits"] = lims
-	}
-	if len(res) > 0 {
+	if res := resourceRequirementsToMap(c.Resources); len(res) > 0 {
 		m["resources"] = res
+	}
+
+	// Native Kubernetes sidecars are init containers with restartPolicy: Always.
+	if c.RestartPolicy != nil {
+		m["restartPolicy"] = string(*c.RestartPolicy)
 	}
 
 	return m
 }
 
-// volumeToMap converts a corev1.Volume to an unstructured map.
+// envVarToMap converts a corev1.EnvVar, including valueFrom.
+//
+// valueFrom carries the provider API key (SecretKeyRef over
+// allowedAuthSecretKeys) and the canary HOST_IP (FieldRef).
+func envVarToMap(e corev1.EnvVar) map[string]interface{} {
+	m := map[string]interface{}{"name": e.Name}
+
+	if e.ValueFrom == nil {
+		// Only emit value for literal env vars — the two are mutually exclusive
+		// and an empty "value" alongside valueFrom is rejected by the apiserver.
+		m["value"] = e.Value
+		return m
+	}
+
+	vf := map[string]interface{}{}
+	if ref := e.ValueFrom.SecretKeyRef; ref != nil {
+		sk := map[string]interface{}{"name": ref.Name, "key": ref.Key}
+		if ref.Optional != nil {
+			sk["optional"] = *ref.Optional
+		}
+		vf["secretKeyRef"] = sk
+	}
+	if ref := e.ValueFrom.ConfigMapKeyRef; ref != nil {
+		ck := map[string]interface{}{"name": ref.Name, "key": ref.Key}
+		if ref.Optional != nil {
+			ck["optional"] = *ref.Optional
+		}
+		vf["configMapKeyRef"] = ck
+	}
+	if ref := e.ValueFrom.FieldRef; ref != nil {
+		fr := map[string]interface{}{"fieldPath": ref.FieldPath}
+		if ref.APIVersion != "" {
+			fr["apiVersion"] = ref.APIVersion
+		}
+		vf["fieldRef"] = fr
+	}
+	if ref := e.ValueFrom.ResourceFieldRef; ref != nil {
+		rf := map[string]interface{}{"resource": ref.Resource}
+		if ref.ContainerName != "" {
+			rf["containerName"] = ref.ContainerName
+		}
+		if !ref.Divisor.IsZero() {
+			rf["divisor"] = ref.Divisor.String()
+		}
+		vf["resourceFieldRef"] = rf
+	}
+	// A non-nil ValueFrom whose members are all nil would serialise as an empty
+	// valueFrom{}, which the apiserver rejects. Unreachable from buildContainers
+	// today; fall back to the literal form rather than emitting an invalid pod.
+	if len(vf) == 0 {
+		m["value"] = e.Value
+		return m
+	}
+
+	m["valueFrom"] = vf
+	return m
+}
+
+// containerSecurityContextToMap converts a container SecurityContext.
+//
+// Host-access skill sidecars set privileged, seccompProfile, and runAsUser here
+// (see buildContainers).
+func containerSecurityContextToMap(sc *corev1.SecurityContext) map[string]interface{} {
+	m := map[string]interface{}{}
+	if sc.ReadOnlyRootFilesystem != nil {
+		m["readOnlyRootFilesystem"] = *sc.ReadOnlyRootFilesystem
+	}
+	if sc.AllowPrivilegeEscalation != nil {
+		m["allowPrivilegeEscalation"] = *sc.AllowPrivilegeEscalation
+	}
+	if sc.Privileged != nil {
+		m["privileged"] = *sc.Privileged
+	}
+	if sc.RunAsUser != nil {
+		m["runAsUser"] = *sc.RunAsUser
+	}
+	if sc.RunAsGroup != nil {
+		m["runAsGroup"] = *sc.RunAsGroup
+	}
+	if sc.RunAsNonRoot != nil {
+		m["runAsNonRoot"] = *sc.RunAsNonRoot
+	}
+	if sc.ProcMount != nil {
+		m["procMount"] = string(*sc.ProcMount)
+	}
+	if sc.Capabilities != nil {
+		caps := map[string]interface{}{}
+		if len(sc.Capabilities.Drop) > 0 {
+			caps["drop"] = capabilitiesToUnstructured(sc.Capabilities.Drop)
+		}
+		if len(sc.Capabilities.Add) > 0 {
+			caps["add"] = capabilitiesToUnstructured(sc.Capabilities.Add)
+		}
+		if len(caps) > 0 {
+			m["capabilities"] = caps
+		}
+	}
+	if sc.SeccompProfile != nil {
+		p := map[string]interface{}{"type": string(sc.SeccompProfile.Type)}
+		if sc.SeccompProfile.LocalhostProfile != nil {
+			p["localhostProfile"] = *sc.SeccompProfile.LocalhostProfile
+		}
+		m["seccompProfile"] = p
+	}
+	if sc.SELinuxOptions != nil {
+		m["seLinuxOptions"] = seLinuxOptionsToMap(sc.SELinuxOptions)
+	}
+	if sc.WindowsOptions != nil {
+		m["windowsOptions"] = windowsOptionsToMap(sc.WindowsOptions)
+	}
+	if sc.AppArmorProfile != nil {
+		p := map[string]interface{}{"type": string(sc.AppArmorProfile.Type)}
+		if sc.AppArmorProfile.LocalhostProfile != nil {
+			p["localhostProfile"] = *sc.AppArmorProfile.LocalhostProfile
+		}
+		m["appArmorProfile"] = p
+	}
+	return m
+}
+
+// podSpecToMap converts the pod-level fields of the shared pod template.
+//
+// buildAgentPodTemplate is the only producer of this PodSpec, so the field set is
+// bounded by what it sets. The omit table and TestPodSpecToMap_CoversEveryField
+// make each exclusion explicit.
+func podSpecToMap(spec corev1.PodSpec) map[string]interface{} {
+	m := map[string]interface{}{}
+
+	if spec.ServiceAccountName != "" {
+		m["serviceAccountName"] = spec.ServiceAccountName
+	}
+	if spec.RestartPolicy != "" {
+		m["restartPolicy"] = string(spec.RestartPolicy)
+	}
+	if spec.HostNetwork {
+		m["hostNetwork"] = true
+	}
+	if spec.HostPID {
+		m["hostPID"] = true
+	}
+	if spec.HostIPC {
+		m["hostIPC"] = true
+	}
+	if spec.DNSPolicy != "" {
+		m["dnsPolicy"] = string(spec.DNSPolicy)
+	}
+	if spec.RuntimeClassName != nil {
+		m["runtimeClassName"] = *spec.RuntimeClassName
+	}
+	if spec.PriorityClassName != "" {
+		m["priorityClassName"] = spec.PriorityClassName
+	}
+	if spec.NodeName != "" {
+		m["nodeName"] = spec.NodeName
+	}
+	if spec.ActiveDeadlineSeconds != nil {
+		m["activeDeadlineSeconds"] = *spec.ActiveDeadlineSeconds
+	}
+	if spec.TerminationGracePeriodSeconds != nil {
+		m["terminationGracePeriodSeconds"] = *spec.TerminationGracePeriodSeconds
+	}
+	if spec.AutomountServiceAccountToken != nil {
+		m["automountServiceAccountToken"] = *spec.AutomountServiceAccountToken
+	}
+
+	if len(spec.NodeSelector) > 0 {
+		sel := make(map[string]interface{}, len(spec.NodeSelector))
+		for k, v := range spec.NodeSelector {
+			sel[k] = v
+		}
+		m["nodeSelector"] = sel
+	}
+
+	if len(spec.ImagePullSecrets) > 0 {
+		refs := make([]interface{}, 0, len(spec.ImagePullSecrets))
+		for _, ref := range spec.ImagePullSecrets {
+			refs = append(refs, map[string]interface{}{"name": ref.Name})
+		}
+		m["imagePullSecrets"] = refs
+	}
+
+	if len(spec.Tolerations) > 0 {
+		tols := make([]interface{}, 0, len(spec.Tolerations))
+		for _, t := range spec.Tolerations {
+			tol := map[string]interface{}{}
+			if t.Key != "" {
+				tol["key"] = t.Key
+			}
+			if t.Operator != "" {
+				tol["operator"] = string(t.Operator)
+			}
+			if t.Value != "" {
+				tol["value"] = t.Value
+			}
+			if t.Effect != "" {
+				tol["effect"] = string(t.Effect)
+			}
+			if t.TolerationSeconds != nil {
+				tol["tolerationSeconds"] = *t.TolerationSeconds
+			}
+			tols = append(tols, tol)
+		}
+		m["tolerations"] = tols
+	}
+
+	if spec.SecurityContext != nil {
+		m["securityContext"] = podSecurityContextToMap(spec.SecurityContext)
+	}
+
+	if len(spec.Containers) > 0 {
+		list := make([]interface{}, 0, len(spec.Containers))
+		for _, c := range spec.Containers {
+			list = append(list, containerToMap(c))
+		}
+		m["containers"] = list
+	}
+
+	if len(spec.InitContainers) > 0 {
+		list := make([]interface{}, 0, len(spec.InitContainers))
+		for _, c := range spec.InitContainers {
+			list = append(list, containerToMap(c))
+		}
+		m["initContainers"] = list
+	}
+
+	if len(spec.Volumes) > 0 {
+		list := make([]interface{}, 0, len(spec.Volumes))
+		for _, v := range spec.Volumes {
+			list = append(list, volumeToMap(v))
+		}
+		m["volumes"] = list
+	}
+
+	return m
+}
+
+// podSecurityContextToMap converts a pod-level SecurityContext.
+func podSecurityContextToMap(sc *corev1.PodSecurityContext) map[string]interface{} {
+	m := map[string]interface{}{}
+	if sc.RunAsNonRoot != nil {
+		m["runAsNonRoot"] = *sc.RunAsNonRoot
+	}
+	if sc.RunAsUser != nil {
+		m["runAsUser"] = *sc.RunAsUser
+	}
+	if sc.RunAsGroup != nil {
+		m["runAsGroup"] = *sc.RunAsGroup
+	}
+	if sc.FSGroup != nil {
+		m["fsGroup"] = *sc.FSGroup
+	}
+	if sc.FSGroupChangePolicy != nil {
+		m["fsGroupChangePolicy"] = string(*sc.FSGroupChangePolicy)
+	}
+	if len(sc.SupplementalGroups) > 0 {
+		groups := make([]interface{}, len(sc.SupplementalGroups))
+		for i, g := range sc.SupplementalGroups {
+			groups[i] = g
+		}
+		m["supplementalGroups"] = groups
+	}
+	if sc.SeccompProfile != nil {
+		p := map[string]interface{}{"type": string(sc.SeccompProfile.Type)}
+		if sc.SeccompProfile.LocalhostProfile != nil {
+			p["localhostProfile"] = *sc.SeccompProfile.LocalhostProfile
+		}
+		m["seccompProfile"] = p
+	}
+	if sc.SELinuxOptions != nil {
+		m["seLinuxOptions"] = seLinuxOptionsToMap(sc.SELinuxOptions)
+	}
+	if sc.WindowsOptions != nil {
+		m["windowsOptions"] = windowsOptionsToMap(sc.WindowsOptions)
+	}
+	if sc.AppArmorProfile != nil {
+		p := map[string]interface{}{"type": string(sc.AppArmorProfile.Type)}
+		if sc.AppArmorProfile.LocalhostProfile != nil {
+			p["localhostProfile"] = *sc.AppArmorProfile.LocalhostProfile
+		}
+		m["appArmorProfile"] = p
+	}
+	if len(sc.Sysctls) > 0 {
+		list := make([]interface{}, 0, len(sc.Sysctls))
+		for _, s := range sc.Sysctls {
+			list = append(list, map[string]interface{}{"name": s.Name, "value": s.Value})
+		}
+		m["sysctls"] = list
+	}
+	return m
+}
+
+func seLinuxOptionsToMap(o *corev1.SELinuxOptions) map[string]interface{} {
+	m := map[string]interface{}{}
+	if o.User != "" {
+		m["user"] = o.User
+	}
+	if o.Role != "" {
+		m["role"] = o.Role
+	}
+	if o.Type != "" {
+		m["type"] = o.Type
+	}
+	if o.Level != "" {
+		m["level"] = o.Level
+	}
+	return m
+}
+
+func windowsOptionsToMap(o *corev1.WindowsSecurityContextOptions) map[string]interface{} {
+	m := map[string]interface{}{}
+	if o.GMSACredentialSpecName != nil {
+		m["gmsaCredentialSpecName"] = *o.GMSACredentialSpecName
+	}
+	if o.GMSACredentialSpec != nil {
+		m["gmsaCredentialSpec"] = *o.GMSACredentialSpec
+	}
+	if o.RunAsUserName != nil {
+		m["runAsUserName"] = *o.RunAsUserName
+	}
+	if o.HostProcess != nil {
+		m["hostProcess"] = *o.HostProcess
+	}
+	return m
+}
+
+// resourceRequirementsToMap converts requests/limits, rendering quantities in
+// their canonical string form ("100m", "64Mi").
+func resourceRequirementsToMap(r corev1.ResourceRequirements) map[string]interface{} {
+	res := map[string]interface{}{}
+	if r.Requests != nil {
+		reqs := map[string]interface{}{}
+		for k, v := range r.Requests {
+			reqs[string(k)] = v.String()
+		}
+		res["requests"] = reqs
+	}
+	if r.Limits != nil {
+		lims := map[string]interface{}{}
+		for k, v := range r.Limits {
+			lims[string(k)] = v.String()
+		}
+		res["limits"] = lims
+	}
+	return res
+}
+
+func stringsToUnstructured(in []string) []interface{} {
+	out := make([]interface{}, len(in))
+	for i, s := range in {
+		out[i] = s
+	}
+	return out
+}
+
+func capabilitiesToUnstructured(in []corev1.Capability) []interface{} {
+	out := make([]interface{}, len(in))
+	for i, c := range in {
+		out[i] = string(c)
+	}
+	return out
+}
+
+// volumeToMap converts a corev1.Volume to an unstructured map losslessly.
+//
+// This is not an allowlist: buildVolumes passes agentRun.Spec.Volumes through
+// untouched, so the source may be any member of the VolumeSource union (CSI,
+// downwardAPI, nfs, …), including types added by later Kubernetes releases. An
+// unrecognised source would produce a volume with no source, which the apiserver
+// rejects.
 func volumeToMap(v corev1.Volume) map[string]interface{} {
-	m := map[string]interface{}{
-		"name": v.Name,
+	m, err := runtime.DefaultUnstructuredConverter.ToUnstructured(&v)
+	if err != nil {
+		// Unreachable in practice: corev1.Volume is plain JSON-tagged data.
+		// Returning the name alone surfaces as a rejected pod spec rather than a
+		// dropped volume.
+		return map[string]interface{}{"name": v.Name}
 	}
-
-	if v.EmptyDir != nil {
-		ed := map[string]interface{}{}
-		if v.EmptyDir.Medium != "" {
-			ed["medium"] = string(v.EmptyDir.Medium)
-		}
-		if v.EmptyDir.SizeLimit != nil {
-			ed["sizeLimit"] = v.EmptyDir.SizeLimit.String()
-		}
-		m["emptyDir"] = ed
-	}
-
-	if v.ConfigMap != nil {
-		m["configMap"] = map[string]interface{}{
-			"name": v.ConfigMap.Name,
-		}
-	}
-
-	if v.Projected != nil {
-		sources := make([]interface{}, 0, len(v.Projected.Sources))
-		for _, src := range v.Projected.Sources {
-			srcMap := map[string]interface{}{}
-			if src.ConfigMap != nil {
-				srcMap["configMap"] = map[string]interface{}{
-					"name": src.ConfigMap.Name,
-				}
-			}
-			if src.Secret != nil {
-				srcMap["secret"] = map[string]interface{}{
-					"name": src.Secret.Name,
-				}
-			}
-			sources = append(sources, srcMap)
-		}
-		m["projected"] = map[string]interface{}{
-			"sources": sources,
-		}
-	}
-
-	if v.PersistentVolumeClaim != nil {
-		m["persistentVolumeClaim"] = map[string]interface{}{
-			"claimName": v.PersistentVolumeClaim.ClaimName,
-			"readOnly":  v.PersistentVolumeClaim.ReadOnly,
-		}
-	}
-
 	return m
 }
 
