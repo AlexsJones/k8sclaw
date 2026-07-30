@@ -278,6 +278,33 @@ func parityScenarios() []parityScenario {
 			wantAgentEnv: []string{"MEMORY_SERVER_URL"},
 		},
 		{
+			name:    "lifecycle_prerun_hooks",
+			guards:  "preRun hook containers rendered as init containers by buildContainers",
+			objects: func() []client.Object { return []client.Object{parityAgent()} },
+			mutate: func(run *sympoziumv1alpha1.AgentRun) {
+				run.Spec.Lifecycle = &sympoziumv1alpha1.LifecycleHooks{
+					PreRun: []sympoziumv1alpha1.LifecycleHookContainer{
+						{Name: "warm", Image: "busybox:1.36", Command: []string{"sh", "-c", "true"}},
+					},
+				}
+			},
+			wantInitContainers: []string{"pre-warm"},
+		},
+		{
+			name:   "provider_headers_from_secret",
+			guards: "resolveProviderHeaders + MODEL_PROVIDER_HEADERS env",
+			objects: func() []client.Object {
+				return []client.Object{parityAgent(), &corev1.Secret{
+					ObjectMeta: metav1.ObjectMeta{Name: "headers-secret", Namespace: "default"},
+					Data:       map[string][]byte{"x-tenant": []byte("acme")},
+				}}
+			},
+			mutate: func(run *sympoziumv1alpha1.AgentRun) {
+				run.Spec.Model.ProviderHeadersSecretRef = "headers-secret"
+			},
+			wantAgentEnv: []string{"MODEL_PROVIDER_HEADERS"},
+		},
+		{
 			name:   "ensemble_shared_memory",
 			guards: "injectSharedMemory mutator + its wait-for-shared-memory init container",
 			objects: func() []client.Object {

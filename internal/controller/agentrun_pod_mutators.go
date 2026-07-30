@@ -47,6 +47,10 @@ type podMutator struct {
 	apply func(*AgentRunReconciler, context.Context, *sympoziumv1alpha1.AgentRun, *corev1.PodSpec)
 }
 
+// Invariant for anything added here: gate on the feature being configured before
+// calling r.Get. Several unit tests build a bare &AgentRunReconciler{} with no
+// client and rely on every mutator returning early, so a mutator that reads first
+// panics in tests rather than failing with a useful message.
 var podMutators = []podMutator{
 	{"sharedMemory", (*AgentRunReconciler).injectSharedMemory},
 	{"relationshipContext", (*AgentRunReconciler).injectRelationshipContext},
