@@ -14,6 +14,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	sympoziumv1alpha1 "github.com/sympozium-ai/sympozium/api/v1alpha1"
+	"github.com/sympozium-ai/sympozium/internal/agentedit"
 )
 
 // ── Ensemble create/update convergence ────────────────────────────────────────
@@ -391,4 +392,176 @@ func fieldByPath(v reflect.Value, path string) (reflect.Value, bool) {
 		}
 	}
 	return cur, true
+}
+
+// ── ensemble expressibility of previously agent-only settings ─────────────────
+//
+// These pin the settings that were editable on a generated Agent but had no
+// AgentConfigSpec equivalent, so an edit could only be made out of band and was
+// then reverted by the whole-spec assign. internal/agentedit redirects such edits
+// to the ensemble; that is only safe while every setting has a home here.
+
+func TestBuildAgent_MemorySettingsComeFromAgentConfig(t *testing.T) {
+	pack, persona := convergenceFixture()
+	persona.Memory = &sympoziumv1alpha1.AgentConfigMemory{Enabled: false, MaxSizeKB: 1024}
+
+	got := (&EnsembleReconciler{}).buildAgent(pack, persona, agentInstanceName(pack, persona), "")
+
+	if got.Spec.Memory == nil {
+		t.Fatal("buildAgent produced no memory spec")
+	}
+	if got.Spec.Memory.Enabled {
+		t.Error("memory.enabled = true, want false — the agent config's setting was ignored")
+	}
+	if got.Spec.Memory.MaxSizeKB != 1024 {
+		t.Errorf("memory.maxSizeKB = %d, want 1024", got.Spec.Memory.MaxSizeKB)
+	}
+}
+
+// An ensemble written before these fields existed must render exactly as before.
+func TestBuildAgent_MemoryDefaultsWithoutAgentConfigMemory(t *testing.T) {
+	pack, persona := convergenceFixture()
+	persona.Memory = nil
+
+	got := (&EnsembleReconciler{}).buildAgent(pack, persona, agentInstanceName(pack, persona), "")
+
+	if got.Spec.Memory == nil || !got.Spec.Memory.Enabled || got.Spec.Memory.MaxSizeKB != 256 {
+		t.Errorf("memory = %+v, want enabled with maxSizeKB 256", got.Spec.Memory)
+	}
+}
+
+func TestBuildDesiredSkills_AgentConfigParamsOverridePack(t *testing.T) {
+	pack, persona := convergenceFixture()
+	pack.Spec.SkillParams = map[string]map[string]string{
+		"github-gitops": {"repo": "acme/infra", "branch": "main"},
+	}
+	persona.Skills = []string{"github-gitops"}
+	persona.SkillParams = map[string]map[string]string{
+		"github-gitops": {"repo": "acme/team-a"},
+	}
+
+	skills := buildDesiredSkills(pack, persona)
+
+	params := skillParamsFor(t, skills, "github-gitops")
+	if params["repo"] != "acme/team-a" {
+		t.Errorf("repo = %q, want acme/team-a", params["repo"])
+	}
+	// Full override, not a merge: the pack's other key must not survive.
+	if _, ok := params["branch"]; ok {
+		t.Errorf("branch survived from the ensemble-level map; the agent config's params "+
+			"replace it outright. got %v", params)
+	}
+}
+
+func TestBuildDesiredSkills_PackParamsUsedWithoutOverride(t *testing.T) {
+	pack, persona := convergenceFixture()
+	pack.Spec.SkillParams = map[string]map[string]string{"github-gitops": {"repo": "acme/infra"}}
+	persona.Skills = []string{"github-gitops"}
+	persona.SkillParams = nil
+
+	if got := skillParamsFor(t, buildDesiredSkills(pack, persona), "github-gitops")["repo"]; got != "acme/infra" {
+		t.Errorf("repo = %q, want acme/infra", got)
+	}
+}
+
+func TestBuildDesiredSkills_WebEndpointParamsAreDerived(t *testing.T) {
+	pack, persona := convergenceFixture()
+	persona.WebEndpoint = &sympoziumv1alpha1.AgentConfigWebEndpoint{
+		Enabled:   true,
+		Hostname:  "agent.example.test",
+		RateLimit: &sympoziumv1alpha1.RateLimitSpec{RequestsPerMinute: 120, BurstSize: 20},
+	}
+	// A skillParams entry for web-endpoint must not clobber the derived params:
+	// the skill is appended separately, outside the persona.Skills loop.
+	persona.SkillParams = map[string]map[string]string{
+		"web-endpoint": {"hostname": "attacker.example.test"},
+	}
+
+	params := skillParamsFor(t, buildDesiredSkills(pack, persona), "web-endpoint")
+	if params["hostname"] != "agent.example.test" {
+		t.Errorf("hostname = %q, want agent.example.test — derived params must win", params["hostname"])
+	}
+	if params["rate_limit_rpm"] != "120" {
+		t.Errorf("rate_limit_rpm = %q, want 120", params["rate_limit_rpm"])
+	}
+	if params["rate_limit_burst"] != "20" {
+		t.Errorf("rate_limit_burst = %q, want 20", params["rate_limit_burst"])
+	}
+}
+
+func skillParamsFor(t *testing.T, skills []sympoziumv1alpha1.SkillRef, ref string) map[string]string {
+	t.Helper()
+	for _, s := range skills {
+		if s.SkillPackRef == ref {
+			return s.Params
+		}
+	}
+	t.Fatalf("skill %q not in %v", ref, skills)
+	return nil
+}
+
+// TestAgentEditRoundTripsToAgent closes the loop the redirect depends on: an edit
+// routed to the Ensemble by internal/agentedit must survive reconcileAgentConfig
+// and land on the generated Agent.
+//
+// agentedit.applyToAgentConfig and buildAgent/buildDesiredSkills are inverses of
+// each other, maintained in different packages. This is the test that fails if one
+// moves without the other.
+func TestAgentEditRoundTripsToAgent(t *testing.T) {
+	pack, persona := convergenceFixture()
+	// convergenceFixture keeps the agent config separate; agentedit resolves it
+	// through the ensemble, so it has to be present on the pack.
+	pack.Spec.AgentConfigs = []sympoziumv1alpha1.AgentConfigSpec{*persona}
+	instanceName := agentInstanceName(pack, persona)
+
+	// The Agent as the create path would have stamped it, with the labels
+	// agentedit routes on.
+	agent := (&EnsembleReconciler{}).buildAgent(pack, persona, instanceName, "")
+	r := newEnsembleTestReconciler(t, agent, pack)
+
+	disabled := false
+	maxKB := 1024
+	edit := agentedit.Edit{
+		Memory: &agentedit.MemoryEdit{Enabled: &disabled, MaxSizeKB: &maxKB},
+		WebEndpoint: &agentedit.WebEndpointEdit{
+			Enabled: true, Hostname: "analyst.example.test", RequestsPerMinute: 90,
+		},
+	}
+
+	target, err := agentedit.Apply(context.Background(), r.Client, agent, edit)
+	if err != nil {
+		t.Fatalf("agentedit.Apply: %v", err)
+	}
+	if target.Kind != "Ensemble" {
+		t.Fatalf("edit went to %s, want the Ensemble", target)
+	}
+
+	// Reconcile the (now edited) Ensemble and read the Agent back.
+	var edited sympoziumv1alpha1.Ensemble
+	if err := r.Get(context.Background(), client.ObjectKey{Name: pack.Name, Namespace: pack.Namespace}, &edited); err != nil {
+		t.Fatalf("get ensemble: %v", err)
+	}
+	cfg := &edited.Spec.AgentConfigs[0]
+	if _, err := r.reconcileAgentConfig(context.Background(), logr.Discard(), &edited, cfg, 0, ""); err != nil {
+		t.Fatalf("reconcileAgentConfig: %v", err)
+	}
+
+	got := getAgent(t, r, instanceName, pack.Namespace)
+
+	if got.Spec.Memory == nil || got.Spec.Memory.Enabled {
+		t.Errorf("memory.enabled = %+v, want disabled — the redirected edit did not reach the Agent",
+			got.Spec.Memory)
+	}
+	if got.Spec.Memory != nil && got.Spec.Memory.MaxSizeKB != 1024 {
+		t.Errorf("memory.maxSizeKB = %d, want 1024", got.Spec.Memory.MaxSizeKB)
+	}
+
+	params := skillParamsFor(t, got.Spec.Skills, "web-endpoint")
+	if params["hostname"] != "analyst.example.test" {
+		t.Errorf("web-endpoint hostname = %q, want analyst.example.test", params["hostname"])
+	}
+	if params["rate_limit_rpm"] != "90" {
+		t.Errorf("web-endpoint rate_limit_rpm = %q, want 90 — the rate limit was lost in translation",
+			params["rate_limit_rpm"])
+	}
 }
