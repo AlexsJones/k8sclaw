@@ -2,7 +2,9 @@ package agentedit
 
 import (
 	"context"
+	"strings"
 	"testing"
+	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -59,6 +61,8 @@ func strPtr(s string) *string { return &s }
 // ── routing ───────────────────────────────────────────────────────────────────
 
 func TestApply_ManagedAgentWritesEnsemble(t *testing.T) {
+	shortWait(t)
+
 	agent, pack := managed()
 	c := newClient(t, agent, pack)
 
@@ -223,6 +227,8 @@ func TestApplyToAgentConfig_WebEndpointCarriesRateLimit(t *testing.T) {
 
 // A nil field means "leave alone" — a partial edit must not blank the rest.
 func TestApply_NilFieldsAreLeftAlone(t *testing.T) {
+	shortWait(t)
+
 	agent, pack := managed()
 	pack.Spec.AgentConfigs[0].Model = "gpt-4o"
 	pack.Spec.AgentConfigs[0].Skills = []string{"memory"}
@@ -242,5 +248,174 @@ func TestApply_NilFieldsAreLeftAlone(t *testing.T) {
 	}
 	if cfg.Model != "gpt-4o" || len(cfg.Skills) != 1 {
 		t.Errorf("untouched fields were cleared: model=%q skills=%v", cfg.Model, cfg.Skills)
+	}
+}
+
+// ── no-op detection and the reconcile wait ────────────────────────────────────
+
+// shortWait shrinks the reconcile wait for tests. A fake client has no controller,
+// so any test that writes the Ensemble would otherwise block for the full timeout.
+func shortWait(t *testing.T) {
+	t.Helper()
+	prevWait, prevPoll := reconcileWait, agentPollInterval
+	reconcileWait, agentPollInterval = 150*time.Millisecond, 10*time.Millisecond
+	t.Cleanup(func() { reconcileWait, agentPollInterval = prevWait, prevPoll })
+}
+
+// Re-saving a form unchanged must not write. Beyond the wasted API call, a write
+// with nothing to reconcile would block for the full wait every time.
+func TestApply_NoOpEditDoesNotWriteEnsemble(t *testing.T) {
+	shortWait(t)
+
+	agent, pack := managed()
+	pack.Spec.AgentConfigs[0].Model = "gpt-4o"
+	c := newClient(t, agent, pack)
+
+	var before sympoziumv1alpha1.Ensemble
+	if err := c.Get(context.Background(), types.NamespacedName{Name: "team", Namespace: "default"}, &before); err != nil {
+		t.Fatalf("get ensemble: %v", err)
+	}
+
+	// The same value that is already stored.
+	target, err := Apply(context.Background(), c, agent, Edit{Model: strPtr("gpt-4o")})
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+
+	if target.Changed {
+		t.Error("Target.Changed = true for an edit that matched what was stored")
+	}
+	if !target.Observed {
+		t.Error("Target.Observed = false; nothing was written, so there is nothing to wait for")
+	}
+
+	var after sympoziumv1alpha1.Ensemble
+	if err := c.Get(context.Background(), types.NamespacedName{Name: "team", Namespace: "default"}, &after); err != nil {
+		t.Fatalf("get ensemble: %v", err)
+	}
+	if after.ResourceVersion != before.ResourceVersion {
+		t.Errorf("ensemble was written for a no-op edit (resourceVersion %s → %s)",
+			before.ResourceVersion, after.ResourceVersion)
+	}
+}
+
+// A real edit writes, and reports itself as changed.
+func TestApply_RealEditReportsChanged(t *testing.T) {
+	shortWait(t)
+
+	agent, pack := managed()
+	c := newClient(t, agent, pack)
+
+	target, err := Apply(context.Background(), c, agent, Edit{Model: strPtr("gpt-4o-mini")})
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if !target.Changed {
+		t.Error("Target.Changed = false for an edit that altered the agent config")
+	}
+}
+
+// With no controller to project the edit, the wait expires and says so rather than
+// claiming the Agent is up to date.
+func TestApply_WaitExpiresWhenNothingReconciles(t *testing.T) {
+	shortWait(t)
+
+	agent, pack := managed()
+	c := newClient(t, agent, pack)
+
+	start := time.Now()
+	target, err := Apply(context.Background(), c, agent, Edit{Model: strPtr("gpt-4o-mini")})
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+
+	if target.Observed {
+		t.Error("Target.Observed = true, but no controller updated the Agent")
+	}
+	if elapsed := time.Since(start); elapsed < reconcileWait {
+		t.Errorf("returned after %v, before the %v deadline — the wait is not running", elapsed, reconcileWait)
+	}
+	if !strings.Contains(target.String(), "still updating") {
+		t.Errorf("Target.String() = %q, want it to say the agent is still updating", target)
+	}
+}
+
+// Once something updates the Agent — as the controller would — the wait returns
+// promptly rather than sitting out the deadline.
+func TestApply_WaitReturnsOnceAgentChanges(t *testing.T) {
+	shortWait(t)
+	reconcileWait = 5 * time.Second // long enough that returning early is meaningful
+
+	agent, pack := managed()
+	c := newClient(t, agent, pack)
+
+	// Stand in for the controller projecting the edit onto the Agent.
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		time.Sleep(30 * time.Millisecond)
+		var current sympoziumv1alpha1.Agent
+		if err := c.Get(context.Background(), client.ObjectKeyFromObject(agent), &current); err != nil {
+			return
+		}
+		current.Spec.Agents.Default.Model = "gpt-4o-mini"
+		_ = c.Update(context.Background(), &current)
+	}()
+
+	start := time.Now()
+	target, err := Apply(context.Background(), c, agent, Edit{Model: strPtr("gpt-4o-mini")})
+	<-done
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+
+	if !target.Observed {
+		t.Error("Target.Observed = false, but the Agent was updated during the wait")
+	}
+	if elapsed := time.Since(start); elapsed >= reconcileWait {
+		t.Errorf("waited %v — should have returned as soon as the Agent changed", elapsed)
+	}
+}
+
+// A cancelled request must not keep polling.
+func TestApply_WaitHonoursCancelledContext(t *testing.T) {
+	shortWait(t)
+	reconcileWait = 10 * time.Second // so only cancellation can end the wait quickly
+
+	agent, pack := managed()
+	c := newClient(t, agent, pack)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(30 * time.Millisecond)
+		cancel()
+	}()
+
+	start := time.Now()
+	target, err := Apply(ctx, c, agent, Edit{Model: strPtr("gpt-4o-mini")})
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if target.Observed {
+		t.Error("Target.Observed = true after the context was cancelled")
+	}
+	if elapsed := time.Since(start); elapsed >= reconcileWait {
+		t.Errorf("waited %v despite cancellation", elapsed)
+	}
+}
+
+// A standalone Agent is written directly, so it is current the moment Apply returns.
+func TestApply_StandaloneIsImmediatelyObserved(t *testing.T) {
+	shortWait(t)
+
+	agent := standalone()
+	c := newClient(t, agent)
+
+	target, err := Apply(context.Background(), c, agent, Edit{Model: strPtr("gpt-4o")})
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if !target.Changed || !target.Observed {
+		t.Errorf("target = %+v, want changed and observed for a direct Agent write", target)
 	}
 }

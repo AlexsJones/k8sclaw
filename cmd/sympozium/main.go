@@ -5323,7 +5323,9 @@ func (m tuiModel) applyEditModal() tea.Cmd {
 				return cmdResultMsg{err: fmt.Errorf("update instance %q: %w", instName, err)}
 			}
 			if target.Kind == "Ensemble" {
-				msgs = append(msgs, fmt.Sprintf("Applied via %s — the agent updates on the next reconcile", target))
+				// Target.String() reports whether anything was written and whether
+				// the agent has picked it up yet.
+				msgs = append(msgs, fmt.Sprintf("Applied via %s", target))
 			}
 			updateParts := []string{"memory"}
 			if len(skills) > 0 {

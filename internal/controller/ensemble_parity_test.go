@@ -5,6 +5,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
@@ -528,7 +529,14 @@ func TestAgentEditRoundTripsToAgent(t *testing.T) {
 		},
 	}
 
-	target, err := agentedit.Apply(context.Background(), r.Client, agent, edit)
+	// Apply waits for the Agent to pick the edit up, which cannot happen here: this
+	// test drives the reconcile itself, below. A short deadline caps that wait —
+	// the Ensemble write happens before it, so the translation under test is
+	// unaffected.
+	applyCtx, cancelApply := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancelApply()
+
+	target, err := agentedit.Apply(applyCtx, r.Client, agent, edit)
 	if err != nil {
 		t.Fatalf("agentedit.Apply: %v", err)
 	}

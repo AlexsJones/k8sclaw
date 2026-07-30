@@ -480,10 +480,18 @@ func (s *Server) patchAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// The body stays the Agent, as clients expect. Where the edit actually landed
-	// goes in a header: for an ensemble-managed Agent the write went to the
-	// Ensemble, so the Agent returned here still shows pre-reconcile state and the
-	// client should re-read shortly.
+	// The body stays the Agent, as clients expect; the header says where the edit
+	// landed and whether it has taken effect. agentedit waits for an
+	// ensemble-routed edit to reach the Agent before returning, so a client
+	// re-reading on success normally sees the new values — except when the header
+	// reports "still updating", in which case its next poll will pick them up.
+	//
+	// inst is re-read so the body reflects the reconciled state rather than what
+	// was fetched at the top of the handler.
+	if err := s.client.Get(r.Context(), types.NamespacedName{Name: name, Namespace: ns}, &inst); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 	w.Header().Set("X-Sympozium-Applied-To", target.String())
 	writeJSON(w, inst)
 }

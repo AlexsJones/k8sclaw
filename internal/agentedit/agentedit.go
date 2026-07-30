@@ -14,6 +14,8 @@ package agentedit
 import (
 	"context"
 	"fmt"
+	"reflect"
+	"time"
 
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -59,7 +61,7 @@ type WebEndpointEdit struct {
 }
 
 // Target reports which object Apply wrote, so a caller can tell the user where
-// the change landed.
+// the change landed and whether it has taken effect yet.
 type Target struct {
 	// Kind is "Agent" or "Ensemble".
 	Kind string
@@ -67,14 +69,49 @@ type Target struct {
 	Name string
 	// AgentConfig is the agentConfigs[] entry updated, when Kind is "Ensemble".
 	AgentConfig string
+	// Changed is false when the edit matched what was already stored and nothing
+	// was written.
+	Changed bool
+	// Observed reports whether the Agent was seen to pick the change up before
+	// Apply returned. Always true for a direct Agent write. False for an Ensemble
+	// write that did not reconcile within reconcileWait — the caller's next read
+	// may still show the previous values.
+	Observed bool
 }
 
 func (t Target) String() string {
-	if t.Kind == "Ensemble" {
+	if t.Kind != "Ensemble" {
+		return fmt.Sprintf("Agent %s", t.Name)
+	}
+	switch {
+	case !t.Changed:
+		return fmt.Sprintf("Ensemble %s (agent config %s) — no change", t.Name, t.AgentConfig)
+	case !t.Observed:
+		return fmt.Sprintf("Ensemble %s (agent config %s) — agent still updating", t.Name, t.AgentConfig)
+	default:
 		return fmt.Sprintf("Ensemble %s (agent config %s)", t.Name, t.AgentConfig)
 	}
-	return fmt.Sprintf("Agent %s", t.Name)
 }
+
+// reconcileWait bounds how long Apply waits for the Ensemble controller to project
+// an edit onto the Agent.
+//
+// Callers re-read the Agent as soon as Apply returns — the TUI refreshes on the
+// resulting message, the web UI invalidates its agents query — so returning before
+// the controller has acted hands them the pre-edit values. Worse, the TUI seeds its
+// edit form from that cache, so a user reopening the form would see stale values and
+// could save them back over their own change.
+//
+// On expiry Apply returns anyway with Observed false: the caller is no worse off
+// than it was before this wait existed, and both clients converge on their own
+// background poll.
+//
+// A var rather than a const so tests can shorten it: a fake client has no
+// controller, so every managed-agent test would otherwise pay the full wait.
+var reconcileWait = 3 * time.Second
+
+// agentPollInterval is how often the wait re-reads the Agent.
+var agentPollInterval = 50 * time.Millisecond
 
 // Apply writes e to the object that owns the setting and reports which that was.
 //
@@ -115,12 +152,58 @@ func Apply(ctx context.Context, c client.Client, agent *sympoziumv1alpha1.Agent,
 			agent.Name, configName, ensembleName)
 	}
 
+	target := Target{Kind: "Ensemble", Name: ensembleName, AgentConfig: configName}
+
+	before := pack.Spec.AgentConfigs[idx].DeepCopy()
 	applyToAgentConfig(&pack.Spec.AgentConfigs[idx], e)
+
+	// A form re-saved unchanged should not write. Beyond saving a pointless API
+	// call, it keeps the wait below honest: with nothing to reconcile there would
+	// be no Agent change to observe, and every such save would block for the full
+	// timeout.
+	if reflect.DeepEqual(before, &pack.Spec.AgentConfigs[idx]) {
+		target.Observed = true
+		return target, nil
+	}
+	target.Changed = true
+
+	// Capture before the write: the controller may already be reconciling.
+	rvBefore := agent.ResourceVersion
 
 	if err := c.Update(ctx, &pack); err != nil {
 		return Target{}, fmt.Errorf("updating ensemble %s: %w", ensembleName, err)
 	}
-	return Target{Kind: "Ensemble", Name: ensembleName, AgentConfig: configName}, nil
+
+	target.Observed = waitForAgentChange(ctx, c, client.ObjectKeyFromObject(agent), rvBefore)
+	return target, nil
+}
+
+// waitForAgentChange blocks until the Agent's resourceVersion moves off rvBefore,
+// the context is done, or reconcileWait elapses. It reports whether the change was
+// observed.
+//
+// resourceVersion rather than generation: the controller may only reconcile labels,
+// which leaves generation untouched. It is a coarse signal — any write to the Agent
+// satisfies it — but the only writer of an ensemble-managed Agent is the controller
+// projecting this edit.
+func waitForAgentChange(ctx context.Context, c client.Client, key client.ObjectKey, rvBefore string) bool {
+	ctx, cancel := context.WithTimeout(ctx, reconcileWait)
+	defer cancel()
+
+	ticker := time.NewTicker(agentPollInterval)
+	defer ticker.Stop()
+
+	for {
+		var current sympoziumv1alpha1.Agent
+		if err := c.Get(ctx, key, &current); err == nil && current.ResourceVersion != rvBefore {
+			return true
+		}
+		select {
+		case <-ctx.Done():
+			return false
+		case <-ticker.C:
+		}
+	}
 }
 
 // applyToAgent writes the edit straight to a standalone Agent.
@@ -172,7 +255,7 @@ func applyToAgent(ctx context.Context, c client.Client, agent *sympoziumv1alpha1
 	if err := c.Update(ctx, agent); err != nil {
 		return Target{}, fmt.Errorf("updating agent %s: %w", agent.Name, err)
 	}
-	return Target{Kind: "Agent", Name: agent.Name}, nil
+	return Target{Kind: "Agent", Name: agent.Name, Changed: true, Observed: true}, nil
 }
 
 // applyToAgentConfig translates the edit into the ensemble's vocabulary.
