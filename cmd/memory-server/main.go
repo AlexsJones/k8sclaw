@@ -12,6 +12,7 @@ package main
 
 import (
 	"context"
+	"crypto/subtle"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -167,6 +168,11 @@ func main() {
 	dbPath := envOr("MEMORY_DB_PATH", defaultDBPath)
 	port := envOr("MEMORY_PORT", "8080")
 
+	// Admin-only delete is gated on a bearer token supplied via a Secret and
+	// injected only into this pod's env (never into agent pods). When unset,
+	// DELETE /delete is disabled, so existing deployments are unaffected.
+	adminToken := os.Getenv("MEMORY_ADMIN_TOKEN")
+
 	// Ensure database directory exists.
 	if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
 		log.Fatalf("failed to create db directory: %v", err)
@@ -203,6 +209,7 @@ func main() {
 	mux.HandleFunc("GET /list", listHandler(db))
 	mux.HandleFunc("GET /stats", statsHandler(db))
 	mux.HandleFunc("GET /provenance", provenanceHandler(db))
+	mux.HandleFunc("DELETE /delete", deleteHandler(db, adminToken))
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		fmt.Fprint(w, "ok")
@@ -426,6 +433,64 @@ func provenanceHandler(db *sql.DB) http.HandlerFunc {
 	}
 }
 
+// deleteHandler removes a single entry by its exact id. It is a manual admin
+// backstop (corrupted or sensitive entries) — not wired to agents or skills.
+// Access is gated on a bearer token injected only into this pod's env; when the
+// token is unset the endpoint is disabled, so existing deployments are
+// unaffected. The delete is a hard row removal; the memories_ad FTS trigger
+// keeps memories_fts in sync automatically.
+func deleteHandler(db *sql.DB, adminToken string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if adminToken == "" {
+			log.Printf("[delete] rejected: MEMORY_ADMIN_TOKEN not configured")
+			writeJSON(w, http.StatusForbidden, apiResponse{Error: "delete is disabled: MEMORY_ADMIN_TOKEN is not configured"})
+			return
+		}
+		token := ""
+		if auth := r.Header.Get("Authorization"); strings.HasPrefix(auth, "Bearer ") {
+			token = strings.TrimPrefix(auth, "Bearer ")
+		}
+		if subtle.ConstantTimeCompare([]byte(token), []byte(adminToken)) != 1 {
+			log.Printf("[delete] rejected: invalid or missing bearer token")
+			writeJSON(w, http.StatusUnauthorized, apiResponse{Error: "unauthorized"})
+			return
+		}
+
+		idStr := r.URL.Query().Get("id")
+		if idStr == "" {
+			writeJSON(w, http.StatusBadRequest, apiResponse{Error: "'id' query parameter is required"})
+			return
+		}
+		id, err := strconv.ParseInt(idStr, 10, 64)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, apiResponse{Error: "invalid 'id' parameter"})
+			return
+		}
+
+		entry, found, err := getMemoryByID(db, id)
+		if err != nil {
+			log.Printf("[delete] lookup error: %v", err)
+			memObs.recordWrite(r.Context(), "error", "")
+			writeJSON(w, http.StatusInternalServerError, apiResponse{Error: err.Error()})
+			return
+		}
+		if !found {
+			writeJSON(w, http.StatusNotFound, apiResponse{Error: fmt.Sprintf("no memory entry with id %d", id)})
+			return
+		}
+
+		if err := deleteMemory(db, id); err != nil {
+			log.Printf("[delete] error: %v", err)
+			memObs.recordWrite(r.Context(), "error", entry.SourceAgent)
+			writeJSON(w, http.StatusInternalServerError, apiResponse{Error: err.Error()})
+			return
+		}
+		log.Printf("[delete] removed id=%d seq=%d source=%s", entry.ID, entry.Seq, entry.SourceAgent)
+		memObs.recordWrite(r.Context(), "delete", entry.SourceAgent)
+		writeJSON(w, http.StatusOK, apiResponse{Success: true, Content: map[string]any{"deleted": entry}})
+	}
+}
+
 // --- Core database operations ---
 
 func searchMemories(db *sql.DB, query string, topK int, callerAgent string, trustPeers, acceptTags []string, maxAge, minKind string) ([]memoryEntry, error) {
@@ -613,6 +678,45 @@ func getProvenanceChain(db *sql.DB, id int64) ([]memoryEntry, error) {
 		chain = []memoryEntry{}
 	}
 	return chain, nil
+}
+
+// getMemoryByID fetches a single entry by its exact primary key. found is false
+// (with a nil error) when no such row exists.
+func getMemoryByID(db *sql.DB, id int64) (memoryEntry, bool, error) {
+	row := db.QueryRow(`
+		SELECT id, content, tags, visibility, source_agent, parent_id, seq, created_at, updated_at, evidence
+		FROM memories WHERE id = ?
+	`, id)
+
+	var e memoryEntry
+	var tags string
+	var evidenceStr string
+	err := row.Scan(&e.ID, &e.Content, &tags, &e.Visibility, &e.SourceAgent, &e.ParentID, &e.Seq, &e.CreatedAt, &e.UpdatedAt, &evidenceStr)
+	if err == sql.ErrNoRows {
+		return memoryEntry{}, false, nil
+	}
+	if err != nil {
+		return memoryEntry{}, false, fmt.Errorf("lookup by id: %w", err)
+	}
+	if tags != "" {
+		e.Tags = strings.Split(tags, ",")
+	}
+	if evidenceStr != "" {
+		var ev EvidenceTrace
+		if err := json.Unmarshal([]byte(evidenceStr), &ev); err == nil {
+			e.Evidence = &ev
+		}
+	}
+	return e, true, nil
+}
+
+// deleteMemory hard-deletes the row with the given id. The memories_ad FTS
+// trigger removes the matching FTS entry, so search/list stop returning it.
+func deleteMemory(db *sql.DB, id int64) error {
+	if _, err := db.Exec(`DELETE FROM memories WHERE id = ?`, id); err != nil {
+		return fmt.Errorf("delete failed: %w", err)
+	}
+	return nil
 }
 
 func scanEntries(rows *sql.Rows) ([]memoryEntry, error) {

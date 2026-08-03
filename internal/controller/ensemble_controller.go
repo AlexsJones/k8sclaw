@@ -1374,11 +1374,23 @@ func (r *EnsembleReconciler) reconcileSharedMemory(ctx context.Context, log logr
 			},
 		}
 
+		// Gate the admin-only DELETE /delete endpoint on a Secret-backed bearer
+		// token, injected into the shared-memory pod only (never into agents), so
+		// workflow_memory_* entries are equally deletable and token-guarded.
+		deploy.Spec.Template.Spec.Containers[0].Env = append(deploy.Spec.Template.Spec.Containers[0].Env, memoryAdminTokenEnv()...)
+
 		if err := controllerutil.SetControllerReference(pack, deploy, r.Scheme); err != nil {
 			return err
 		}
 		log.Info("Creating shared memory Deployment", "name", deployName)
 		if err := r.Create(ctx, deploy); err != nil {
+			return err
+		}
+	} else {
+		// Already exists. The rest of the spec is deliberately left alone, but the
+		// admin-token env is reconciled so enabling adminDelete (or pointing it at a
+		// different Secret) takes effect without deleting the Deployment.
+		if err := syncMemoryAdminTokenEnv(ctx, r.Client, log, &existingDeploy); err != nil {
 			return err
 		}
 	}

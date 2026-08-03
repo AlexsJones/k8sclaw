@@ -101,6 +101,13 @@ spec:
             - name: AGENT_SANDBOX_DEFAULT_RUNTIME_CLASS
               value: {{ .Values.agentSandbox.defaultRuntimeClass | quote }}
             {{- end }}
+            {{- if .Values.memory.adminDelete.enabled }}
+            # Names the Secret holding the memory-server admin-delete bearer token.
+            # The controller injects it (optional SecretKeyRef) into every
+            # memory-server pod it creates, enabling the admin-only DELETE /delete.
+            - name: MEMORY_ADMIN_TOKEN_SECRET
+              value: {{ printf "%s-memory-admin-token" (include "sympozium.fullname" .) | quote }}
+            {{- end }}
             {{- if .Values.pricing.enabled }}
             - name: SYMPOZIUM_PRICING_CONFIGMAP
               value: "sympozium-model-pricing"
