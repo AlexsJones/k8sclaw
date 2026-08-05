@@ -36,6 +36,21 @@ func agentContainer(podSpec *corev1.PodSpec) *corev1.Container {
 	return nil
 }
 
+// hasEnvVar reports whether c already declares an env var named name.
+//
+// A mutator that renders a user-settable knob checks this before appending: the
+// mutator pass runs after buildContainers has appended agentRun.Spec.Env, and a
+// duplicate name resolves last-wins at the kubelet, so an unconditional append
+// overrides whatever the user asked for.
+func hasEnvVar(c *corev1.Container, name string) bool {
+	for i := range c.Env {
+		if c.Env[i].Name == name {
+			return true
+		}
+	}
+	return false
+}
+
 // podMutator is a named pod-spec transformation applied to every agent pod,
 // whichever backend ships it.
 //
@@ -303,8 +318,19 @@ func (r *AgentRunReconciler) injectSubagentsConfig(ctx context.Context, agentRun
 // auto-store is disabled — the agent-runner defaults to enabled — so existing
 // runs are unaffected. It is a no-op unless the run uses the memory skill,
 // which is what provides the memory server that auto-store writes to.
+//
+// An explicit MEMORY_AUTO_STORE from spec.env takes precedence: buildContainers
+// appends spec.env before this pass, and duplicate names resolve last-wins at the
+// kubelet, so appending unconditionally would silently beat the user's value.
+// Everything injected inside buildContainers (RUN_TIMEOUT, MEMORY_SERVER_URL, …)
+// sits ahead of spec.env and is overridable; skipping here keeps that contract —
+// spec.env is the last word — rather than making this one variable the exception.
 func (r *AgentRunReconciler) injectMemoryConfig(ctx context.Context, agentRun *sympoziumv1alpha1.AgentRun, podSpec *corev1.PodSpec) {
 	if !agentRunHasMemorySkill(agentRun) || agentRun.Spec.AgentRef == "" {
+		return
+	}
+	agent := agentContainer(podSpec)
+	if agent == nil || hasEnvVar(agent, "MEMORY_AUTO_STORE") {
 		return
 	}
 	var inst sympoziumv1alpha1.Agent
@@ -315,9 +341,7 @@ func (r *AgentRunReconciler) injectMemoryConfig(ctx context.Context, agentRun *s
 	if inst.Spec.Memory == nil || inst.Spec.Memory.AutoStore == nil || *inst.Spec.Memory.AutoStore {
 		return
 	}
-	if agent := agentContainer(podSpec); agent != nil {
-		agent.Env = append(agent.Env,
-			corev1.EnvVar{Name: "MEMORY_AUTO_STORE", Value: "false"},
-		)
-	}
+	agent.Env = append(agent.Env,
+		corev1.EnvVar{Name: "MEMORY_AUTO_STORE", Value: "false"},
+	)
 }

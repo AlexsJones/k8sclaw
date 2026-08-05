@@ -73,6 +73,8 @@ Auto-stored entries are truncated to keep the database small. The byte limits de
 | `MEMORY_AUTO_STORE_MAX_RESPONSE_BYTES` | `1000` | Max stored bytes of the response; a value ≤ 0 disables response truncation |
 | `MEMORY_AUTO_STORE` | `true` | Set to `false` to disable auto-store directly (the controller sets this from `memory.autoStore`) |
 
+Setting `MEMORY_AUTO_STORE` yourself through `spec.agents.default.env` (or an ensemble agent-config's `env`) also works, and an explicit env var wins over `memory.autoStore` — the controller skips its own injection when the pod already carries the variable. That matches every other controller-injected variable (`RUN_TIMEOUT`, `MEMORY_SERVER_URL`, and so on): `spec.env` is the last word. Prefer `memory.autoStore` for anything declarative, since the env var is per-pod and invisible to the Agent/Ensemble spec.
+
 ## Enabling Memory
 
 Add the `memory` SkillPack to your instance's skills list:

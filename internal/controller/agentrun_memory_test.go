@@ -115,6 +115,39 @@ func TestInjectMemoryConfig_NoopWithoutMemorySkill(t *testing.T) {
 	}
 }
 
+// TestInjectMemoryConfig_SpecEnvWins pins the precedence contract: everything
+// buildContainers injects (RUN_TIMEOUT, MEMORY_SERVER_URL, …) is appended ahead
+// of spec.env and is therefore user-overridable. The mutator pass runs after
+// spec.env, so without an explicit guard this one variable would invert that
+// rule — duplicate env names resolve last-wins at the kubelet.
+func TestInjectMemoryConfig_SpecEnvWins(t *testing.T) {
+	for _, userValue := range []string{"true", "false"} {
+		t.Run("spec_env_"+userValue, func(t *testing.T) {
+			// Agent says autoStore=false, so the mutator would otherwise inject.
+			r := newAgentRunReconcilerWithAgent(t, boolPtr(false))
+			run := memoryRun()
+			run.Spec.Env = map[string]string{"MEMORY_AUTO_STORE": userValue}
+
+			job, err := r.buildJob(context.Background(), run, false, nil, nil, nil, nil)
+			if err != nil {
+				t.Fatalf("buildJob: %v", err)
+			}
+
+			// Exactly one entry, carrying the user's value: a second entry would
+			// win at the kubelet even though the first is the user's.
+			var found []string
+			for _, e := range agentContainer(&job.Spec.Template.Spec).Env {
+				if e.Name == "MEMORY_AUTO_STORE" {
+					found = append(found, e.Value)
+				}
+			}
+			if len(found) != 1 || found[0] != userValue {
+				t.Errorf("MEMORY_AUTO_STORE entries = %q, want exactly [%q] — spec.env must win", found, userValue)
+			}
+		})
+	}
+}
+
 // ── buildContainers: MEMORY_SERVER_URL env injection ─────────────────────────
 
 func TestBuildContainers_MemoryServerURLInjected(t *testing.T) {
