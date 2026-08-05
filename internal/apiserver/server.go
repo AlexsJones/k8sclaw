@@ -281,9 +281,10 @@ func (s *Server) buildMux(frontendFS fs.FS, expected *tokenReader) http.Handler 
 // Health and metrics endpoints are exempted.
 //
 // The expected token is read through a tokenReader so that a Secret rotation
-// takes effect without a pod restart. Each request calls expected.Current()
-// (which is a single stat() syscall against the mounted file when the
-// underlying mtime has not changed).
+// takes effect without a pod restart. Each request calls expected.Current(),
+// which re-reads the mounted file (one stat + read syscall pair, a few µs).
+// If the expected token is empty at request time, the middleware fails closed
+// (401) — running open is a startup decision only.
 func authMiddleware(expected *tokenReader, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		path := r.URL.Path
@@ -312,11 +313,19 @@ func authMiddleware(expected *tokenReader, next http.Handler) http.Handler {
 			token = r.URL.Query().Get("token")
 		}
 		got := []byte(token)
+		expectedBytes := []byte(expected.Current())
+		// Fail closed: if the expected token is empty (file rotated to
+		// empty, or read failure with no cached value), reject unconditionally.
+		// Running open is a startup decision, not something a runtime
+		// rotation should be able to flip.
+		if len(expectedBytes) == 0 {
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
 		// Length-mismatch short-circuit: subtle.ConstantTimeCompare returns
 		// 0 on different-length inputs but the timing leak on length is
 		// visible. Branches on length are not a leak we care about (token
 		// length is fixed for any given deployment), so reject early.
-		expectedBytes := []byte(expected.Current())
 		if len(got) != len(expectedBytes) {
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return

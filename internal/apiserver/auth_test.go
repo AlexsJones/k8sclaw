@@ -207,3 +207,65 @@ func TestAuthMiddleware_NilReaderDisablesAuth(t *testing.T) {
 		t.Errorf("empty reader: /healthz status = %d, want 200", rec2.Code)
 	}
 }
+
+func TestAuthMiddleware_FailsClosedOnEmptyExpectedToken(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "token")
+	if err := os.WriteFile(path, []byte("good-token"), 0o600); err != nil {
+		t.Fatalf("write token: %v", err)
+	}
+	reader := &tokenReader{path: path}
+	mw := authMiddleware(reader, okHandler)
+
+	// Sanity: valid token works.
+	rec := authRequest(t, mw, "GET", "/api/v1/runs", "Bearer good-token")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("valid token: status = %d, want 200", rec.Code)
+	}
+
+	// Rotate the file to an empty value.
+	if err := os.WriteFile(path, []byte(""), 0o600); err != nil {
+		t.Fatalf("write empty token: %v", err)
+	}
+
+	// No Authorization header — must 401, not pass through.
+	rec = authRequest(t, mw, "GET", "/api/v1/runs", "")
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("empty expected + no header: status = %d, want 401", rec.Code)
+	}
+
+	// Empty Bearer header — must 401.
+	rec = authRequest(t, mw, "GET", "/api/v1/runs", "Bearer ")
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("empty expected + empty bearer: status = %d, want 401", rec.Code)
+	}
+
+	// Non-empty Bearer — must still 401.
+	rec = authRequest(t, mw, "GET", "/api/v1/runs", "Bearer any-token")
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("empty expected + any bearer: status = %d, want 401", rec.Code)
+	}
+}
+
+func TestAuthMiddleware_FailsClosedOnEmptyExpectedToken_WebSocket(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "token")
+	if err := os.WriteFile(path, []byte("good-token"), 0o600); err != nil {
+		t.Fatalf("write token: %v", err)
+	}
+	reader := &tokenReader{path: path}
+	mw := authMiddleware(reader, okHandler)
+
+	// Rotate the file to empty.
+	if err := os.WriteFile(path, []byte(""), 0o600); err != nil {
+		t.Fatalf("write empty token: %v", err)
+	}
+
+	// WebSocket path with ?token= query param — must still 401.
+	req := httptest.NewRequest("GET", "/ws/stream?token=anything", nil)
+	rec := httptest.NewRecorder()
+	mw.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("empty expected + ws query token: status = %d, want 401", rec.Code)
+	}
+}
