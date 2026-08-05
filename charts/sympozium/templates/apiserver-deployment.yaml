@@ -94,7 +94,8 @@ spec:
             {{- toYaml .Values.apiserver.resources | nindent 12 }}
           securityContext:
             {{- toYaml .Values.containerSecurityContext | nindent 12 }}
-          {{- if not .Values.apiserver.webUI.token }}
+          {{- /* Gate must match apiserver-ui-secret.yaml */}}
+          {{- if and .Values.apiserver.webUI.enabled (not .Values.apiserver.webUI.token) }}
           volumeMounts:
             - name: sympozium-ui-token
               mountPath: /var/run/secrets/sympozium-ui-token
