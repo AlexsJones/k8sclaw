@@ -29,7 +29,6 @@ type tokenReader struct {
 
 	mu       sync.Mutex
 	now      string
-	mtime    time.Time
 	hasValue bool
 
 	// warnMu guards lastWarn. It is separate from mu so warn() can be
@@ -51,8 +50,7 @@ func NewTokenReader(path string, logger logr.Logger) *tokenReader {
 
 // refresh re-reads the file and updates the cache. Caller must hold r.mu.
 func (r *tokenReader) refresh() {
-	info, err := os.Stat(r.path)
-	if err != nil {
+	if _, err := os.Stat(r.path); err != nil {
 		r.warn(err)
 		return
 	}
@@ -62,7 +60,6 @@ func (r *tokenReader) refresh() {
 		return
 	}
 	r.now = strings.TrimRight(string(raw), "\n")
-	r.mtime = info.ModTime()
 	r.hasValue = true
 }
 
@@ -87,10 +84,11 @@ func (r *tokenReader) Current() string {
 	return ""
 }
 
-// Seed sets the cached value without reading the file. Used at startup so
-// the reader has a value to serve if the mounted token file is missing (the
-// chart's optional: true semantics). Once the file is mounted, the next
-// Current() call will pick up the file's value.
+// Seed installs the literal --token fallback when no Secret is mounted
+// and the token file is absent. Does not clobber a value already read
+// from the file, so a real Secret-backed token always wins over the
+// literal fallback. Once the file appears, the next Current() call
+// overrides the seed.
 func (r *tokenReader) Seed(value string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
