@@ -888,9 +888,10 @@ func baselineKeyFor(path string) string {
 func TestParityScenariosCoverEveryMutator(t *testing.T) {
 	// Scenario name → the mutator it exercises.
 	covered := map[string]string{
-		"ensemble_shared_memory": "sharedMemory",
-		"ensemble_relationships": "relationshipContext",
-		"subagents_skill":        "subagentsConfig",
+		"ensemble_shared_memory":     "sharedMemory",
+		"ensemble_relationships":     "relationshipContext",
+		"subagents_skill":            "subagentsConfig",
+		"memory_auto_store_disabled": "memoryConfig",
 	}
 
 	exercised := map[string]bool{}

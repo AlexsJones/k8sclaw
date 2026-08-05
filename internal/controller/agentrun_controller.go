@@ -739,10 +739,6 @@ func (r *AgentRunReconciler) reconcilePending(ctx context.Context, log logr.Logg
 		return ctrl.Result{}, nil
 	}
 
-	// Inject per-Agent memory settings (e.g. disabling the automatic per-run
-	// memory write) that aren't carried on the AgentRun spec.
-	r.injectMemoryConfig(ctx, agentRun, job)
-
 	if err := controllerutil.SetControllerReference(agentRun, job, r.Scheme); err != nil {
 		return ctrl.Result{}, fmt.Errorf("setting owner reference: %w", err)
 	}
@@ -3311,33 +3307,6 @@ func buildObservabilityEnv(agentRun *sympoziumv1alpha1.AgentRun, obs *sympoziumv
 	}
 
 	return env
-}
-
-// injectMemoryConfig threads per-Agent memory settings that aren't derivable
-// from the AgentRun spec into the agent container. Currently it disables the
-// automatic per-run memory write (MEMORY_AUTO_STORE=false) when the owning
-// Agent sets memory.autoStore=false. The env var is only injected when
-// auto-store is disabled — the agent-runner defaults to enabled — so existing
-// runs are unaffected. It is a no-op unless the run uses the memory skill,
-// which is what provides the memory server that auto-store writes to.
-func (r *AgentRunReconciler) injectMemoryConfig(ctx context.Context, agentRun *sympoziumv1alpha1.AgentRun, job *batchv1.Job) {
-	if !agentRunHasMemorySkill(agentRun) || agentRun.Spec.AgentRef == "" {
-		return
-	}
-	var inst sympoziumv1alpha1.Agent
-	if err := r.Get(ctx, types.NamespacedName{Name: agentRun.Spec.AgentRef, Namespace: agentRun.Namespace}, &inst); err != nil {
-		return
-	}
-	// nil or true → default (enabled); nothing to inject.
-	if inst.Spec.Memory == nil || inst.Spec.Memory.AutoStore == nil || *inst.Spec.Memory.AutoStore {
-		return
-	}
-	podSpec := &job.Spec.Template.Spec
-	if len(podSpec.Containers) > 0 {
-		podSpec.Containers[0].Env = append(podSpec.Containers[0].Env,
-			corev1.EnvVar{Name: "MEMORY_AUTO_STORE", Value: "false"},
-		)
-	}
 }
 
 // derivePermeability auto-generates permeability rules from the ensemble's

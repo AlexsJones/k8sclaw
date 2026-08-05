@@ -44,7 +44,11 @@ func memoryRun() *sympoziumv1alpha1.AgentRun {
 }
 
 func jobEnvValue(job *batchv1.Job, name string) (string, bool) {
-	for _, e := range job.Spec.Template.Spec.Containers[0].Env {
+	agent := agentContainer(&job.Spec.Template.Spec)
+	if agent == nil {
+		return "", false
+	}
+	for _, e := range agent.Env {
 		if e.Name == name {
 			return e.Value, true
 		}
@@ -53,6 +57,11 @@ func jobEnvValue(job *batchv1.Job, name string) (string, bool) {
 }
 
 // ── injectMemoryConfig: MEMORY_AUTO_STORE opt-out ────────────────────────────
+//
+// injectMemoryConfig is a registered podMutator, so buildJob applies it via
+// buildAgentPodTemplate. Asserting on buildJob's output rather than calling the
+// mutator directly is what keeps these tests honest about the wiring: drop the
+// registry entry and they fail alongside TestBackendParity.
 
 func TestInjectMemoryConfig_DisablesAutoStore(t *testing.T) {
 	r := newAgentRunReconcilerWithAgent(t, boolPtr(false))
@@ -61,8 +70,6 @@ func TestInjectMemoryConfig_DisablesAutoStore(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildJob: %v", err)
 	}
-
-	r.injectMemoryConfig(context.Background(), run, job)
 
 	v, ok := jobEnvValue(job, "MEMORY_AUTO_STORE")
 	if !ok || v != "false" {
@@ -88,8 +95,6 @@ func TestInjectMemoryConfig_EnabledByDefault(t *testing.T) {
 				t.Fatalf("buildJob: %v", err)
 			}
 
-			r.injectMemoryConfig(context.Background(), run, job)
-
 			if _, ok := jobEnvValue(job, "MEMORY_AUTO_STORE"); ok {
 				t.Error("MEMORY_AUTO_STORE should not be injected when auto-store is enabled")
 			}
@@ -104,8 +109,6 @@ func TestInjectMemoryConfig_NoopWithoutMemorySkill(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildJob: %v", err)
 	}
-
-	r.injectMemoryConfig(context.Background(), run, job)
 
 	if _, ok := jobEnvValue(job, "MEMORY_AUTO_STORE"); ok {
 		t.Error("MEMORY_AUTO_STORE should not be injected when the run has no memory skill")
