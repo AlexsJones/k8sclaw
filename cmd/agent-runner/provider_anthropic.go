@@ -169,6 +169,11 @@ func (p *anthropicProvider) AddToolResults(results []ToolResult) {
 // tool_use_id. Anthropic carries tool results as content blocks inside user
 // messages, so this walks blocks rather than messages. The is_error flag is
 // carried across so an elided failure still reads as a failure.
+//
+// The block is rebuilt text-only: NewToolResultBlock takes a string, and every
+// result this runner produces today is text. If tool_result content ever grows
+// image blocks, this drops them silently — the replacement would then have to
+// carry a content union rather than a string.
 func (p *anthropicProvider) ReplaceToolResults(replacements map[string]string) {
 	if len(replacements) == 0 {
 		return

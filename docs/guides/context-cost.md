@@ -15,7 +15,8 @@ first request and the last is accumulated tool output.
 **All of this is off by default.** An unconfigured run sends exactly what it
 always did — both mechanisms change what the model can see, so neither is
 imposed silently. Individual tools keep their own output caps (`execute_command`
-and `read_file` at 8 KB, `fetch_url` at 50 KB).
+and `read_file` at 8 KB, `fetch_url` at 50 KB by default and up to 100 KB when
+the model raises `maxChars`).
 
 | Variable | Default | Effect |
 |---|---|---|
@@ -37,10 +38,10 @@ spec:
 
 The two knobs are independent and address different things. The per-result cap
 stops one enormous result from entering at all — most useful for sidecar tools,
-which have no output limit of their own (native tools and MCP tool output are
-already capped at 8 KB each). The history budget addresses accumulation: many
-individually-reasonable results adding up over a long run. For most cases the
-history budget alone is the one worth setting.
+which have no output limit of their own (native tools and MCP tool output carry
+the caps above; MCP output is capped at 8 KB). The history budget addresses
+accumulation: many individually-reasonable results adding up over a long run.
+For most cases the history budget alone is the one worth setting.
 
 ## Why elision is batched, not continuous
 

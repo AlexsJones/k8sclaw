@@ -120,13 +120,22 @@ func jsonBytes(v any) int {
 //
 // The cut backs off to a rune boundary: a byte-exact slice can split a
 // multi-byte rune, and json.Marshal would then silently substitute U+FFFD into
-// the request. Same guard the MCP output cap uses (mcp_tools.go).
+// the request. Only the trailing rune is examined: validating the whole kept
+// prefix would be quadratic, and a single invalid byte anywhere earlier — the
+// first byte of binary execute_command output, say — would rewind the cut back
+// to it and throw away everything after.
 func (cp contextPolicy) clampToolResult(tool, content string) (string, int) {
 	if cp.ToolResultMaxBytes <= 0 || len(content) <= cp.ToolResultMaxBytes {
 		return content, 0
 	}
 	kept := content[:cp.ToolResultMaxBytes]
-	for len(kept) > 0 && !utf8.ValidString(kept) {
+	// A rune split by the cut orphans at most UTFMax-1 bytes, so the back-off
+	// is bounded. Content that is invalid at the cut for any other reason is
+	// left alone rather than chased backwards.
+	for i := 0; i < utf8.UTFMax-1 && len(kept) > 0; i++ {
+		if r, size := utf8.DecodeLastRuneInString(kept); r != utf8.RuneError || size > 1 {
+			break
+		}
 		kept = kept[:len(kept)-1]
 	}
 	dropped := len(content) - len(kept)

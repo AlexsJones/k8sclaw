@@ -114,6 +114,22 @@ func TestClampToolResult_CutsOnRuneBoundary(t *testing.T) {
 	}
 }
 
+// Invalid UTF-8 *before* the cap must not drag the cut backwards: the back-off
+// exists for a rune split by the cut, not for byte soup earlier in the output.
+// Binary execute_command output would otherwise collapse to almost nothing.
+func TestClampToolResult_InvalidUTF8BeforeCapKeepsPrefix(t *testing.T) {
+	cp := contextPolicy{ToolResultMaxBytes: 100}
+	content := "\xff\xfe binary header" + strings.Repeat("a", 500)
+	got, dropped := cp.clampToolResult("execute_command", content)
+
+	if dropped != len(content)-100 {
+		t.Errorf("dropped = %d, want %d — the cut must not rewind past the cap", dropped, len(content)-100)
+	}
+	if !strings.HasPrefix(got, content[:100]) {
+		t.Error("clamp discarded valid bytes following an earlier invalid byte")
+	}
+}
+
 func TestClampToolResult_Disabled(t *testing.T) {
 	cp := contextPolicy{ToolResultMaxBytes: 0}
 	long := strings.Repeat("x", 500)
