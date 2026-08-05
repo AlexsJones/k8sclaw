@@ -3,6 +3,7 @@
 package system_test
 
 import (
+	"encoding/json"
 	"fmt"
 	"testing"
 	"time"
@@ -294,5 +295,74 @@ func TestEnsembleStimulusTriggerRejectsNoStimulus(t *testing.T) {
 	rec := httpDo(t, "POST", path, nil)
 	if rec.Code != 400 {
 		t.Errorf("trigger status = %d, want 400; body = %s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestAgentSpecHasNoServerSideDefaults guards the assumption the Ensemble update
+// path rests on.
+//
+// reconcileAgentConfig compares the *stored* Agent spec against buildAgent's
+// in-memory output and assigns the whole spec on any difference. That converges only
+// while the apiserver returns a spec byte-identical to what was submitted. A
+// +kubebuilder:default on an AgentSpec field buildAgent leaves zero would break it:
+// stored and desired then differ forever, and every reconcile issues a redundant
+// Update.
+//
+// Note on what this does NOT test, and why: resourceVersion is not a usable signal
+// here. The apiserver no-ops an Update that produces no net storage change, so the
+// redundant writes are invisible in resourceVersion and generate no watch events.
+// Asserting the round-trip directly is what catches the defaulting change, and it
+// names the offending field.
+//
+// The unit tests cannot cover this — the fake client applies no defaults.
+func TestAgentSpecHasNoServerSideDefaults(t *testing.T) {
+	ns := createTestNamespace(t)
+
+	// Mirrors the shape buildAgent produces: a few fields set, the rest zero. Any
+	// zero field the CRD defaults comes back populated.
+	submitted := sympoziumv1alpha1.AgentSpec{
+		DisplayName: "Analyst",
+		Agents: sympoziumv1alpha1.AgentsSpec{
+			Default: sympoziumv1alpha1.AgentConfig{
+				Model:   "gpt-4o",
+				BaseURL: "http://fake:1234/v1",
+			},
+		},
+		Skills: []sympoziumv1alpha1.SkillRef{{SkillPackRef: "memory"}},
+		Memory: &sympoziumv1alpha1.MemorySpec{Enabled: true, MaxSizeKB: 256},
+	}
+
+	agent := &sympoziumv1alpha1.Agent{
+		ObjectMeta: metav1.ObjectMeta{Name: "defaults-probe", Namespace: ns},
+		Spec:       *submitted.DeepCopy(),
+	}
+	if err := k8sClient.Create(testCtx, agent); err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	t.Cleanup(func() { _ = k8sClient.Delete(testCtx, agent) })
+
+	// k8sClient is the manager's cached client, so the read has to wait for the
+	// informer rather than assuming write-then-read consistency.
+	var stored sympoziumv1alpha1.Agent
+	pollUntil(t, 10*time.Second, 200*time.Millisecond, func() bool {
+		return k8sClient.Get(testCtx, client.ObjectKey{Name: "defaults-probe", Namespace: ns}, &stored) == nil
+	})
+
+	want, err := json.MarshalIndent(submitted, "", "  ")
+	if err != nil {
+		t.Fatalf("marshal submitted: %v", err)
+	}
+	got, err := json.MarshalIndent(stored.Spec, "", "  ")
+	if err != nil {
+		t.Fatalf("marshal stored: %v", err)
+	}
+
+	if string(want) != string(got) {
+		t.Errorf("AgentSpec did not round-trip through the apiserver unchanged.\n"+
+			"submitted:\n%s\n\nstored:\n%s\n\n"+
+			"A field defaulted server-side but left zero by buildAgent makes "+
+			"reconcileAgentConfig's whole-spec comparison never converge, so every reconcile "+
+			"issues a redundant Update. Either have buildAgent set the same value, or drop the "+
+			"+kubebuilder:default.", want, got)
 	}
 }

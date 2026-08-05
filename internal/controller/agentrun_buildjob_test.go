@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"context"
 	"strings"
 	"testing"
 
@@ -19,7 +20,7 @@ func TestBuildJob_UnknownMode_ReturnsError(t *testing.T) {
 	r := &AgentRunReconciler{}
 	run := objectModeRun("bogus-mode", "anything", nil)
 
-	job, err := r.buildJob(run, false, nil, nil, nil, nil)
+	job, err := r.buildJob(context.Background(), run, false, nil, nil, nil, nil)
 	if err == nil {
 		t.Fatal("buildJob: expected error for unknown mode, got nil")
 	}
@@ -38,7 +39,7 @@ func TestBuildJob_StringTaskSucceeds(t *testing.T) {
 	r := &AgentRunReconciler{}
 	run := stringModeRun("do the thing")
 
-	job, err := r.buildJob(run, false, nil, nil, nil, nil)
+	job, err := r.buildJob(context.Background(), run, false, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("buildJob: %v", err)
 	}
@@ -66,7 +67,7 @@ func TestBuildJob_ObjectTaskSidecarDriven_SucceedsWithMatchingTool(t *testing.T)
 		},
 	}
 
-	job, err := r.buildJob(run, false, nil, sidecars, nil, nil)
+	job, err := r.buildJob(context.Background(), run, false, nil, sidecars, nil, nil)
 	if err != nil {
 		t.Fatalf("buildJob: %v", err)
 	}
@@ -89,7 +90,7 @@ func TestBuildJob_ObjectTaskSidecarDriven_FailsWhenNoMatchingTool(t *testing.T) 
 		},
 	}
 
-	job, err := r.buildJob(run, false, nil, sidecars, nil, nil)
+	job, err := r.buildJob(context.Background(), run, false, nil, sidecars, nil, nil)
 	if err == nil {
 		t.Fatal("buildJob: expected error for missing tool, got nil")
 	}
@@ -106,7 +107,7 @@ func TestBuildJob_ObjectTaskSidecarDriven_FailsWithoutToolField(t *testing.T) {
 	// task.tool is empty → handler.Validate should reject.
 	run := objectModeRun(taskmodes.SidecarDriven, "", nil)
 
-	job, err := r.buildJob(run, false, nil, nil, nil, nil)
+	job, err := r.buildJob(context.Background(), run, false, nil, nil, nil, nil)
 	if err == nil {
 		t.Fatal("buildJob: expected error for missing Tool field, got nil")
 	}
