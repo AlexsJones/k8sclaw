@@ -203,10 +203,17 @@ func (r *AgentRunReconciler) reconcilePendingAgentSandbox(
 		}
 	}
 
-	// Build containers/volumes using the existing shared logic.
+	// Build containers/volumes using the existing shared logic. The sandbox
+	// path used to bubble the dispatch error up to the reconciler, which made
+	// an unknown task.mode (or any handler validation failure) requeue
+	// forever — same loop the Job path used to hit before #302. Mirror the
+	// Job path: surface the failure on AgentRun.status and return cleanly so
+	// the run reaches a terminal Failed state instead of spinning.
+	// PR #302 review (issuecomment 5033007953) — first smaller ask.
 	containers, initContainers, err := r.buildContainers(agentRun, memoryEnabled, observability, taskSidecars, mcpServers, allowedOutboundChannels)
 	if err != nil {
-		return ctrl.Result{}, err
+		return ctrl.Result{}, r.failRun(ctx, agentRun,
+			fmt.Sprintf("task-mode dispatch rejected the AgentRun (sandbox path): %v", err))
 	}
 	volumes := r.buildVolumes(agentRun, memoryEnabled, taskSidecars, mcpServers)
 

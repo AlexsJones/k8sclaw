@@ -588,33 +588,18 @@ spec:
                   by registering a TaskModeHandler — no changes to the central
                   controller logic required.
 
-                  The CRD schema (oneOf: string | object) is hand-maintained in
-                  config/crd/bases/sympozium.ai_agentruns.yaml and the chart template;
-                  kubebuilder cannot express polymorphism directly. The Go side uses
-                  a pointer + custom UnmarshalJSON so the field round-trips cleanly.
-                properties:
-                  mode:
-                    description: |-
-                      Mode is the orchestration mode identifier for object form. The
-                      controller looks up the matching TaskModeHandler in its registry.
-                      Examples: "sidecar-driven".
-                    type: string
-                  parameters:
-                    additionalProperties:
-                      type: string
-                    description: |-
-                      Parameters is the open shape of arguments to pass to the orchestrator.
-                      Each handler decides how to interpret them. For sidecar-driven mode
-                      the controller serialises them to JSON and sets the
-                      SYMPOZIUM_RUN_CONFIG_JSON env var on the resolved sidecar.
-                    type: object
-                  tool:
-                    description: |-
-                      Tool is the SkillPack tool name to invoke on the resolved sidecar.
-                      Semantics are mode-specific (the handler decides). For sidecar-driven
-                      mode this is required and identifies the sidecar's primary tool.
-                    type: string
-                type: object
+                  The CRD schema is intentionally typeless (no `type:` is emitted)
+                  to accept either a string (legacy Path A) or an object describing
+                  an orchestration mode (Path B). The combination of
+                  `+kubebuilder:validation:Schemaless` (drops the auto-generated
+                  `type: object` plus the unused `properties` block) and
+                  `+kubebuilder:validation:XPreserveUnknownFields` (preserves unknown
+                  fields on the apiserver side) reproduces the polymorphic shape
+                  the field actually has — verified via `--dry-run=server` against
+                  a real apiserver that string-form tasks were previously rejected
+                  by the schema with "spec.task: must be of type object".
+
+                  See: PR #302 review (issuecomment 5033007953).
                 x-kubernetes-preserve-unknown-fields: true
               timeout:
                 description: Timeout is the maximum duration for this agent run.

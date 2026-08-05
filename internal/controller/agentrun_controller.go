@@ -352,6 +352,17 @@ func (r *AgentRunReconciler) reconcilePending(ctx context.Context, log logr.Logg
 
 	log.Info("Reconciling pending AgentRun")
 
+	// Reject nil/empty task at admission. The polymorphic spec.task accepts
+	// string-form Path A and object-form Path B; both have zero value `nil`,
+	// which would otherwise render an empty TASK env var and silently FATAL
+	// inside the agent-runner. Fail fast with a clear status.error so the
+	// operator sees why the run never started instead of a runtime crash.
+	// PR #302 review (issuecomment 5033007953) — second smaller ask.
+	if agentRun.Spec.Task == nil {
+		return ctrl.Result{}, r.failRun(ctx, agentRun,
+			"spec.task is required and must not be empty; provide a string prompt (Path A) or a {mode, tool, parameters} object (Path B)")
+	}
+
 	// Resolve modelRef: if the AgentRun references a Model CR, resolve its
 	// endpoint to populate provider, baseURL, and model fields automatically.
 	if agentRun.Spec.Model.ModelRef != "" {
