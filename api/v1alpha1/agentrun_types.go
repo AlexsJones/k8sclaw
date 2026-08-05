@@ -37,10 +37,19 @@ type AgentRunSpec struct {
 	// by registering a TaskModeHandler — no changes to the central
 	// controller logic required.
 	//
-	// The CRD schema (oneOf: string | object) is hand-maintained in
-	// config/crd/bases/sympozium.ai_agentruns.yaml and the chart template;
-	// kubebuilder cannot express polymorphism directly. The Go side uses
-	// a pointer + custom UnmarshalJSON so the field round-trips cleanly.
+	// The CRD schema is intentionally typeless (no `type:` is emitted)
+	// to accept either a string (legacy Path A) or an object describing
+	// an orchestration mode (Path B). The combination of
+	// `+kubebuilder:validation:Schemaless` (drops the auto-generated
+	// `type: object` plus the unused `properties` block) and
+	// `+kubebuilder:validation:XPreserveUnknownFields` (preserves unknown
+	// fields on the apiserver side) reproduces the polymorphic shape
+	// the field actually has — verified via `--dry-run=server` against
+	// a real apiserver that string-form tasks were previously rejected
+	// by the schema with "spec.task: must be of type object".
+	//
+	// See: PR #302 review (issuecomment 5033007953).
+	// +kubebuilder:validation:Schemaless
 	// +kubebuilder:validation:XPreserveUnknownFields
 	// +kubebuilder:printerColumns:name="Task",type="string",JSONPath=".spec.task"
 	Task *TaskSpec `json:"task,omitempty"`

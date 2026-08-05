@@ -1050,3 +1050,112 @@ func TestProvenanceHandler_IncludesEvidence(t *testing.T) {
 func itoa(n int64) string {
 	return fmt.Sprintf("%d", n)
 }
+
+// ── deleteHandler tests ──────────────────────────────────────────────────────
+
+func TestDeleteHandler_DisabledWithoutToken(t *testing.T) {
+	db := setupTestDB(t)
+	id := storeDefault(t, db, "corrupted entry", nil)
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("DELETE", "/delete?id="+itoa(id), nil)
+	deleteHandler(db, "")(w, r) // empty admin token → endpoint disabled
+
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403", w.Code)
+	}
+	// The entry must remain untouched.
+	if _, found, _ := getMemoryByID(db, id); !found {
+		t.Error("entry should not have been deleted while endpoint is disabled")
+	}
+}
+
+func TestDeleteHandler_Unauthorized(t *testing.T) {
+	db := setupTestDB(t)
+	id := storeDefault(t, db, "sensitive entry", nil)
+
+	cases := map[string]string{
+		"missing header": "",
+		"wrong token":    "Bearer nope",
+		"not bearer":     "secret-token",
+	}
+	for name, authHeader := range cases {
+		t.Run(name, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			r := httptest.NewRequest("DELETE", "/delete?id="+itoa(id), nil)
+			if authHeader != "" {
+				r.Header.Set("Authorization", authHeader)
+			}
+			deleteHandler(db, "secret-token")(w, r)
+
+			if w.Code != http.StatusUnauthorized {
+				t.Fatalf("status = %d, want 401", w.Code)
+			}
+		})
+	}
+	if _, found, _ := getMemoryByID(db, id); !found {
+		t.Error("entry should survive unauthorized delete attempts")
+	}
+}
+
+func TestDeleteHandler_Success(t *testing.T) {
+	db := setupTestDB(t)
+	id := storeDefault(t, db, "delete me: kafka lag in payments", []string{"kafka"})
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("DELETE", "/delete?id="+itoa(id), nil)
+	r.Header.Set("Authorization", "Bearer secret-token")
+	deleteHandler(db, "secret-token")(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body: %s)", w.Code, w.Body.String())
+	}
+	var resp apiResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("parse response: %v", err)
+	}
+	if !resp.Success {
+		t.Fatalf("expected success, got error: %s", resp.Error)
+	}
+
+	// Row is gone from the base table.
+	if _, found, err := getMemoryByID(db, id); err != nil || found {
+		t.Fatalf("entry still present after delete (found=%v err=%v)", found, err)
+	}
+	// Gone from list.
+	if list, _ := listMemories(db, "", 20, "", nil, "", "", ""); len(list) != 0 {
+		t.Errorf("list returned %d entries after delete, want 0", len(list))
+	}
+	// Gone from FTS search too — proves the memories_ad trigger fired.
+	if hits, _ := searchMemories(db, "kafka", 5, "", nil, nil, "", ""); len(hits) != 0 {
+		t.Errorf("search returned %d hits after delete, want 0", len(hits))
+	}
+}
+
+func TestDeleteHandler_NotFound(t *testing.T) {
+	db := setupTestDB(t)
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("DELETE", "/delete?id=9999", nil)
+	r.Header.Set("Authorization", "Bearer secret-token")
+	deleteHandler(db, "secret-token")(w, r)
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", w.Code)
+	}
+}
+
+func TestDeleteHandler_BadID(t *testing.T) {
+	db := setupTestDB(t)
+
+	for _, q := range []string{"/delete", "/delete?id=abc"} {
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest("DELETE", q, nil)
+		r.Header.Set("Authorization", "Bearer secret-token")
+		deleteHandler(db, "secret-token")(w, r)
+
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("%s: status = %d, want 400", q, w.Code)
+		}
+	}
+}

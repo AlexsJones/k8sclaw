@@ -126,6 +126,17 @@ pricing:
   # than editing the ConfigMap (Helm upgrades overwrite it).
   extraEntries: []
 
+# -- Persistent memory server
+memory:
+  # -- Admin-only DELETE /delete backstop for pruning corrupted or sensitive
+  # memory entries. When enabled, a bearer-token Secret is generated and the
+  # controller injects it into every memory-server pod (per-agent and shared
+  # workflow memory). The token is never exposed to agent pods. When disabled,
+  # the Secret is absent and /delete returns 403. Reach the endpoint via
+  # `kubectl port-forward` (RBAC-gated) with `Authorization: Bearer <token>`.
+  adminDelete:
+    enabled: true
+
 # -- CRD installation
 crds:
   # -- Install CRDs with the chart. Disable if managing CRDs separately.

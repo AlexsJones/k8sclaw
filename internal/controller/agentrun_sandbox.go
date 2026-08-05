@@ -92,10 +92,18 @@ func (r *AgentRunReconciler) reconcilePendingAgentSandbox(
 
 	// Render the pod via the same template the Job backend uses, so containers,
 	// volumes, pod security, and the registered pod mutators apply to both.
+	// buildAgentPodTemplate wraps buildContainers, so task-mode dispatch still
+	// happens here. The sandbox path used to bubble that error up to the
+	// reconciler, which made an unknown task.mode (or any handler validation
+	// failure) requeue forever — same loop the Job path used to hit before #302.
+	// Mirror the Job path: surface the failure on AgentRun.status and return
+	// cleanly so the run reaches a terminal Failed state instead of spinning.
+	// PR #302 review (issuecomment 5033007953) — first smaller ask.
 	template, err := r.buildAgentPodTemplate(ctx, agentRun, prereqs.inputs.memoryEnabled,
 		prereqs.inputs.observability, taskSidecars, prereqs.mcpServers, prereqs.inputs.allowedOutboundChannels)
 	if err != nil {
-		return ctrl.Result{}, err
+		return ctrl.Result{}, r.failRun(ctx, agentRun,
+			fmt.Sprintf("task-mode dispatch rejected the AgentRun (sandbox path): %v", err))
 	}
 
 	// Build the Sandbox CR or SandboxClaim.
