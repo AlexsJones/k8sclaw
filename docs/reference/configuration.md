@@ -11,6 +11,10 @@
 | `MAX_TOOL_ITERATIONS` | Agent Runner | Maximum LLM round-trips before the agent stops (default: 50). Each round may contain multiple parallel tool calls. Can also be set per-run via `spec.env` in AgentRun CR. |
 | `DETAILED_LOG_PATH` | Agent Runner | Directory for untruncated JSONL log files. Empty = disabled. See [Detailed Logging](../guides/detailed-logging.md). |
 | `DETAILED_LOG_MAX_SIZE` | Agent Runner | Max size per log file before rotation (default: `50m`). Supports `m` (MB) and `g` (GB) suffixes. |
+| `CONTEXT_TOOL_RESULT_MAX_BYTES` | Agent Runner | Per-result cap on tool output entering the conversation (default: 0 = off). See [Context Cost](../guides/context-cost.md). |
+| `CONTEXT_HISTORY_BUDGET_BYTES` | Agent Runner | Total tool-result bytes that triggers elision of older results (default: 0 = off). |
+| `CONTEXT_HISTORY_BUDGET_LOW_BYTES` | Agent Runner | Target to drain down to when elision fires (default: half the budget). |
+| `CONTEXT_KEEP_RECENT_RESULTS` | Agent Runner | Newest tool results never eligible for elision (default: 3). |
 | `TELEGRAM_BOT_TOKEN` | Telegram | Bot API token |
 | `SLACK_BOT_TOKEN` | Slack | Bot OAuth token |
 | `SLACK_APP_TOKEN` | Slack | App-level token for Socket Mode |

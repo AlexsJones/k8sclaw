@@ -40,6 +40,8 @@ type bedrockProvider struct {
 	initialTask string
 	messages    []types.Message
 	tools       []types.Tool
+	// toolsBytes is the serialized tool-schema size, fixed after construction.
+	toolsBytes int
 }
 
 func newBedrockProvider(ctx context.Context, model, systemPrompt, task string, tools []ToolDef) (*bedrockProvider, error) {
@@ -84,7 +86,8 @@ func newBedrockProviderWithClient(client bedrockClientAPI, model, systemPrompt, 
 				},
 			},
 		},
-		tools: bedrockTools,
+		tools:      bedrockTools,
+		toolsBytes: jsonBytes(bedrockTools),
 	}, nil
 }
 
@@ -112,7 +115,17 @@ func (p *bedrockProvider) Chat(ctx context.Context) (ChatResult, error) {
 		defer cancel()
 	}
 
-	detailedLog.LogLLM("request", map[string]any{"provider": "bedrock", "model": p.model, "system_len": len(p.system), "messages_count": len(p.messages), "tools_count": len(p.tools)})
+	if detailedLog.Enabled() {
+		detailedLog.LogLLM("request", map[string]any{
+			"provider":       "bedrock",
+			"model":          p.model,
+			"messages_count": len(p.messages),
+			"tools_count":    len(p.tools),
+			"system_bytes":   len(p.system),
+			"tools_bytes":    p.toolsBytes,
+			"messages_bytes": jsonBytes(p.messages),
+		})
+	}
 	output, err := p.client.Converse(converseCtx, input)
 	if err != nil {
 		var apiErr smithy.APIError
@@ -129,6 +142,9 @@ func (p *bedrockProvider) Chat(ctx context.Context) (ChatResult, error) {
 	if output.Usage != nil {
 		result.InputTokens = int(aws.ToInt32(output.Usage.InputTokens))
 		result.OutputTokens = int(aws.ToInt32(output.Usage.OutputTokens))
+		// Stays 0 until the Converse request carries a cachePoint content
+		// block; Bedrock caching is opt-in the same way Anthropic's is.
+		result.CachedInputTokens = int(aws.ToInt32(output.Usage.CacheReadInputTokens))
 	}
 
 	outputMsg, ok := output.Output.(*types.ConverseOutputMemberMessage)
@@ -191,6 +207,37 @@ func (p *bedrockProvider) AddToolResults(results []ToolResult) {
 		Role:    types.ConversationRoleUser,
 		Content: resultContent,
 	})
+}
+
+// ReplaceToolResults rewrites toolResult content blocks in place, keyed by
+// toolUseId. The status is carried across so an elided error still reads as an
+// error, and the block is rebuilt rather than mutated in place because the
+// SDK's content blocks are interface values.
+func (p *bedrockProvider) ReplaceToolResults(replacements map[string]string) {
+	if len(replacements) == 0 {
+		return
+	}
+	for mi := range p.messages {
+		for bi, block := range p.messages[mi].Content {
+			tr, ok := block.(*types.ContentBlockMemberToolResult)
+			if !ok {
+				continue
+			}
+			stub, ok := replacements[aws.ToString(tr.Value.ToolUseId)]
+			if !ok {
+				continue
+			}
+			p.messages[mi].Content[bi] = &types.ContentBlockMemberToolResult{
+				Value: types.ToolResultBlock{
+					ToolUseId: tr.Value.ToolUseId,
+					Content: []types.ToolResultContentBlock{
+						&types.ToolResultContentBlockMemberText{Value: stub},
+					},
+					Status: tr.Value.Status,
+				},
+			}
+		}
+	}
 }
 
 // ResetContext rebuilds the message slice to the seed state so

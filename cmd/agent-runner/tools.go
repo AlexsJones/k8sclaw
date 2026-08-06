@@ -790,6 +790,10 @@ func fetchURLTool(args map[string]any) string {
 		return "Error: url must start with http:// or https://"
 	}
 
+	// Whatever a fetch returns is appended to the conversation and re-sent on
+	// every subsequent round, so a large page is paid for many times over.
+	// Bounding that is the job of CONTEXT_TOOL_RESULT_MAX_BYTES, which applies
+	// to every tool rather than singling this one out.
 	maxChars := 50_000
 	if mc, ok := args["maxChars"].(float64); ok && mc > 0 {
 		maxChars = int(mc)
