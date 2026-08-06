@@ -190,11 +190,10 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh workflow run docs.yml
 
-  # ── Update Homebrew tap (disabled — upstream-only) ───────────────────────────
+  # ── Update Homebrew tap ──────────────────────────────────────────────────────
   update-homebrew:
     name: Update Homebrew tap
     needs: release-cli
-    if: false
     runs-on: ubuntu-latest
     steps:
       - name: Checkout tap
