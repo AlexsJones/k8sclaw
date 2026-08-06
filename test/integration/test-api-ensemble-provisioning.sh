@@ -7,6 +7,9 @@ set -euo pipefail
 
 NAMESPACE="${TEST_NAMESPACE:-default}"
 APISERVER_NAMESPACE="${SYMPOZIUM_NAMESPACE:-sympozium-system}"
+# shellcheck source=lib/resolve-token.sh
+source "$(dirname "${BASH_SOURCE[0]}")/lib/resolve-token.sh"
+
 APISERVER_URL="${APISERVER_URL:-http://127.0.0.1:19090}"
 PORT_FORWARD_LOCAL_PORT="${APISERVER_PORT:-19090}"
 SKIP_PORT_FORWARD="${SKIP_PORT_FORWARD:-0}"
@@ -98,22 +101,6 @@ api_request() {
   printf "%s" "$resp"
 }
 
-resolve_apiserver_token() {
-  if [[ -n "${APISERVER_TOKEN}" ]]; then return 0; fi
-
-  local token
-  token="$(kubectl get deploy -n "${APISERVER_NAMESPACE}" sympozium-apiserver -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="SYMPOZIUM_UI_TOKEN")].value}' 2>/dev/null || true)"
-  if [[ -n "$token" ]]; then APISERVER_TOKEN="$token"; return 0; fi
-
-  local secret_name secret_key
-  secret_name="$(kubectl get deploy -n "${APISERVER_NAMESPACE}" sympozium-apiserver -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="SYMPOZIUM_UI_TOKEN")].valueFrom.secretKeyRef.name}' 2>/dev/null || true)"
-  secret_key="$(kubectl get deploy -n "${APISERVER_NAMESPACE}" sympozium-apiserver -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="SYMPOZIUM_UI_TOKEN")].valueFrom.secretKeyRef.key}' 2>/dev/null || true)"
-  [[ -z "$secret_key" ]] && secret_key="token"
-  if [[ -n "$secret_name" ]]; then
-    token="$(kubectl get secret -n "${APISERVER_NAMESPACE}" "$secret_name" -o jsonpath="{.data.${secret_key}}" 2>/dev/null | base64 -d 2>/dev/null || true)"
-    [[ -n "$token" ]] && APISERVER_TOKEN="$token"
-  fi
-}
 
 start_port_forward_if_needed() {
   if [[ "${SKIP_PORT_FORWARD}" == "1" ]]; then return 0; fi

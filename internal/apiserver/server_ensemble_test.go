@@ -47,7 +47,7 @@ func TestPatchEnsembleRejectsMissingSecret(t *testing.T) {
 	body := `{"enabled":true,"provider":"openai","secretName":"platform-team-credentials","model":"gpt-4o"}`
 	req := httptest.NewRequest(http.MethodPatch, "/api/v1/ensembles/platform-team?namespace=default", strings.NewReader(body))
 	rec := httptest.NewRecorder()
-	srv.buildMux(nil, "").ServeHTTP(rec, req)
+	srv.buildMux(nil, nil).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d body=%s", rec.Code, rec.Body.String())
@@ -86,7 +86,7 @@ func TestPatchEnsembleAutoCreatesProviderSecretWithNewName(t *testing.T) {
 	}
 	req := httptest.NewRequest(http.MethodPatch, "/api/v1/ensembles/platform-team?namespace=default", bytes.NewReader(raw))
 	rec := httptest.NewRecorder()
-	srv.buildMux(nil, "").ServeHTTP(rec, req)
+	srv.buildMux(nil, nil).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
@@ -121,7 +121,7 @@ func TestGetEnsembleSharedMemoryProvenance_NotFound(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/ensembles/does-not-exist/shared-memory/entry-1/provenance?namespace=default", nil)
 	rec := httptest.NewRecorder()
-	srv.buildMux(nil, "").ServeHTTP(rec, req)
+	srv.buildMux(nil, nil).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("expected 404, got %d body=%s", rec.Code, rec.Body.String())
@@ -142,7 +142,7 @@ func TestGetEnsembleSharedMemoryProvenance_SharedMemoryDisabled(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/ensembles/my-ensemble/shared-memory/entry-1/provenance?namespace=default", nil)
 	rec := httptest.NewRecorder()
-	srv.buildMux(nil, "").ServeHTTP(rec, req)
+	srv.buildMux(nil, nil).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("expected 404, got %d body=%s", rec.Code, rec.Body.String())
@@ -164,7 +164,7 @@ func TestListEnsembleSharedMemory_MinKindParam(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/ensembles/my-ensemble/shared-memory?namespace=default&min_kind=insight", nil)
 	rec := httptest.NewRecorder()
-	srv.buildMux(nil, "").ServeHTTP(rec, req)
+	srv.buildMux(nil, nil).ServeHTTP(rec, req)
 
 	// The handler passes validation and tries to proxy to the in-cluster shared
 	// memory service which is unreachable in tests, so we expect 502.
@@ -185,7 +185,7 @@ func TestListEnsembleSharedMemory_SourceAgentParam(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/ensembles/my-ensemble/shared-memory?namespace=default&source_agent=agent-a", nil)
 	rec := httptest.NewRecorder()
-	srv.buildMux(nil, "").ServeHTTP(rec, req)
+	srv.buildMux(nil, nil).ServeHTTP(rec, req)
 
 	// The handler passes validation and tries to proxy to the in-cluster shared
 	// memory service which is unreachable in tests, so we expect 502.

@@ -40,12 +40,14 @@ func main() {
 	var namespace string
 	var eventBusURL string
 	var token string
+	var tokenFile string
 	var serveUI bool
 
 	flag.StringVar(&addr, "addr", ":8080", "API server listen address")
 	flag.StringVar(&namespace, "namespace", "sympozium", "Sympozium namespace")
 	flag.StringVar(&eventBusURL, "event-bus-url", "nats://nats.sympozium-system.svc:4222", "Event bus URL")
-	flag.StringVar(&token, "token", os.Getenv("SYMPOZIUM_UI_TOKEN"), "Bearer token for API authentication (or set SYMPOZIUM_UI_TOKEN)")
+	flag.StringVar(&token, "token", os.Getenv("SYMPOZIUM_UI_TOKEN"), "Bearer token for API authentication (or set SYMPOZIUM_UI_TOKEN). Used as a fallback when --token-file is missing or unreadable.")
+	flag.StringVar(&tokenFile, "token-file", "/var/run/secrets/sympozium-ui-token/token", "Path to a file containing the bearer token. The file is re-read on every request so Secret rotations take effect without a pod restart. If the file is missing, the value of --token (or SYMPOZIUM_UI_TOKEN) is used.")
 	flag.BoolVar(&serveUI, "serve-ui", true, "Serve the embedded web UI alongside the API")
 	flag.Parse()
 
@@ -127,6 +129,15 @@ func main() {
 		log.Info("llmfit density poller enabled for API server")
 	}
 
+	// Build the token reader. Prefer the file (production path: Secret
+	// volume mount); fall back to --token / SYMPOZIUM_UI_TOKEN for dev
+	// setups that don't deploy the Secret. Hoisted above the serveUI
+	// branch so the same reader is used in both modes.
+	expected := apiserver.NewTokenReader(tokenFile, log.WithName("token-reader"))
+	if expected.Current() == "" {
+		expected.Seed(token)
+	}
+
 	if serveUI {
 		// Extract the "dist" subdirectory from the embedded FS.
 		frontendFS, fsErr := fs.Sub(webui.Dist, "dist")
@@ -134,13 +145,13 @@ func main() {
 			log.Error(fsErr, "failed to load embedded frontend")
 			os.Exit(1)
 		}
-		log.Info("Serving web UI", "addr", addr, "auth", token != "")
-		if err := server.StartWithUI(addr, token, frontendFS); err != nil {
+		log.Info("Serving web UI", "addr", addr, "auth", expected.Current() != "")
+		if err := server.StartWithUI(addr, expected, frontendFS); err != nil {
 			log.Error(err, "api server failed")
 			os.Exit(1)
 		}
 	} else {
-		if err := server.Start(addr, token); err != nil {
+		if err := server.Start(addr, expected); err != nil {
 			log.Error(err, "api server failed")
 			os.Exit(1)
 		}

@@ -83,24 +83,24 @@ func (s *Server) SetDensityCache(cache *controller.DensityCache) {
 }
 
 // Start starts the HTTP server (headless, no embedded UI).
-// When token is non-empty the auth middleware is applied.
-func (s *Server) Start(addr, token string) error {
+// When expected holds a non-empty token, the auth middleware is applied.
+func (s *Server) Start(addr string, expected *tokenReader) error {
 	server := &http.Server{
 		Addr:              addr,
-		Handler:           s.buildMux(nil, token),
+		Handler:           s.buildMux(nil, expected),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
-	s.log.Info("Starting API server", "addr", addr, "auth", token != "")
+	s.log.Info("Starting API server", "addr", addr, "auth", expected != nil && expected.Current() != "")
 	return server.ListenAndServe()
 }
 
 // StartWithUI starts the HTTP server with an embedded frontend SPA
 // and optional bearer-token authentication.
-func (s *Server) StartWithUI(addr, token string, frontendFS fs.FS) error {
+func (s *Server) StartWithUI(addr string, expected *tokenReader, frontendFS fs.FS) error {
 	server := &http.Server{
 		Addr:              addr,
-		Handler:           s.buildMux(frontendFS, token),
+		Handler:           s.buildMux(frontendFS, expected),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
@@ -108,16 +108,19 @@ func (s *Server) StartWithUI(addr, token string, frontendFS fs.FS) error {
 	return server.ListenAndServe()
 }
 
-// Handler returns the HTTP handler for testing. Token may be empty to skip auth.
-func (s *Server) Handler(token string) http.Handler { return s.buildMux(nil, token) }
+// Handler returns the HTTP handler for testing. Pass nil or a reader whose
+// current() returns "" to skip auth.
+func (s *Server) Handler(expected *tokenReader) http.Handler { return s.buildMux(nil, expected) }
 
 // buildMux creates the HTTP mux with all API routes.
 // When frontendFS is non-nil, it serves the SPA for non-API paths.
-// When token is non-empty, API routes require Bearer authentication.
-func (s *Server) buildMux(frontendFS fs.FS, token string) http.Handler {
+// When expected holds a non-empty token, API routes require Bearer
+// authentication backed by the reader so the token can be rotated without
+// a pod restart.
+func (s *Server) buildMux(frontendFS fs.FS, expected *tokenReader) http.Handler {
 	// Some cluster-wide mutating routes (pricing) refuse writes outright when
 	// the server runs unauthenticated, instead of inheriting the open-API mode.
-	s.authEnabled = token != ""
+	s.authEnabled = expected != nil && expected.Current() != ""
 
 	mux := http.NewServeMux()
 
@@ -265,8 +268,8 @@ func (s *Server) buildMux(frontendFS fs.FS, token string) http.Handler {
 	)
 
 	// Wrap with auth middleware if a token is configured.
-	if token != "" {
-		return authMiddleware(token, handler)
+	if expected != nil && expected.Current() != "" {
+		return authMiddleware(expected, handler)
 	}
 
 	s.log.Info("WARNING: API server auth token is empty — /api and /ws endpoints are unauthenticated; any caller can create runs in any namespace")
@@ -276,7 +279,13 @@ func (s *Server) buildMux(frontendFS fs.FS, token string) http.Handler {
 // authMiddleware returns an http.Handler that checks for a valid Bearer token.
 // The ?token= query parameter is accepted only for WebSocket (/ws/) upgrades.
 // Health and metrics endpoints are exempted.
-func authMiddleware(expectedToken string, next http.Handler) http.Handler {
+//
+// The expected token is read through a tokenReader so that a Secret rotation
+// takes effect without a pod restart. Each request calls expected.Current(),
+// which re-reads the mounted file (one stat + read syscall pair, a few µs).
+// If the expected token is empty at request time, the middleware fails closed
+// (401) — running open is a startup decision only.
+func authMiddleware(expected *tokenReader, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		path := r.URL.Path
 
@@ -303,7 +312,25 @@ func authMiddleware(expectedToken string, next http.Handler) http.Handler {
 		if token == "" && strings.HasPrefix(path, "/ws/") {
 			token = r.URL.Query().Get("token")
 		}
-		if subtle.ConstantTimeCompare([]byte(token), []byte(expectedToken)) != 1 {
+		got := []byte(token)
+		expectedBytes := []byte(expected.Current())
+		// Fail closed: if the expected token is empty (file rotated to
+		// empty, or read failure with no cached value), reject unconditionally.
+		// Running open is a startup decision, not something a runtime
+		// rotation should be able to flip.
+		if len(expectedBytes) == 0 {
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
+		// Length-mismatch short-circuit: subtle.ConstantTimeCompare returns
+		// 0 on different-length inputs but the timing leak on length is
+		// visible. Branches on length are not a leak we care about (token
+		// length is fixed for any given deployment), so reject early.
+		if len(got) != len(expectedBytes) {
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
+		if subtle.ConstantTimeCompare(got, expectedBytes) != 1 {
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
 		}

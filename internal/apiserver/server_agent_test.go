@@ -47,7 +47,7 @@ func TestCreateInstance_NoHardcodedOTLPEndpoint(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/agents?namespace=default", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
-	srv.buildMux(nil, "").ServeHTTP(rec, req)
+	srv.buildMux(nil, nil).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("status = %d, want 201, body = %s", rec.Code, rec.Body.String())

@@ -27,6 +27,7 @@ spec:
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           args:
             - --event-bus-url={{ include "sympozium.natsUrl" . }}
+            - --token-file=/var/run/secrets/sympozium-ui-token/token
           {{- if .Values.apiserver.webUI.enabled }}
             - --serve-ui
           {{- end }}
@@ -34,13 +35,6 @@ spec:
           {{- if .Values.apiserver.webUI.token }}
             - name: SYMPOZIUM_UI_TOKEN
               value: {{ .Values.apiserver.webUI.token | quote }}
-          {{- else }}
-            - name: SYMPOZIUM_UI_TOKEN
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "sympozium.fullname" . }}-ui-token
-                  key: token
-                  optional: true
           {{- end }}
             - name: POD_NAME
               valueFrom:
@@ -100,6 +94,13 @@ spec:
             {{- toYaml .Values.apiserver.resources | nindent 12 }}
           securityContext:
             {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          {{- /* Gate must match apiserver-ui-secret.yaml */}}
+          {{- if and .Values.apiserver.webUI.enabled (not .Values.apiserver.webUI.token) }}
+          volumeMounts:
+            - name: sympozium-ui-token
+              mountPath: /var/run/secrets/sympozium-ui-token
+              readOnly: true
+          {{- end }}
       {{- with .Values.apiserver.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}
@@ -115,6 +116,17 @@ spec:
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if not .Values.apiserver.webUI.token }}
+      volumes:
+        - name: sympozium-ui-token
+          secret:
+            secretName: {{ include "sympozium.fullname" . }}-ui-token
+            # 0444 (readable by all) is required because the apiserver runs
+            # as non-root (distroless nonroot: UID 65532) and K8s Secret
+            # volume mounts are owned by root. 0400 would only be readable
+            # by root and the apiserver would 401 every request.
+            defaultMode: 0444
       {{- end }}
 ---
 apiVersion: v1

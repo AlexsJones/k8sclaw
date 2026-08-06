@@ -21,7 +21,7 @@ func TestListMCPServersEmpty(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/mcpservers?namespace=default", nil)
 	rec := httptest.NewRecorder()
-	srv.buildMux(nil, "").ServeHTTP(rec, req)
+	srv.buildMux(nil, nil).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
@@ -54,7 +54,7 @@ func TestCreateAndGetMCPServer(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/mcpservers?namespace=default", bytes.NewReader(raw))
 	rec := httptest.NewRecorder()
-	srv.buildMux(nil, "").ServeHTTP(rec, req)
+	srv.buildMux(nil, nil).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("expected 201, got %d body=%s", rec.Code, rec.Body.String())
@@ -81,7 +81,7 @@ func TestCreateAndGetMCPServer(t *testing.T) {
 	// Get via API
 	req = httptest.NewRequest(http.MethodGet, "/api/v1/mcpservers/dynatrace?namespace=default", nil)
 	rec = httptest.NewRecorder()
-	srv.buildMux(nil, "").ServeHTTP(rec, req)
+	srv.buildMux(nil, nil).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200 on get, got %d body=%s", rec.Code, rec.Body.String())
@@ -109,7 +109,7 @@ func TestCreateMCPServerWithDeployment(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/mcpservers?namespace=default", bytes.NewReader(raw))
 	rec := httptest.NewRecorder()
-	srv.buildMux(nil, "").ServeHTTP(rec, req)
+	srv.buildMux(nil, nil).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("expected 201, got %d body=%s", rec.Code, rec.Body.String())
@@ -134,7 +134,7 @@ func TestCreateMCPServerValidation(t *testing.T) {
 	payload := `{"name":"bad"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/mcpservers?namespace=default", bytes.NewBufferString(payload))
 	rec := httptest.NewRecorder()
-	srv.buildMux(nil, "").ServeHTTP(rec, req)
+	srv.buildMux(nil, nil).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d body=%s", rec.Code, rec.Body.String())
@@ -160,7 +160,7 @@ func TestCreateMCPServerDuplicate(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/mcpservers?namespace=default", bytes.NewReader(raw))
 	rec := httptest.NewRecorder()
-	srv.buildMux(nil, "").ServeHTTP(rec, req)
+	srv.buildMux(nil, nil).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusConflict {
 		t.Fatalf("expected 409, got %d body=%s", rec.Code, rec.Body.String())
@@ -179,7 +179,7 @@ func TestDeleteMCPServer(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodDelete, "/api/v1/mcpservers/to-delete?namespace=default", nil)
 	rec := httptest.NewRecorder()
-	srv.buildMux(nil, "").ServeHTTP(rec, req)
+	srv.buildMux(nil, nil).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("expected 204, got %d body=%s", rec.Code, rec.Body.String())
@@ -198,7 +198,7 @@ func TestDeleteMCPServerNotFound(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodDelete, "/api/v1/mcpservers/nonexistent?namespace=default", nil)
 	rec := httptest.NewRecorder()
-	srv.buildMux(nil, "").ServeHTTP(rec, req)
+	srv.buildMux(nil, nil).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("expected 404, got %d body=%s", rec.Code, rec.Body.String())
@@ -227,7 +227,7 @@ func TestPatchMCPServer(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodPatch, "/api/v1/mcpservers/to-patch?namespace=default", bytes.NewReader(raw))
 	rec := httptest.NewRecorder()
-	srv.buildMux(nil, "").ServeHTTP(rec, req)
+	srv.buildMux(nil, nil).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
@@ -258,7 +258,7 @@ func TestPatchMCPServerNotFound(t *testing.T) {
 	payload := `{"timeout":60}`
 	req := httptest.NewRequest(http.MethodPatch, "/api/v1/mcpservers/ghost?namespace=default", bytes.NewBufferString(payload))
 	rec := httptest.NewRecorder()
-	srv.buildMux(nil, "").ServeHTTP(rec, req)
+	srv.buildMux(nil, nil).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("expected 404, got %d body=%s", rec.Code, rec.Body.String())
@@ -278,7 +278,7 @@ func TestListMCPServersReturnsAll(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/mcpservers", nil)
 	rec := httptest.NewRecorder()
-	srv.buildMux(nil, "").ServeHTTP(rec, req)
+	srv.buildMux(nil, nil).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
@@ -298,7 +298,7 @@ func TestGetMCPServerNotFound(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/mcpservers/nope?namespace=default", nil)
 	rec := httptest.NewRecorder()
-	srv.buildMux(nil, "").ServeHTTP(rec, req)
+	srv.buildMux(nil, nil).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("expected 404, got %d body=%s", rec.Code, rec.Body.String())
@@ -322,7 +322,7 @@ func TestInstallDefaultMCPServers(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/mcpservers/install-defaults?namespace=default", nil)
 	rec := httptest.NewRecorder()
-	srv.buildMux(nil, "").ServeHTTP(rec, req)
+	srv.buildMux(nil, nil).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
@@ -351,7 +351,7 @@ func TestInstallDefaultMCPServers(t *testing.T) {
 	// Second call should report already present.
 	req2 := httptest.NewRequest(http.MethodPost, "/api/v1/mcpservers/install-defaults?namespace=default", nil)
 	rec2 := httptest.NewRecorder()
-	srv.buildMux(nil, "").ServeHTTP(rec2, req2)
+	srv.buildMux(nil, nil).ServeHTTP(rec2, req2)
 
 	var resp2 InstallDefaultMCPServersResponse
 	if err := json.Unmarshal(rec2.Body.Bytes(), &resp2); err != nil {
@@ -377,7 +377,7 @@ func TestMCPServerAuthToken(t *testing.T) {
 	body := `{"token":"ghp_test123"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/mcpservers/github/auth/token?namespace=default", strings.NewReader(body))
 	rec := httptest.NewRecorder()
-	srv.buildMux(nil, "").ServeHTTP(rec, req)
+	srv.buildMux(nil, nil).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
@@ -421,7 +421,7 @@ func TestMCPServerAuthToken(t *testing.T) {
 	// GET auth status should return complete.
 	req2 := httptest.NewRequest(http.MethodGet, "/api/v1/mcpservers/github/auth/status?namespace=default", nil)
 	rec2 := httptest.NewRecorder()
-	srv.buildMux(nil, "").ServeHTTP(rec2, req2)
+	srv.buildMux(nil, nil).ServeHTTP(rec2, req2)
 
 	var status mcpServerAuthStatusResponse
 	if err := json.Unmarshal(rec2.Body.Bytes(), &status); err != nil {
@@ -450,7 +450,7 @@ func TestPatchMCPServerSuspended(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodPatch, "/api/v1/mcpservers/suspendable?namespace=default", bytes.NewReader(raw))
 	rec := httptest.NewRecorder()
-	srv.buildMux(nil, "").ServeHTTP(rec, req)
+	srv.buildMux(nil, nil).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
@@ -471,7 +471,7 @@ func TestPatchMCPServerSuspended(t *testing.T) {
 
 	req2 := httptest.NewRequest(http.MethodPatch, "/api/v1/mcpservers/suspendable?namespace=default", bytes.NewReader(raw2))
 	rec2 := httptest.NewRecorder()
-	srv.buildMux(nil, "").ServeHTTP(rec2, req2)
+	srv.buildMux(nil, nil).ServeHTTP(rec2, req2)
 
 	if rec2.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d body=%s", rec2.Code, rec2.Body.String())
@@ -500,7 +500,7 @@ func TestCreateMCPServerWithSecretRefs(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/mcpservers?namespace=default", bytes.NewReader(raw))
 	rec := httptest.NewRecorder()
-	srv.buildMux(nil, "").ServeHTTP(rec, req)
+	srv.buildMux(nil, nil).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("expected 201, got %d body=%s", rec.Code, rec.Body.String())
