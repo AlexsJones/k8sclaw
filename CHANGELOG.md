@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.10.46](https://github.com/sympozium-ai/sympozium/compare/v0.10.45...v0.10.46) (2026-08-06)
+
+
+### Bug Fixes
+
+* **release:** enable Homebrew tap updates ([5aaf821](https://github.com/sympozium-ai/sympozium/commit/5aaf821ffdbb5ee3935f2796d2811916e73746e7))
+* **release:** enable Homebrew tap updates ([e0a3512](https://github.com/sympozium-ai/sympozium/commit/e0a35126c6a52e399fae64b57afa8f5b73d6d0b4))
+
 ## [0.10.45](https://github.com/sympozium-ai/sympozium/compare/v0.10.44...v0.10.45) (2026-08-06)
 
 
