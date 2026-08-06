@@ -15,6 +15,9 @@ set -euo pipefail
 
 NAMESPACE="${TEST_NAMESPACE:-default}"
 SYSTEM_NS="${SYMPOZIUM_NAMESPACE:-sympozium-system}"
+# shellcheck source=lib/resolve-token.sh
+source "$(dirname "${BASH_SOURCE[0]}")/lib/resolve-token.sh"
+
 APISERVER_URL="${APISERVER_URL:-http://127.0.0.1:19090}"
 PORT_FORWARD_LOCAL_PORT="${APISERVER_PORT:-19090}"
 TIMEOUT="${TEST_TIMEOUT:-120}"
@@ -51,16 +54,6 @@ cleanup() {
 }
 trap cleanup EXIT
 
-resolve_apiserver_token() {
-  [[ -n "$APISERVER_TOKEN" ]] && return 0
-  local secret_name
-  secret_name="$(kubectl get deploy -n "$SYSTEM_NS" sympozium-apiserver \
-    -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="SYMPOZIUM_UI_TOKEN")].valueFrom.secretKeyRef.name}' 2>/dev/null || true)"
-  if [[ -n "$secret_name" ]]; then
-    APISERVER_TOKEN="$(kubectl get secret -n "$SYSTEM_NS" "$secret_name" \
-      -o jsonpath='{.data.token}' 2>/dev/null | base64 -d 2>/dev/null || true)"
-  fi
-}
 
 api_request() {
   local method="$1" path="$2" body="${3:-}"

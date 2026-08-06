@@ -46,7 +46,7 @@ func TestPutSimulatedPrices_ForbiddenWhenAuthDisabled(t *testing.T) {
 	srv := newPricingTestServer(t)
 	req := httptest.NewRequest(http.MethodPut, "/api/v1/pricing/simulated", simulatedPricesBody(t))
 	rec := httptest.NewRecorder()
-	srv.buildMux(nil, "").ServeHTTP(rec, req)
+	srv.buildMux(nil, nil).ServeHTTP(rec, req)
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("status = %d, want 403, body = %s", rec.Code, rec.Body.String())
 	}
@@ -54,7 +54,7 @@ func TestPutSimulatedPrices_ForbiddenWhenAuthDisabled(t *testing.T) {
 
 func TestPutSimulatedPrices_PersistsAndGetReturns(t *testing.T) {
 	srv := newPricingTestServer(t)
-	mux := srv.buildMux(nil, "secret")
+	mux := srv.buildMux(nil, newTestTokenReader("secret"))
 
 	req := httptest.NewRequest(http.MethodPut, "/api/v1/pricing/simulated", simulatedPricesBody(t))
 	req.Header.Set("Authorization", "Bearer secret")
@@ -100,7 +100,7 @@ func TestPutSimulatedPrices_PersistsAndGetReturns(t *testing.T) {
 
 func TestPutSimulatedPrices_Validation(t *testing.T) {
 	srv := newPricingTestServer(t)
-	mux := srv.buildMux(nil, "secret")
+	mux := srv.buildMux(nil, newTestTokenReader("secret"))
 
 	for name, prices := range map[string][]sympoziumv1alpha1.SimulatedPrice{
 		"zero rate":     {{Provider: "openai", Match: "gpt-4o", InputPerMTokMicro: 0, OutputPerMTokMicro: 1}},
@@ -143,7 +143,7 @@ func TestGetRun_SimulatedOverlayForLocalProvider(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/runs/run-1?namespace=default", nil)
 	rec := httptest.NewRecorder()
-	srv.buildMux(nil, "").ServeHTTP(rec, req)
+	srv.buildMux(nil, nil).ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d", rec.Code)
 	}
@@ -184,7 +184,7 @@ func TestGetRun_NoOverlayWhenDisabled(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/runs/run-1?namespace=default", nil)
 	rec := httptest.NewRecorder()
-	srv.buildMux(nil, "").ServeHTTP(rec, req)
+	srv.buildMux(nil, nil).ServeHTTP(rec, req)
 
 	if bytes.Contains(rec.Body.Bytes(), []byte("simulatedCostEstimate")) {
 		t.Fatal("expected no simulatedCostEstimate when overlay disabled")
@@ -199,7 +199,7 @@ func TestDeleteSimulatedPrices(t *testing.T) {
 		},
 	}
 	srv := newPricingTestServer(t, config)
-	mux := srv.buildMux(nil, "secret")
+	mux := srv.buildMux(nil, newTestTokenReader("secret"))
 
 	req := httptest.NewRequest(http.MethodDelete, "/api/v1/pricing/simulated", nil)
 	req.Header.Set("Authorization", "Bearer secret")

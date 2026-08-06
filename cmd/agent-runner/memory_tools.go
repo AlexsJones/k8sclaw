@@ -9,7 +9,6 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"strconv"
 	"strings"
 	"time"
 
@@ -409,17 +408,6 @@ func autoStoreEnabled() bool {
 	default:
 		return true
 	}
-}
-
-// envInt returns the integer value of the named env var, or fallback when unset
-// or unparseable.
-func envInt(key string, fallback int) int {
-	if v := strings.TrimSpace(os.Getenv(key)); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			return n
-		}
-	}
-	return fallback
 }
 
 func initMemoryTools() []ToolDef {

@@ -112,6 +112,15 @@ spec:
                         ChannelAccessControl for this agent configuration. Use AllowedChats with Discord
                         channel IDs to route specific Discord channels to this persona.
                       type: object
+                    channelConfigs:
+                      additionalProperties:
+                        type: string
+                      description: |-
+                        ChannelConfigs maps a channel type to the Secret holding its credentials,
+                        for this agent config only. An entry replaces the ensemble-level
+                        spec.channelConfigs value for that channel type, so one agent config can
+                        use a different bot token from the rest of the ensemble.
+                      type: object
                     channelTriggers:
                       additionalProperties:
                         description: |-
@@ -496,6 +505,13 @@ spec:
                           description: Enabled indicates whether persistent memory
                             is active.
                           type: boolean
+                        maxSizeKB:
+                          default: 256
+                          description: |-
+                            MaxSizeKB caps the size of the agent's MEMORY.md.
+                            Mirrors AgentSpec.memory.maxSizeKB so the setting is expressible on the
+                            ensemble rather than only by editing a generated Agent.
+                          type: integer
                         seeds:
                           description: Seeds is a list of initial memory entries injected
                             into MEMORY.md.
@@ -586,6 +602,17 @@ spec:
                       required:
                       - task
                       - type
+                      type: object
+                    skillParams:
+                      additionalProperties:
+                        additionalProperties:
+                          type: string
+                        type: object
+                      description: |-
+                        SkillParams provides per-skill parameters for this agent config only.
+                        An entry replaces the ensemble-level spec.skillParams map for that skill
+                        outright rather than merging key by key, so a config that needs different
+                        parameters restates them in full.
                       type: object
                     skills:
                       description: Skills lists SkillPack references to mount into
@@ -698,6 +725,23 @@ spec:
                         hostname:
                           description: Hostname overrides the auto-derived hostname.
                           type: string
+                        rateLimit:
+                          description: |-
+                            RateLimit bounds requests to the endpoint. Mirrors the rate limit the
+                            agents API accepts when patching a standalone Agent, so the setting is
+                            expressible on the ensemble rather than only by editing a generated Agent.
+                          properties:
+                            burstSize:
+                              default: 10
+                              description: BurstSize allows short bursts above the
+                                rate limit.
+                              type: integer
+                            requestsPerMinute:
+                              default: 60
+                              description: RequestsPerMinute is the maximum requests
+                                per minute per API key.
+                              type: integer
+                          type: object
                       required:
                       - enabled
                       type: object

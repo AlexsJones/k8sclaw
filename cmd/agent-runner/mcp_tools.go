@@ -254,9 +254,15 @@ func formatMCPResult(r mcpResult, toolName string) string {
 		output = "(no output)"
 	}
 	if len(output) > 8_000 {
-		// Truncate at a valid UTF-8 boundary
+		// Back off over a rune split by the cut — at most UTFMax-1 bytes. Only
+		// the trailing rune is examined: validating the whole prefix would be
+		// quadratic and would rewind to the first invalid byte anywhere in the
+		// output, discarding everything after it for binary-ish results.
 		truncated := output[:8_000]
-		for !utf8.ValidString(truncated) && len(truncated) > 0 {
+		for i := 0; i < utf8.UTFMax-1 && len(truncated) > 0; i++ {
+			if r, size := utf8.DecodeLastRuneInString(truncated); r != utf8.RuneError || size > 1 {
+				break
+			}
 			truncated = truncated[:len(truncated)-1]
 		}
 		output = truncated + "\n... (output truncated)"

@@ -1,5 +1,42 @@
 # Changelog
 
+## [0.10.46](https://github.com/sympozium-ai/sympozium/compare/v0.10.45...v0.10.46) (2026-08-06)
+
+
+### Bug Fixes
+
+* **release:** enable Homebrew tap updates ([5aaf821](https://github.com/sympozium-ai/sympozium/commit/5aaf821ffdbb5ee3935f2796d2811916e73746e7))
+* **release:** enable Homebrew tap updates ([e0a3512](https://github.com/sympozium-ai/sympozium/commit/e0a35126c6a52e399fae64b57afa8f5b73d6d0b4))
+
+## [0.10.45](https://github.com/sympozium-ai/sympozium/compare/v0.10.44...v0.10.45) (2026-08-06)
+
+
+### Features
+
+* agent edit redirect ([#320](https://github.com/sympozium-ai/sympozium/issues/320)) ([c270aaf](https://github.com/sympozium-ai/sympozium/commit/c270aafc4ce120e3f558a1d3f1c2ac1ccf700554))
+
+## [0.10.44](https://github.com/sympozium-ai/sympozium/compare/v0.10.43...v0.10.44) (2026-08-06)
+
+
+### Features
+
+* **agent-runner:** add opt-in detailed JSONL file logging with per-run directories ([#238](https://github.com/sympozium-ai/sympozium/issues/238)) ([6d52537](https://github.com/sympozium-ai/sympozium/commit/6d52537bcad973f0af37e0fa8afaceecaa910492))
+* **apiserver:** reload SYMPOZIUM_UI_TOKEN from a mounted file ([#315](https://github.com/sympozium-ai/sympozium/issues/315)) ([28cb1b7](https://github.com/sympozium-ai/sympozium/commit/28cb1b7c52acfff50532a0aa002d46b302104681))
+* compact old tool results ([#316](https://github.com/sympozium-ai/sympozium/issues/316)) ([460798d](https://github.com/sympozium-ai/sympozium/commit/460798d947938293e7fbfc5ce493c9680bcef8d2))
+* **crd:** gate ensemble auto-start with stimulus.trigger and schedule.firstTick ([b5ea9d3](https://github.com/sympozium-ai/sympozium/commit/b5ea9d33cf614a4cd034c26e88e20653ca08c7cd))
+* **sidecar-driven:** polymorphic task + TaskModeHandler registry ([#302](https://github.com/sympozium-ai/sympozium/issues/302)) ([c3038ea](https://github.com/sympozium-ai/sympozium/commit/c3038ea4065a02763059ac55c794e45e858ab9c1))
+* stimulus trigger gating, workstation topology demo, and buildable demo hardware ([4d39487](https://github.com/sympozium-ai/sympozium/commit/4d394873a4132fba73416ce83c5dba9805ed7e46))
+* **web:** draw demo topology nodes as workstations with accelerator bays ([129cdba](https://github.com/sympozium-ai/sympozium/commit/129cdbab774aa0423e639634a66dff40177029d0))
+* **web:** let the ensemble builder choose the stimulus trigger mode ([bc5a8cb](https://github.com/sympozium-ai/sympozium/commit/bc5a8cbabb57b32570cd9822a4d1d60ed1012cc4))
+
+
+### Bug Fixes
+
+* **controller:** make sequential handoff truncation legible ([bae9701](https://github.com/sympozium-ai/sympozium/commit/bae9701bf97cdb55471fdf4706cf73b4def31854))
+* **crd:** accept both string-form and object-form spec.task at admission ([#312](https://github.com/sympozium-ai/sympozium/issues/312)) ([a29016c](https://github.com/sympozium-ai/sympozium/commit/a29016c2d833ac23cc54da33a4e205d32fc3cd77))
+* **examples:** give the research demo a brief that actually directs research ([de77fda](https://github.com/sympozium-ai/sympozium/commit/de77fdad7e00c05b68326831115894185e8cd0ad))
+* **web:** make demo topology hardware physically buildable ([eaedf1d](https://github.com/sympozium-ai/sympozium/commit/eaedf1d910f03ead6a7d508799b144c2f9dfb87a))
+
 ## [0.10.43](https://github.com/sympozium-ai/sympozium/compare/v0.10.42...v0.10.43) (2026-07-15)
 
 

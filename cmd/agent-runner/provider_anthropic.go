@@ -19,6 +19,8 @@ type anthropicProvider struct {
 	initialTask string
 	messages    []anthropic.MessageParam
 	tools       []anthropic.ToolUnionParam
+	// toolsBytes is the serialized tool-schema size, fixed after construction.
+	toolsBytes int
 }
 
 func newAnthropicProvider(apiKey, baseURL, model, systemPrompt, task string, tools []ToolDef, headers map[string]string) *anthropicProvider {
@@ -59,7 +61,8 @@ func newAnthropicProvider(apiKey, baseURL, model, systemPrompt, task string, too
 		messages: []anthropic.MessageParam{
 			anthropic.NewUserMessage(anthropic.NewTextBlock(task)),
 		},
-		tools: anthropicTools,
+		tools:      anthropicTools,
+		toolsBytes: jsonBytes(anthropicTools),
 	}
 }
 
@@ -79,7 +82,17 @@ func (p *anthropicProvider) Chat(ctx context.Context) (ChatResult, error) {
 		params.Tools = p.tools
 	}
 
-	detailedLog.LogLLM("request", map[string]any{"provider": "anthropic", "model": p.model, "messages_count": len(p.messages), "tools_count": len(p.tools)})
+	if detailedLog.Enabled() {
+		detailedLog.LogLLM("request", map[string]any{
+			"provider":       "anthropic",
+			"model":          p.model,
+			"messages_count": len(p.messages),
+			"tools_count":    len(p.tools),
+			"system_bytes":   len(p.system),
+			"tools_bytes":    p.toolsBytes,
+			"messages_bytes": jsonBytes(p.messages),
+		})
+	}
 	msg, err := p.client.Messages.New(ctx, params)
 	if err != nil {
 		var apiErr *anthropic.Error
@@ -102,10 +115,18 @@ func (p *anthropicProvider) Chat(ctx context.Context) (ChatResult, error) {
 	}
 
 	result := ChatResult{
-		Text:         textContent.String(),
-		InputTokens:  int(msg.Usage.InputTokens),
-		OutputTokens: int(msg.Usage.OutputTokens),
-		FinishReason: string(msg.StopReason),
+		Text:        textContent.String(),
+		InputTokens: int(msg.Usage.InputTokens),
+		// Anthropic reports input_tokens as the *uncached* remainder, with the
+		// cached portion counted separately — the opposite of OpenAI, where
+		// cached tokens are a subset of prompt_tokens.
+		//
+		// This stays 0 until the request carries cache_control breakpoints:
+		// Anthropic caching is opt-in per content block, and none are set here
+		// yet. Wired up now so enabling caching later needs no plumbing change.
+		CachedInputTokens: int(msg.Usage.CacheReadInputTokens),
+		OutputTokens:      int(msg.Usage.OutputTokens),
+		FinishReason:      string(msg.StopReason),
 	}
 
 	// Continue the loop only when the model explicitly stopped to call
@@ -142,6 +163,35 @@ func (p *anthropicProvider) AddToolResults(results []ToolResult) {
 		blocks = append(blocks, anthropic.NewToolResultBlock(r.CallID, r.Content, r.IsError))
 	}
 	p.messages = append(p.messages, anthropic.NewUserMessage(blocks...))
+}
+
+// ReplaceToolResults rewrites tool_result blocks in place, keyed by
+// tool_use_id. Anthropic carries tool results as content blocks inside user
+// messages, so this walks blocks rather than messages. The is_error flag is
+// carried across so an elided failure still reads as a failure.
+//
+// The block is rebuilt text-only: NewToolResultBlock takes a string, and every
+// result this runner produces today is text. If tool_result content ever grows
+// image blocks, this drops them silently — the replacement would then have to
+// carry a content union rather than a string.
+func (p *anthropicProvider) ReplaceToolResults(replacements map[string]string) {
+	if len(replacements) == 0 {
+		return
+	}
+	for mi := range p.messages {
+		for bi := range p.messages[mi].Content {
+			tr := p.messages[mi].Content[bi].OfToolResult
+			if tr == nil {
+				continue
+			}
+			stub, ok := replacements[tr.ToolUseID]
+			if !ok {
+				continue
+			}
+			p.messages[mi].Content[bi] = anthropic.NewToolResultBlock(
+				tr.ToolUseID, stub, tr.IsError.Or(false))
+		}
+	}
 }
 
 // ResetContext rebuilds the message slice to the seed state so

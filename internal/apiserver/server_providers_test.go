@@ -36,7 +36,7 @@ func TestListProviderNodes_Empty(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/providers/nodes?namespace=default", nil)
 	rec := httptest.NewRecorder()
-	srv.buildMux(nil, "").ServeHTTP(rec, req)
+	srv.buildMux(nil, nil).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200, body = %s", rec.Code, rec.Body.String())
@@ -76,7 +76,7 @@ func TestListProviderNodes_WithAnnotations(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/providers/nodes?namespace=default", nil)
 	rec := httptest.NewRecorder()
-	srv.buildMux(nil, "").ServeHTTP(rec, req)
+	srv.buildMux(nil, nil).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200, body = %s", rec.Code, rec.Body.String())
@@ -137,7 +137,7 @@ func TestListProviderNodes_FilterByProvider(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/providers/nodes?namespace=default&provider=ollama", nil)
 	rec := httptest.NewRecorder()
-	srv.buildMux(nil, "").ServeHTTP(rec, req)
+	srv.buildMux(nil, nil).ServeHTTP(rec, req)
 
 	var nodes []ProviderNode
 	json.Unmarshal(rec.Body.Bytes(), &nodes)
@@ -168,7 +168,7 @@ func TestListProviderNodes_SkipsUnhealthyNodes(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/providers/nodes?namespace=default", nil)
 	rec := httptest.NewRecorder()
-	srv.buildMux(nil, "").ServeHTTP(rec, req)
+	srv.buildMux(nil, nil).ServeHTTP(rec, req)
 
 	var nodes []ProviderNode
 	json.Unmarshal(rec.Body.Bytes(), &nodes)
@@ -183,7 +183,7 @@ func TestProxyProviderModels_MissingBaseURL(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/providers/models?namespace=default", nil)
 	rec := httptest.NewRecorder()
-	srv.buildMux(nil, "").ServeHTTP(rec, req)
+	srv.buildMux(nil, nil).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusBadRequest {
 		t.Errorf("status = %d, want 400", rec.Code)
@@ -195,7 +195,7 @@ func TestProxyProviderModels_SSRFBlocksLinkLocal(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/providers/models?namespace=default&baseURL=http://169.254.169.254/latest/meta-data/", nil)
 	rec := httptest.NewRecorder()
-	srv.buildMux(nil, "").ServeHTTP(rec, req)
+	srv.buildMux(nil, nil).ServeHTTP(rec, req)
 
 	// Should be blocked — either 400 (can't resolve) or 403 (link-local blocked)
 	if rec.Code != http.StatusBadRequest && rec.Code != http.StatusForbidden {
@@ -208,7 +208,7 @@ func TestProxyProviderModels_InvalidScheme(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/providers/models?namespace=default&baseURL=ftp://example.com", nil)
 	rec := httptest.NewRecorder()
-	srv.buildMux(nil, "").ServeHTTP(rec, req)
+	srv.buildMux(nil, nil).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusBadRequest {
 		t.Errorf("status = %d, want 400", rec.Code)

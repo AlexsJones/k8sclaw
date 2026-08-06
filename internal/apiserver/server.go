@@ -35,6 +35,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	sympoziumv1alpha1 "github.com/sympozium-ai/sympozium/api/v1alpha1"
+	"github.com/sympozium-ai/sympozium/internal/agentedit"
 	"github.com/sympozium-ai/sympozium/internal/controller"
 	"github.com/sympozium-ai/sympozium/internal/eventbus"
 )
@@ -83,24 +84,24 @@ func (s *Server) SetDensityCache(cache *controller.DensityCache) {
 }
 
 // Start starts the HTTP server (headless, no embedded UI).
-// When token is non-empty the auth middleware is applied.
-func (s *Server) Start(addr, token string) error {
+// When expected holds a non-empty token, the auth middleware is applied.
+func (s *Server) Start(addr string, expected *tokenReader) error {
 	server := &http.Server{
 		Addr:              addr,
-		Handler:           s.buildMux(nil, token),
+		Handler:           s.buildMux(nil, expected),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
-	s.log.Info("Starting API server", "addr", addr, "auth", token != "")
+	s.log.Info("Starting API server", "addr", addr, "auth", expected != nil && expected.Current() != "")
 	return server.ListenAndServe()
 }
 
 // StartWithUI starts the HTTP server with an embedded frontend SPA
 // and optional bearer-token authentication.
-func (s *Server) StartWithUI(addr, token string, frontendFS fs.FS) error {
+func (s *Server) StartWithUI(addr string, expected *tokenReader, frontendFS fs.FS) error {
 	server := &http.Server{
 		Addr:              addr,
-		Handler:           s.buildMux(frontendFS, token),
+		Handler:           s.buildMux(frontendFS, expected),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
@@ -108,16 +109,19 @@ func (s *Server) StartWithUI(addr, token string, frontendFS fs.FS) error {
 	return server.ListenAndServe()
 }
 
-// Handler returns the HTTP handler for testing. Token may be empty to skip auth.
-func (s *Server) Handler(token string) http.Handler { return s.buildMux(nil, token) }
+// Handler returns the HTTP handler for testing. Pass nil or a reader whose
+// current() returns "" to skip auth.
+func (s *Server) Handler(expected *tokenReader) http.Handler { return s.buildMux(nil, expected) }
 
 // buildMux creates the HTTP mux with all API routes.
 // When frontendFS is non-nil, it serves the SPA for non-API paths.
-// When token is non-empty, API routes require Bearer authentication.
-func (s *Server) buildMux(frontendFS fs.FS, token string) http.Handler {
+// When expected holds a non-empty token, API routes require Bearer
+// authentication backed by the reader so the token can be rotated without
+// a pod restart.
+func (s *Server) buildMux(frontendFS fs.FS, expected *tokenReader) http.Handler {
 	// Some cluster-wide mutating routes (pricing) refuse writes outright when
 	// the server runs unauthenticated, instead of inheriting the open-API mode.
-	s.authEnabled = token != ""
+	s.authEnabled = expected != nil && expected.Current() != ""
 
 	mux := http.NewServeMux()
 
@@ -265,8 +269,8 @@ func (s *Server) buildMux(frontendFS fs.FS, token string) http.Handler {
 	)
 
 	// Wrap with auth middleware if a token is configured.
-	if token != "" {
-		return authMiddleware(token, handler)
+	if expected != nil && expected.Current() != "" {
+		return authMiddleware(expected, handler)
 	}
 
 	s.log.Info("WARNING: API server auth token is empty — /api and /ws endpoints are unauthenticated; any caller can create runs in any namespace")
@@ -276,7 +280,13 @@ func (s *Server) buildMux(frontendFS fs.FS, token string) http.Handler {
 // authMiddleware returns an http.Handler that checks for a valid Bearer token.
 // The ?token= query parameter is accepted only for WebSocket (/ws/) upgrades.
 // Health and metrics endpoints are exempted.
-func authMiddleware(expectedToken string, next http.Handler) http.Handler {
+//
+// The expected token is read through a tokenReader so that a Secret rotation
+// takes effect without a pod restart. Each request calls expected.Current(),
+// which re-reads the mounted file (one stat + read syscall pair, a few µs).
+// If the expected token is empty at request time, the middleware fails closed
+// (401) — running open is a startup decision only.
+func authMiddleware(expected *tokenReader, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		path := r.URL.Path
 
@@ -303,7 +313,25 @@ func authMiddleware(expectedToken string, next http.Handler) http.Handler {
 		if token == "" && strings.HasPrefix(path, "/ws/") {
 			token = r.URL.Query().Get("token")
 		}
-		if subtle.ConstantTimeCompare([]byte(token), []byte(expectedToken)) != 1 {
+		got := []byte(token)
+		expectedBytes := []byte(expected.Current())
+		// Fail closed: if the expected token is empty (file rotated to
+		// empty, or read failure with no cached value), reject unconditionally.
+		// Running open is a startup decision, not something a runtime
+		// rotation should be able to flip.
+		if len(expectedBytes) == 0 {
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
+		// Length-mismatch short-circuit: subtle.ConstantTimeCompare returns
+		// 0 on different-length inputs but the timing leak on length is
+		// visible. Branches on length are not a leak we care about (token
+		// length is fixed for any given deployment), so reject early.
+		if len(got) != len(expectedBytes) {
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
+		if subtle.ConstantTimeCompare(got, expectedBytes) != 1 {
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
 		}
@@ -430,65 +458,68 @@ func (s *Server) patchAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Build the edit rather than mutating the Agent directly: agentedit routes it
+	// to the owning Ensemble's agent config when the Agent is ensemble-managed, so
+	// the change is not reverted by the next reconcile.
+	edit := agentedit.Edit{}
+
 	if req.WebEndpoint != nil {
-		if req.WebEndpoint.Enabled != nil && !*req.WebEndpoint.Enabled {
-			// Disable — remove the web-endpoint skill.
-			var filtered []sympoziumv1alpha1.SkillRef
-			for _, s := range inst.Spec.Skills {
-				if s.SkillPackRef != "web-endpoint" && s.SkillPackRef != "skillpack-web-endpoint" {
-					filtered = append(filtered, s)
-				}
-			}
-			inst.Spec.Skills = filtered
-		} else {
-			// Enable — add web-endpoint as a skill.
-			params := map[string]string{}
-			if req.WebEndpoint.Hostname != nil && *req.WebEndpoint.Hostname != "" {
-				params["hostname"] = *req.WebEndpoint.Hostname
+		we := &agentedit.WebEndpointEdit{
+			Enabled: req.WebEndpoint.Enabled == nil || *req.WebEndpoint.Enabled,
+		}
+		if we.Enabled {
+			if req.WebEndpoint.Hostname != nil {
+				we.Hostname = *req.WebEndpoint.Hostname
 			}
 			if req.WebEndpoint.RateLimit != nil && req.WebEndpoint.RateLimit.RequestsPerMinute != nil {
-				params["rate_limit_rpm"] = fmt.Sprintf("%d", *req.WebEndpoint.RateLimit.RequestsPerMinute)
-			}
-
-			// Check if web-endpoint skill already exists.
-			found := false
-			for i, s := range inst.Spec.Skills {
-				if s.SkillPackRef == "web-endpoint" || s.SkillPackRef == "skillpack-web-endpoint" {
-					inst.Spec.Skills[i].Params = params
-					found = true
-					break
-				}
-			}
-			if !found {
-				inst.Spec.Skills = append(inst.Spec.Skills, sympoziumv1alpha1.SkillRef{
-					SkillPackRef: "web-endpoint",
-					Params:       params,
-				})
+				we.RequestsPerMinute = *req.WebEndpoint.RateLimit.RequestsPerMinute
 			}
 		}
+		edit.WebEndpoint = we
 	}
 
 	// Apply lifecycle hooks patch.
 	if req.Lifecycle != nil {
-		hasHooks := len(req.Lifecycle.PreRun) > 0 || len(req.Lifecycle.PostRun) > 0 || len(req.Lifecycle.RBAC) > 0
-		if hasHooks {
-			inst.Spec.Agents.Default.Lifecycle = req.Lifecycle
-		} else {
-			inst.Spec.Agents.Default.Lifecycle = nil
+		hooks := req.Lifecycle
+		if len(hooks.PreRun) == 0 && len(hooks.PostRun) == 0 && len(hooks.RBAC) == 0 {
+			hooks = nil
 		}
+		edit.Lifecycle = &hooks
 	}
 
 	// Apply requireApproval toggle. This adds or removes a built-in manual
 	// gate hook that sleeps until an operator approves via the UI or API.
+	// It composes with the lifecycle patch above, so it is applied to a copy of
+	// the Agent and the resulting hooks are handed to agentedit.
 	if req.RequireApproval != nil {
-		applyRequireApproval(&inst, *req.RequireApproval)
+		staged := inst.DeepCopy()
+		if edit.Lifecycle != nil {
+			staged.Spec.Agents.Default.Lifecycle = *edit.Lifecycle
+		}
+		applyRequireApproval(staged, *req.RequireApproval)
+		hooks := staged.Spec.Agents.Default.Lifecycle
+		edit.Lifecycle = &hooks
 	}
 
-	if err := s.client.Update(r.Context(), &inst); err != nil {
+	target, err := agentedit.Apply(r.Context(), s.client, &inst, edit)
+	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
+	// The body stays the Agent, as clients expect; the header says where the edit
+	// landed and whether it has taken effect. agentedit waits for an
+	// ensemble-routed edit to reach the Agent before returning, so a client
+	// re-reading on success normally sees the new values — except when the header
+	// reports "still updating", in which case its next poll will pick them up.
+	//
+	// inst is re-read so the body reflects the reconciled state rather than what
+	// was fetched at the top of the handler.
+	if err := s.client.Get(r.Context(), types.NamespacedName{Name: name, Namespace: ns}, &inst); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("X-Sympozium-Applied-To", target.String())
 	writeJSON(w, inst)
 }
 
