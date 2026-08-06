@@ -4,8 +4,8 @@ description: >-
   Sympozium CustomResourceDefinitions — installed and upgraded as ordinary Helm
   resources so they participate in `helm upgrade`.
 type: application
-version: 0.10.43
-appVersion: 0.10.43
+version: 0.10.44
+appVersion: 0.10.44
 home: https://github.com/sympozium-ai/sympozium
 sources:
   - https://github.com/sympozium-ai/sympozium
