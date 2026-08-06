@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.45](https://github.com/sympozium-ai/sympozium/compare/v0.10.44...v0.10.45) (2026-08-06)
+
+
+### Features
+
+* agent edit redirect ([#320](https://github.com/sympozium-ai/sympozium/issues/320)) ([c270aaf](https://github.com/sympozium-ai/sympozium/commit/c270aafc4ce120e3f558a1d3f1c2ac1ccf700554))
+
 ## [0.10.44](https://github.com/sympozium-ai/sympozium/compare/v0.10.43...v0.10.44) (2026-08-06)
 
 
