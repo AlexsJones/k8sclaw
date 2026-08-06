@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"reflect"
+	"strconv"
 	"strings"
 	"time"
 
@@ -552,6 +553,17 @@ func (r *EnsembleReconciler) buildAgent(
 		labels["sympozium.ai/provider"] = persona.Provider
 	}
 
+	// Memory settings come from the agent config when it declares them. Absent a
+	// memory block the historical defaults apply, so ensembles written before
+	// these fields existed render exactly as before.
+	memoryEnabled, memoryMaxSizeKB := true, 256
+	if persona.Memory != nil {
+		memoryEnabled = persona.Memory.Enabled
+		if persona.Memory.MaxSizeKB > 0 {
+			memoryMaxSizeKB = persona.Memory.MaxSizeKB
+		}
+	}
+
 	inst := &sympoziumv1alpha1.Agent{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      instanceName,
@@ -575,8 +587,8 @@ func (r *EnsembleReconciler) buildAgent(
 			},
 			AuthRefs: authRefs,
 			Memory: &sympoziumv1alpha1.MemorySpec{
-				Enabled:      true,
-				MaxSizeKB:    256,
+				Enabled:      memoryEnabled,
+				MaxSizeKB:    memoryMaxSizeKB,
 				SystemPrompt: persona.SystemPrompt,
 			},
 			Observability: defaultObservabilitySpec(),
@@ -895,10 +907,12 @@ func mergeProviderHeaders(ensembleHeaders, personaHeaders map[string]string) map
 // over ensemble-level defaults for AccessControl and Triggers.
 func buildChannelSpec(pack *sympoziumv1alpha1.Ensemble, persona *sympoziumv1alpha1.AgentConfigSpec, ch string) sympoziumv1alpha1.ChannelSpec {
 	cs := sympoziumv1alpha1.ChannelSpec{Type: ch}
-	if pack.Spec.ChannelConfigs != nil {
-		if secretName, ok := pack.Spec.ChannelConfigs[ch]; ok && secretName != "" {
-			cs.ConfigRef = sympoziumv1alpha1.SecretRef{Secret: secretName}
-		}
+	// An agent config's own credential replaces the ensemble-level one for that
+	// channel type, so one config can use a different bot token from the rest.
+	if secretName, ok := persona.ChannelConfigs[ch]; ok && secretName != "" {
+		cs.ConfigRef = sympoziumv1alpha1.SecretRef{Secret: secretName}
+	} else if secretName, ok := pack.Spec.ChannelConfigs[ch]; ok && secretName != "" {
+		cs.ConfigRef = sympoziumv1alpha1.SecretRef{Secret: secretName}
 	}
 	if persona.ChannelAccessControl != nil {
 		if ac, ok := persona.ChannelAccessControl[ch]; ok {
@@ -949,10 +963,13 @@ func buildDesiredSkills(pack *sympoziumv1alpha1.Ensemble, persona *sympoziumv1al
 		ref := sympoziumv1alpha1.SkillRef{
 			SkillPackRef: s,
 		}
-		if pack.Spec.SkillParams != nil {
-			if params, ok := pack.Spec.SkillParams[s]; ok && len(params) > 0 {
-				ref.Params = params
-			}
+		// An agent config's own params replace the ensemble-level map for that
+		// skill outright — full override, not a key-by-key merge — so a config
+		// that needs different parameters restates them in full.
+		if params, ok := persona.SkillParams[s]; ok && len(params) > 0 {
+			ref.Params = params
+		} else if params, ok := pack.Spec.SkillParams[s]; ok && len(params) > 0 {
+			ref.Params = params
 		}
 		skills = append(skills, ref)
 	}
@@ -971,11 +988,20 @@ func buildDesiredSkills(pack *sympoziumv1alpha1.Ensemble, persona *sympoziumv1al
 		})
 	}
 
-	// Web endpoint skill.
+	// Web endpoint skill. Its params are derived here rather than taken from
+	// skillParams, so a persona entry for "web-endpoint" cannot clobber them.
 	if persona.WebEndpoint != nil && persona.WebEndpoint.Enabled {
 		params := map[string]string{}
 		if persona.WebEndpoint.Hostname != "" {
 			params["hostname"] = persona.WebEndpoint.Hostname
+		}
+		if rl := persona.WebEndpoint.RateLimit; rl != nil {
+			if rl.RequestsPerMinute > 0 {
+				params["rate_limit_rpm"] = strconv.Itoa(rl.RequestsPerMinute)
+			}
+			if rl.BurstSize > 0 {
+				params["rate_limit_burst"] = strconv.Itoa(rl.BurstSize)
+			}
 		}
 		skills = append(skills, sympoziumv1alpha1.SkillRef{
 			SkillPackRef: "web-endpoint",

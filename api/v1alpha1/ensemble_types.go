@@ -213,6 +213,20 @@ type AgentConfigSpec struct {
 	// +optional
 	Skills []string `json:"skills,omitempty"`
 
+	// SkillParams provides per-skill parameters for this agent config only.
+	// An entry replaces the ensemble-level spec.skillParams map for that skill
+	// outright rather than merging key by key, so a config that needs different
+	// parameters restates them in full.
+	// +optional
+	SkillParams map[string]map[string]string `json:"skillParams,omitempty"`
+
+	// ChannelConfigs maps a channel type to the Secret holding its credentials,
+	// for this agent config only. An entry replaces the ensemble-level
+	// spec.channelConfigs value for that channel type, so one agent config can
+	// use a different bot token from the rest of the ensemble.
+	// +optional
+	ChannelConfigs map[string]string `json:"channelConfigs,omitempty"`
+
 	// ToolPolicy defines which tools this agent config is allowed to use.
 	// +optional
 	ToolPolicy *AgentConfigToolPolicy `json:"toolPolicy,omitempty"`
@@ -300,6 +314,12 @@ type AgentConfigWebEndpoint struct {
 	// Hostname overrides the auto-derived hostname.
 	// +optional
 	Hostname string `json:"hostname,omitempty"`
+
+	// RateLimit bounds requests to the endpoint. Mirrors the rate limit the
+	// agents API accepts when patching a standalone Agent, so the setting is
+	// expressible on the ensemble rather than only by editing a generated Agent.
+	// +optional
+	RateLimit *RateLimitSpec `json:"rateLimit,omitempty"`
 }
 
 // AgentConfigToolPolicy defines tool access for an agent configuration.
@@ -350,6 +370,13 @@ type AgentConfigMemory struct {
 	// Enabled indicates whether persistent memory is active.
 	// +kubebuilder:default=true
 	Enabled bool `json:"enabled"`
+
+	// MaxSizeKB caps the size of the agent's MEMORY.md.
+	// Mirrors AgentSpec.memory.maxSizeKB so the setting is expressible on the
+	// ensemble rather than only by editing a generated Agent.
+	// +optional
+	// +kubebuilder:default=256
+	MaxSizeKB int `json:"maxSizeKB,omitempty"`
 
 	// Seeds is a list of initial memory entries injected into MEMORY.md.
 	// +optional
