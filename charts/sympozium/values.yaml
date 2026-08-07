@@ -378,13 +378,13 @@ agentSandbox:
 # Requires: Celln router deployed (see celln repo integrations/kubernetes/)
 # and celln host dispatcher installed on each KVM node (scripts/setup-host.sh).
 celln:
-  # -- Enable the Celln backend. When true, controller adds CELLN_ROUTER_URL
-  # env var and deploys the Celln installer DaemonSet + router.
+  # -- Enable the Celln backend. When true, deploys the installer DaemonSet,
+  # router DaemonSet, and configures the controller for celln dispatch.
+  # The router forwards to the host dispatcher on localhost — no IP needed.
   enabled: true
-  # -- URL of the Celln router (HTTP service in the celln-system namespace).
-  # The controller POSTs /v1/actions here when AgentRun.backend == "celln".
+  # -- URL of the celln-router Service. The controller POSTs here.
   routerUrl: "http://celln-router.celln-system.svc.cluster.local:8787"
-  # -- DeepSeek API key for the celln agent. If empty, set via Secret manually.
+  # -- DeepSeek API key. If empty, set via Secret manually.
   deepseekApiKey: ""
   image:
     repository: "ghcr.io/sympozium-ai/celln-installer"
@@ -393,9 +393,6 @@ celln:
     image:
       repository: "ghcr.io/sympozium-ai/celln-router"
       tag: "v0.4.13"
-    # -- IP address of the host running the celln dispatcher. Replace with
-    # the actual node IP.
-    dispatcherHost: "192.168.1.237"
     # -- Shared token for router → dispatcher authentication.
     dispatcherToken: ""
 

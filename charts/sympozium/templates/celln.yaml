@@ -83,6 +83,76 @@ spec:
         operator: Exists
         effect: NoSchedule
 ---
+# Router DaemonSet — one per KVM node, forwards to localhost dispatcher.
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: celln-router
+  namespace: celln-system
+  labels:
+    app.kubernetes.io/name: celln-router
+    app.kubernetes.io/part-of: sympozium
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: celln-router
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: celln-router
+    spec:
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      containers:
+      - name: router
+        image: {{ .Values.celln.router.image.repository | default "ghcr.io/sympozium-ai/celln-router" }}:{{ .Values.celln.router.image.tag | default "v0.4.13" }}
+        imagePullPolicy: {{ .Values.image.pullPolicy }}
+        command: ["/usr/local/bin/celln"]
+        args:
+        - "route"
+        - "--listen=0.0.0.0:8787"
+        - "--backends=http://127.0.0.1:8787"
+        - "--token-file=/etc/celln/dispatcher-token/token"
+        - "--mode=round-robin"
+        ports:
+        - name: http
+          containerPort: 8787
+          protocol: TCP
+        livenessProbe:
+          httpGet:
+            path: /v1/health
+            port: 8787
+          initialDelaySeconds: 5
+          periodSeconds: 30
+        readinessProbe:
+          httpGet:
+            path: /v1/health
+            port: 8787
+          initialDelaySeconds: 2
+          periodSeconds: 10
+        volumeMounts:
+        - name: token-vol
+          mountPath: /etc/celln/dispatcher-token
+          readOnly: true
+        resources:
+          requests:
+            memory: "16Mi"
+            cpu: "10m"
+          limits:
+            memory: "64Mi"
+            cpu: "200m"
+      volumes:
+      - name: token-vol
+        hostPath:
+          path: /etc/celln/dispatcher-token
+          type: Directory
+      nodeSelector:
+        celln.dev/kvm: "true"
+      tolerations:
+      - key: node-role.kubernetes.io/control-plane
+        operator: Exists
+        effect: NoSchedule
+---
 apiVersion: v1
 kind: Service
 metadata:
@@ -99,72 +169,6 @@ spec:
     port: 8787
     targetPort: 8787
     protocol: TCP
----
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: celln-router
-  namespace: celln-system
-  labels:
-    app.kubernetes.io/name: celln-router
-    app.kubernetes.io/part-of: sympozium
-spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app.kubernetes.io/name: celln-router
-  template:
-    metadata:
-      labels:
-        app.kubernetes.io/name: celln-router
-    spec:
-      containers:
-      - name: router
-        image: {{ .Values.celln.router.image.repository | default "ghcr.io/sympozium-ai/celln-router" }}:{{ .Values.celln.router.image.tag | default "v0.4.13" }}
-        imagePullPolicy: {{ .Values.image.pullPolicy }}
-        command: ["/usr/local/bin/celln"]
-        args:
-        - "route"
-        - "--listen=0.0.0.0:8787"
-        - "--backends=http://{{ .Values.celln.router.dispatcherHost | default "HOST_IP" }}:8787"
-        - "--token-file=/etc/celln/dispatcher-token/token"
-        - "--mode=round-robin"
-        ports:
-        - name: http
-          containerPort: 8787
-          protocol: TCP
-        env:
-        - name: PATH
-          value: /usr/local/bin:/usr/bin:/bin
-        securityContext:
-          readOnlyRootFilesystem: true
-          allowPrivilegeEscalation: false
-        volumeMounts:
-        - name: token-vol
-          mountPath: /etc/celln/dispatcher-token
-          readOnly: true
-        livenessProbe:
-          tcpSocket:
-            port: 8787
-          initialDelaySeconds: 3
-          periodSeconds: 30
-        readinessProbe:
-          tcpSocket:
-            port: 8787
-          initialDelaySeconds: 2
-          periodSeconds: 10
-        resources:
-          requests:
-            memory: "16Mi"
-            cpu: "10m"
-          limits:
-            memory: "64Mi"
-            cpu: "200m"
-      volumes:
-      - name: token-vol
-        hostPath:
-          path: /etc/celln/dispatcher-token
-          type: Directory
 ---
 apiVersion: v1
 kind: Secret
