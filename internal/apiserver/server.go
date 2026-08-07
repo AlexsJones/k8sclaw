@@ -890,6 +890,7 @@ type CreateRunRequest struct {
 	SessionKey string `json:"sessionKey,omitempty"`
 	Model      string `json:"model,omitempty"`
 	Timeout    string `json:"timeout,omitempty"`
+	Backend    string `json:"backend,omitempty"`
 }
 
 func (s *Server) createRun(w http.ResponseWriter, r *http.Request) {
@@ -965,6 +966,14 @@ func (s *Server) createRun(w http.ResponseWriter, r *http.Request) {
 		model = inst.Spec.Agents.Default.Model
 	}
 
+	// Use request-supplied timeout or fall back to the instance default.
+	timeout := inst.Spec.Agents.Default.ParseRunTimeout()
+	if req.Timeout != "" {
+		if d, err := time.ParseDuration(req.Timeout); err == nil {
+			timeout = &metav1.Duration{Duration: d}
+		}
+	}
+
 	run := &sympoziumv1alpha1.AgentRun{
 		ObjectMeta: metav1.ObjectMeta{
 			GenerateName: req.AgentRef + "-",
@@ -978,6 +987,7 @@ func (s *Server) createRun(w http.ResponseWriter, r *http.Request) {
 			AgentID:    req.AgentID,
 			SessionKey: req.SessionKey,
 			Task:       sympoziumv1alpha1.NewStringTask(req.Task),
+			Backend:    req.Backend,
 			Model: sympoziumv1alpha1.ModelSpec{
 				Provider:                 provider,
 				Model:                    model,
@@ -991,7 +1001,7 @@ func (s *Server) createRun(w http.ResponseWriter, r *http.Request) {
 			ImagePullSecrets: inst.Spec.ImagePullSecrets,
 			Lifecycle:        inst.Spec.Agents.Default.Lifecycle,
 			Env:              inst.Spec.Agents.Default.Env,
-			Timeout:          inst.Spec.Agents.Default.ParseRunTimeout(),
+			Timeout:          timeout,
 		},
 	}
 

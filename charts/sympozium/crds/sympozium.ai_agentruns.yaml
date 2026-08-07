@@ -98,6 +98,21 @@ spec:
                 required:
                 - enabled
                 type: object
+              backend:
+                description: |-
+                  Backend selects the execution backend for this run.
+                  "job" (default, implicit): standard Kubernetes Job backend.
+                  "celln": hardware-isolated Celln dispatcher (hermetic; no ensembles, no
+                    delegation, no shared memory, no IPC, no streaming; the agent receives
+                    the task string and produces a bounded output). Tasks that require
+                    multiple tools, sub-agents, or workflow state must use "job".
+
+                  Celln is selected for individual high-risk or bounded computations;
+                  ensembles and workflows always use the Job backend.
+                enum:
+                - job
+                - celln
+                type: string
               canaryMode:
                 description: |-
                   CanaryMode runs built-in health checks instead of the LLM conversation
@@ -2613,6 +2628,13 @@ spec:
           status:
             description: AgentRunStatus defines the observed state of AgentRun.
             properties:
+              cellnActionId:
+                description: |-
+                  CellnActionID is the action identifier returned by the Celln dispatcher
+                  when this run is dispatched through the Celln backend. Empty for
+                  non-Celln backends. The controller polls /v1/actions/<id> on the
+                  router to track progress.
+                type: string
               completedAt:
                 description: CompletedAt is when the agent run completed.
                 format: date-time

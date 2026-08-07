@@ -102,6 +102,19 @@ type AgentRunSpec struct {
 	// +optional
 	DryRun bool `json:"dryRun,omitempty"`
 
+	// Backend selects the execution backend for this run.
+	// "job" (default, implicit): standard Kubernetes Job backend.
+	// "celln": hardware-isolated Celln dispatcher (hermetic; no ensembles, no
+	//   delegation, no shared memory, no IPC, no streaming; the agent receives
+	//   the task string and produces a bounded output). Tasks that require
+	//   multiple tools, sub-agents, or workflow state must use "job".
+	//
+	// Celln is selected for individual high-risk or bounded computations;
+	// ensembles and workflows always use the Job backend.
+	// +kubebuilder:validation:Enum=job;celln
+	// +optional
+	Backend string `json:"backend,omitempty"`
+
 	// CanaryMode runs built-in health checks instead of the LLM conversation
 	// loop. The agent executes deterministic platform checks (API server,
 	// cluster info, k8s resources) and one minimal LLM call to verify
@@ -399,6 +412,13 @@ type AgentRunStatus struct {
 	// Conditions represent the latest available observations.
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
+
+	// CellnActionID is the action identifier returned by the Celln dispatcher
+	// when this run is dispatched through the Celln backend. Empty for
+	// non-Celln backends. The controller polls /v1/actions/<id> on the
+	// router to track progress.
+	// +optional
+	CellnActionID string `json:"cellnActionId,omitempty"`
 }
 
 // DelegateStatus tracks an in-flight delegation to another persona or ad-hoc sub-agent.

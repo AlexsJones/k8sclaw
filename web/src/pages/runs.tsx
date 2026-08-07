@@ -80,6 +80,7 @@ export function RunsPage() {
     task: "",
     model: "",
     timeout: "5m",
+    backend: "job",
   });
 
   // Mark all runs as seen after a short delay so "new" dots are visible briefly.
@@ -109,7 +110,7 @@ export function RunsPage() {
     createRun.mutate(form, {
       onSuccess: () => {
         setOpen(false);
-        setForm({ agentRef: "", task: "", model: "", timeout: "5m" });
+        setForm({ agentRef: "", task: "", model: "", timeout: "5m", backend: "job" });
       },
     });
   };
@@ -191,6 +192,28 @@ export function RunsPage() {
                     placeholder="5m"
                   />
                 </div>
+              </div>
+              <div className="space-y-2">
+                <Label>Backend</Label>
+                <Select
+                  value={form.backend}
+                  onValueChange={(v) => setForm({ ...form, backend: v })}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Standard (Kubernetes Job)" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="job">Standard — Kubernetes Job</SelectItem>
+                    <SelectItem value="celln">Celln — hermetic, hardware-isolated</SelectItem>
+                  </SelectContent>
+                </Select>
+                {form.backend === "celln" && (
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Celln runs one bounded computation in a sealed microVM.
+                    No ensembles, delegation, shared memory, or streaming.
+                    Best for single-shot high-risk or sensitive tasks.
+                  </p>
+                )}
               </div>
               <Button
                 className="w-full bg-primary hover:bg-primary/90 text-primary-foreground border-0"

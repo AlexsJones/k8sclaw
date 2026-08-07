@@ -1,0 +1,35 @@
+# celln-demo.yaml — One-shot hermetic Celln AgentRun.
+#
+# Prerequisites on the target node:
+#   - celln installed at /usr/local/bin/celln (static musl)
+#   - Runtime assets at /opt/celln/runtime/
+#   - DEEPSEEK_API_KEY exported or in /etc/celln/deepseek-key
+#   - celln-dispatcher systemd service running
+#   - celln-router Pod running in celln-system namespace
+#
+# Apply:
+#   kubectl apply -f celln-demo.yaml
+#
+# Watch:
+#   kubectl get agentrun celln-demo -w
+#
+# Verify on the host:
+#   celln --root /var/lib/celln ps -a
+#
+apiVersion: sympozium.ai/v1alpha1
+kind: AgentRun
+metadata:
+  name: celln-demo
+  namespace: default
+spec:
+  agentRef: demo
+  agentId: primary
+  sessionKey: demo
+  backend: celln
+  timeout: 300s
+  task: |-
+    write a Rust program that prints Hello from Celln and exits 0
+  model:
+    provider: deepseek
+    model: deepseek-chat
+    authSecretRef: ""

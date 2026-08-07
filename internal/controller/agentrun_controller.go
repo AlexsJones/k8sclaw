@@ -694,6 +694,11 @@ func (r *AgentRunReconciler) reconcilePending(ctx context.Context, log logr.Logg
 		return r.reconcilePendingAgentSandbox(ctx, log, agentRun)
 	}
 
+	// Celln backend — dispatch to the Celln router instead of creating a Job.
+	if agentRun.Spec.Backend == "celln" {
+		return r.reconcilePendingCelln(ctx, log, agentRun)
+	}
+
 	// Setup shared with the agentSandbox backend — see prepareRunPrerequisites.
 	prereqs, err := r.prepareRunPrerequisites(ctx, log, span, agentRun)
 	if err != nil {
@@ -785,6 +790,11 @@ func (r *AgentRunReconciler) reconcileRunning(ctx context.Context, log logr.Logg
 	// Agent Sandbox mode — check Sandbox CR status instead of Job.
 	if agentRun.Status.SandboxName != "" || agentRun.Status.SandboxClaimName != "" {
 		return r.reconcileRunningAgentSandbox(ctx, log, agentRun)
+	}
+
+	// Celln backend — poll the Celln router instead of checking a Job.
+	if agentRun.Spec.Backend == "celln" {
+		return r.reconcileRunningCelln(ctx, log, agentRun)
 	}
 
 	// Find the Job
