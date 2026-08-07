@@ -384,8 +384,15 @@ celln:
   enabled: true
   # -- URL of the celln-router Service. The controller POSTs here.
   routerUrl: "http://celln-router.celln-system.svc.cluster.local:8787"
-  # -- DeepSeek API key. If empty, set via Secret manually.
+  # -- API key for your chosen LLM provider. Set ONE of these.
+  # The key file is mounted at /etc/celln/agent-key on the host dispatcher.
+  # If none are set, the dispatcher will use auto-discovery (ollama) or
+  # fail with a clear error message.
+  openaiApiKey: ""
+  anthropicApiKey: ""
   deepseekApiKey: ""
+  # -- Optional: OpenAI-compatible base URL (for local/proxy servers).
+  openaiBaseUrl: ""
   image:
     repository: "ghcr.io/sympozium-ai/celln-installer"
     tag: "v0.4.13"

@@ -10,13 +10,21 @@ metadata:
 apiVersion: v1
 kind: Secret
 metadata:
-  name: celln-deepseek-key
+  name: celln-agent-key
   namespace: celln-system
   labels:
     app.kubernetes.io/part-of: sympozium
 type: Opaque
-data:
-  DEEPSEEK_API_KEY: {{ .Values.celln.deepseekApiKey | default "" | b64enc | quote }}
+stringData:
+  {{- if .Values.celln.anthropicApiKey }}
+  ANTHROPIC_API_KEY: {{ .Values.celln.anthropicApiKey | quote }}
+  {{- end }}
+  {{- if .Values.celln.openaiApiKey }}
+  OPENAI_API_KEY: {{ .Values.celln.openaiApiKey | quote }}
+  {{- end }}
+  {{- if .Values.celln.deepseekApiKey }}
+  DEEPSEEK_API_KEY: {{ .Values.celln.deepseekApiKey | quote }}
+  {{- end }}
 ---
 apiVersion: apps/v1
 kind: DaemonSet
@@ -46,8 +54,26 @@ spec:
         - name: DEEPSEEK_API_KEY
           valueFrom:
             secretKeyRef:
-              name: celln-deepseek-key
+              name: celln-agent-key
               key: DEEPSEEK_API_KEY
+              optional: true
+        - name: ANTHROPIC_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: celln-agent-key
+              key: ANTHROPIC_API_KEY
+              optional: true
+        - name: OPENAI_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: celln-agent-key
+              key: OPENAI_API_KEY
+              optional: true
+        - name: OPENAI_BASE_URL
+          valueFrom:
+            secretKeyRef:
+              name: celln-agent-key
+              key: OPENAI_BASE_URL
               optional: true
         volumeMounts:
         - name: host-root
