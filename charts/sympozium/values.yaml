@@ -370,6 +370,21 @@ agentSandbox:
   # and SandboxWarmPool CRs (apiGroup: agents.x-k8s.io).
   rbac: true
 
+# -- Celln hardware-isolated execution backend.
+# When enabled, the controller can dispatch AgentRuns with backend: "celln"
+# to a Celln router. The router forwards to host-level dispatchers which
+# execute tasks in sealed KVM cells.
+#
+# Requires: Celln router deployed (see celln repo integrations/kubernetes/)
+# and celln host dispatcher installed on each KVM node (scripts/setup-host.sh).
+celln:
+  # -- Enable the Celln backend. When true, controller adds CELLN_ROUTER_URL
+  # env var. When false, AgentRuns with backend: "celln" are not supported.
+  enabled: true
+  # -- URL of the Celln router (HTTP service in the celln-system namespace).
+  # The controller POSTs /v1/actions here when AgentRun.backend == "celln".
+  routerUrl: "http://celln-router.celln-system.svc.cluster.local:8787"
+
 # -- Persona delegation behavior.
 delegation:
   # -- Opt-in controller-side delegation executor. When true, the controller

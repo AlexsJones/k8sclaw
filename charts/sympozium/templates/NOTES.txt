@@ -11,6 +11,9 @@ Components:
 {{- if .Values.webhook.enabled }}
   ✅ Admission Webhook ({{ .Values.webhook.replicas }} replica(s))
 {{- end }}
+{{- if .Values.celln.enabled }}
+  ✅ Celln hermetic backend — AgentRuns with backend: "celln" dispatch to router at {{ .Values.celln.routerUrl }}
+{{- end }}
 {{- if .Values.nats.enabled }}
   ✅ NATS JetStream (built-in event bus)
 {{- else }}

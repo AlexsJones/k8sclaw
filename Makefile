@@ -398,6 +398,7 @@ install: manifests ## Install Sympozium via Helm chart (CRDs, control plane, bui
 		--set image.tag=$(TAG) \
 		--set certManager.enabled=false \
 		--set webhook.enabled=false \
+		--set celln.enabled=true \
 		--skip-crds
 
 uninstall: ## Uninstall Sympozium (Helm release, CRDs, namespace)
