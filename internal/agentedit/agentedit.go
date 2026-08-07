@@ -46,9 +46,18 @@ type Edit struct {
 }
 
 // MemoryEdit changes the agent's persistent memory settings.
+//
+// AutoStore is a double pointer because the setting is tri-state: true, false,
+// or unset. Unset is not "off" — it means inherit, and for an ensemble-managed
+// agent that resolves to the Ensemble's spec.autoStoreMemory. A plain *bool
+// could not express a return to inheriting, which would leave a user who once
+// toggled the value unable to hand it back to the ensemble default. Same idiom
+// as Edit.Lifecycle: nil leaves the field alone, a non-nil pointer to nil clears
+// it.
 type MemoryEdit struct {
 	Enabled      *bool
 	MaxSizeKB    *int
+	AutoStore    **bool
 	SystemPrompt *string
 }
 
@@ -218,6 +227,9 @@ func applyToAgent(ctx context.Context, c client.Client, agent *sympoziumv1alpha1
 		if m.MaxSizeKB != nil {
 			agent.Spec.Memory.MaxSizeKB = *m.MaxSizeKB
 		}
+		if m.AutoStore != nil {
+			agent.Spec.Memory.AutoStore = *m.AutoStore
+		}
 		if m.SystemPrompt != nil {
 			agent.Spec.Memory.SystemPrompt = *m.SystemPrompt
 		}
@@ -276,6 +288,13 @@ func applyToAgentConfig(cfg *sympoziumv1alpha1.AgentConfigSpec, e Edit) {
 		}
 		if m.MaxSizeKB != nil {
 			cfg.Memory.MaxSizeKB = *m.MaxSizeKB
+		}
+		// Clearing AutoStore here hands the agent config back to the ensemble's
+		// spec.autoStoreMemory rather than to the standalone-Agent default, so
+		// the generated Agent comes back carrying the ensemble's value, not nil.
+		// resolveAutoStoreMemory (ensemble_controller.go) is the resolution.
+		if m.AutoStore != nil {
+			cfg.Memory.AutoStore = *m.AutoStore
 		}
 		// The agent's memory.systemPrompt is stamped from the agent config's
 		// systemPrompt, so that is where the edit belongs.

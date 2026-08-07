@@ -530,6 +530,17 @@ func resolveProviderHeadersSecretRef(pack *sympoziumv1alpha1.Ensemble, persona *
 	return ref
 }
 
+// resolveAutoStoreMemory computes the effective memory AutoStore setting for a
+// generated agent. A per-agent-config override (AgentConfigMemory.AutoStore)
+// wins; otherwise the ensemble-level default (AutoStoreMemory) applies. Nil at
+// both levels leaves the field unset, so the Agent defaults to enabled.
+func resolveAutoStoreMemory(pack *sympoziumv1alpha1.Ensemble, persona *sympoziumv1alpha1.AgentConfigSpec) *bool {
+	if persona.Memory != nil && persona.Memory.AutoStore != nil {
+		return persona.Memory.AutoStore
+	}
+	return pack.Spec.AutoStoreMemory
+}
+
 // buildAgent creates a Agent spec from a persona definition.
 func (r *EnsembleReconciler) buildAgent(
 	pack *sympoziumv1alpha1.Ensemble,
@@ -540,6 +551,7 @@ func (r *EnsembleReconciler) buildAgent(
 	model := resolveModel(pack, persona, modelEndpoint)
 	authRefs := resolveAuthRefs(pack, persona, modelEndpoint)
 	baseURL := resolveBaseURL(pack, persona, modelEndpoint)
+	autoStore := resolveAutoStoreMemory(pack, persona)
 
 	// Merge provider headers: ensemble-level base, persona-level overrides.
 	providerHeaders := mergeProviderHeaders(pack.Spec.ProviderHeaders, persona.ProviderHeaders)
@@ -589,6 +601,7 @@ func (r *EnsembleReconciler) buildAgent(
 			Memory: &sympoziumv1alpha1.MemorySpec{
 				Enabled:      memoryEnabled,
 				MaxSizeKB:    memoryMaxSizeKB,
+				AutoStore:    autoStore,
 				SystemPrompt: persona.SystemPrompt,
 			},
 			Observability: defaultObservabilitySpec(),

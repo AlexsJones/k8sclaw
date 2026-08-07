@@ -592,6 +592,68 @@ func TestAutoStoreMemory_NoopWithoutServer(t *testing.T) {
 	autoStoreMemory(context.Background(), "task", "response")
 }
 
+func TestAutoStoreMemory_DisabledByEnv(t *testing.T) {
+	var called bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{"success": true})
+	}))
+	defer srv.Close()
+
+	old := memoryServerURL
+	memoryServerURL = srv.URL
+	defer func() { memoryServerURL = old }()
+
+	for _, v := range []string{"false", "0", "no", "off", "FALSE"} {
+		called = false
+		t.Setenv("MEMORY_AUTO_STORE", v)
+		autoStoreMemory(context.Background(), "list pods", "3 pods")
+		if called {
+			t.Errorf("MEMORY_AUTO_STORE=%q: expected no /store call, but server was hit", v)
+		}
+	}
+
+	// An unset or truthy value keeps auto-store enabled.
+	for _, v := range []string{"", "true", "1"} {
+		called = false
+		t.Setenv("MEMORY_AUTO_STORE", v)
+		autoStoreMemory(context.Background(), "list pods", "3 pods")
+		if !called {
+			t.Errorf("MEMORY_AUTO_STORE=%q: expected /store to be called", v)
+		}
+	}
+}
+
+func TestAutoStoreMemory_TruncationEnvOverrides(t *testing.T) {
+	var gotBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewDecoder(r.Body).Decode(&gotBody)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{"success": true})
+	}))
+	defer srv.Close()
+
+	old := memoryServerURL
+	memoryServerURL = srv.URL
+	defer func() { memoryServerURL = old }()
+
+	t.Setenv("MEMORY_AUTO_STORE_MAX_TASK_BYTES", "10")
+	t.Setenv("MEMORY_AUTO_STORE_MAX_RESPONSE_BYTES", "20")
+
+	longTask := strings.Repeat("x", 100)
+	longResponse := strings.Repeat("y", 100)
+	autoStoreMemory(context.Background(), longTask, longResponse)
+
+	content, _ := gotBody["content"].(string)
+	// Task truncated to 10 bytes + "...", response to 20 bytes + "...".
+	wantTask := strings.Repeat("x", 10) + "..."
+	wantResponse := strings.Repeat("y", 20) + "..."
+	if want := fmt.Sprintf("Task: %s\n\nResponse: %s", wantTask, wantResponse); content != want {
+		t.Errorf("content = %q, want %q", content, want)
+	}
+}
+
 func TestExecuteMemoryTool_RetriesWithRecovery(t *testing.T) {
 	var callCount atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

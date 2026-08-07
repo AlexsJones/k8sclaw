@@ -513,6 +513,11 @@ func TestAgentEditRoundTripsToAgent(t *testing.T) {
 	// convergenceFixture keeps the agent config separate; agentedit resolves it
 	// through the ensemble, so it has to be present on the pack.
 	pack.Spec.AgentConfigs = []sympoziumv1alpha1.AgentConfigSpec{*persona}
+	// An ensemble-level default that disagrees with the edit below, so the
+	// assertion proves the per-agent-config override wins rather than merely
+	// proving some value arrived.
+	autoStoreDefault := true
+	pack.Spec.AutoStoreMemory = &autoStoreDefault
 	instanceName := agentInstanceName(pack, persona)
 
 	// The Agent as the create path would have stamped it, with the labels
@@ -522,8 +527,11 @@ func TestAgentEditRoundTripsToAgent(t *testing.T) {
 
 	disabled := false
 	maxKB := 1024
+	noAutoStore := &disabled
 	edit := agentedit.Edit{
-		Memory: &agentedit.MemoryEdit{Enabled: &disabled, MaxSizeKB: &maxKB},
+		Memory: &agentedit.MemoryEdit{
+			Enabled: &disabled, MaxSizeKB: &maxKB, AutoStore: &noAutoStore,
+		},
 		WebEndpoint: &agentedit.WebEndpointEdit{
 			Enabled: true, Hostname: "analyst.example.test", RequestsPerMinute: 90,
 		},
@@ -562,6 +570,16 @@ func TestAgentEditRoundTripsToAgent(t *testing.T) {
 	}
 	if got.Spec.Memory != nil && got.Spec.Memory.MaxSizeKB != 1024 {
 		t.Errorf("memory.maxSizeKB = %d, want 1024", got.Spec.Memory.MaxSizeKB)
+	}
+	// autoStore travels a longer road than the others: agentedit writes it to the
+	// agent config, then resolveAutoStoreMemory has to prefer that over the
+	// ensemble-level default for it to reach the Agent.
+	if m := got.Spec.Memory; m != nil && (m.AutoStore == nil || *m.AutoStore) {
+		actual := "unset — it inherited the ensemble default"
+		if m.AutoStore != nil {
+			actual = "true"
+		}
+		t.Errorf("memory.autoStore = %s, want an explicit false from the per-agent-config override", actual)
 	}
 
 	params := skillParamsFor(t, got.Spec.Skills, "web-endpoint")

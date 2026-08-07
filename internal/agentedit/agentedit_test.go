@@ -58,6 +58,12 @@ func boolPtr(b bool) *bool    { return &b }
 func intPtr(i int) *int       { return &i }
 func strPtr(s string) *string { return &s }
 
+// setBool builds the "set to this value" form of a tri-state edit field;
+// clearBool builds the "hand it back to the inherited default" form. Both are
+// non-nil, so both are applied — the difference is what they write.
+func setBool(b bool) **bool { p := &b; return &p }
+func clearBool() **bool     { var p *bool; return &p }
+
 // ── routing ───────────────────────────────────────────────────────────────────
 
 func TestApply_ManagedAgentWritesEnsemble(t *testing.T) {
@@ -67,7 +73,12 @@ func TestApply_ManagedAgentWritesEnsemble(t *testing.T) {
 	c := newClient(t, agent, pack)
 
 	target, err := Apply(context.Background(), c, agent, Edit{
-		Memory: &MemoryEdit{Enabled: boolPtr(false), MaxSizeKB: intPtr(1024), SystemPrompt: strPtr("updated")},
+		Memory: &MemoryEdit{
+			Enabled:      boolPtr(false),
+			MaxSizeKB:    intPtr(1024),
+			AutoStore:    setBool(false),
+			SystemPrompt: strPtr("updated"),
+		},
 	})
 	if err != nil {
 		t.Fatalf("Apply: %v", err)
@@ -88,6 +99,9 @@ func TestApply_ManagedAgentWritesEnsemble(t *testing.T) {
 	if cfg.Memory == nil || cfg.Memory.Enabled || cfg.Memory.MaxSizeKB != 1024 {
 		t.Errorf("memory = %+v, want disabled with maxSizeKB 1024", cfg.Memory)
 	}
+	if cfg.Memory.AutoStore == nil || *cfg.Memory.AutoStore {
+		t.Errorf("autoStore = %v, want an explicit false on the agent config", cfg.Memory.AutoStore)
+	}
 	if cfg.SystemPrompt != "updated" {
 		t.Errorf("systemPrompt = %q, want updated", cfg.SystemPrompt)
 	}
@@ -104,6 +118,59 @@ func TestApply_ManagedAgentWritesEnsemble(t *testing.T) {
 	}
 	if agentAfter.Spec.Memory != nil {
 		t.Error("Apply wrote the managed Agent directly; the edit belongs on the Ensemble")
+	}
+}
+
+// TestApply_MemoryAutoStoreTriState pins the three things a caller can mean when
+// it touches autoStore. The middle case is the one a plain *bool cannot express:
+// clearing the value hands the setting back to the inherited default instead of
+// pinning it to false.
+func TestApply_MemoryAutoStoreTriState(t *testing.T) {
+	cases := []struct {
+		name string
+		edit **bool
+		want *bool
+	}{
+		{"set false", setBool(false), boolPtr(false)},
+		{"set true", setBool(true), boolPtr(true)},
+		{"clear back to inherit", clearBool(), nil},
+		{"leave alone", nil, boolPtr(true)},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			agent := standalone()
+			// Start from an explicit true so "leave alone" and "clear" are
+			// distinguishable: both would look like nil from a zero value.
+			agent.Spec.Memory = &sympoziumv1alpha1.MemorySpec{
+				Enabled: true, MaxSizeKB: 256, AutoStore: boolPtr(true),
+			}
+			c := newClient(t, agent)
+
+			if _, err := Apply(context.Background(), c, agent, Edit{
+				Memory: &MemoryEdit{AutoStore: tc.edit},
+			}); err != nil {
+				t.Fatalf("Apply: %v", err)
+			}
+
+			var got sympoziumv1alpha1.Agent
+			if err := c.Get(context.Background(), client.ObjectKeyFromObject(agent), &got); err != nil {
+				t.Fatalf("get agent: %v", err)
+			}
+			switch {
+			case tc.want == nil && got.Spec.Memory.AutoStore != nil:
+				t.Errorf("autoStore = %v, want nil (inherit)", *got.Spec.Memory.AutoStore)
+			case tc.want != nil && got.Spec.Memory.AutoStore == nil:
+				t.Errorf("autoStore = nil, want %v", *tc.want)
+			case tc.want != nil && *got.Spec.Memory.AutoStore != *tc.want:
+				t.Errorf("autoStore = %v, want %v", *got.Spec.Memory.AutoStore, *tc.want)
+			}
+
+			// The neighbouring memory fields must survive an autoStore-only edit.
+			if !got.Spec.Memory.Enabled || got.Spec.Memory.MaxSizeKB != 256 {
+				t.Errorf("autoStore edit disturbed the rest of memory: %+v", got.Spec.Memory)
+			}
+		})
 	}
 }
 

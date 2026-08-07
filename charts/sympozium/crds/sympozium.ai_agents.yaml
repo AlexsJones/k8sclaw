@@ -2744,6 +2744,15 @@ spec:
                   Memory configures persistent memory for this instance.
                   When enabled, a MEMORY.md ConfigMap is managed and mounted into agent pods.
                 properties:
+                  autoStore:
+                    description: |-
+                      AutoStore controls whether each successful agent run automatically writes
+                      a truncated task/response summary to the memory server (tagged "auto",
+                      "agent-run"). Defaults to true. Set to false to disable automatic memory
+                      writes while keeping the memory skill and its /store endpoint available
+                      for deliberate, curated memory management. Nil is treated as true so
+                      existing agents keep their current behaviour.
+                    type: boolean
                   enabled:
                     default: true
                     description: Enabled indicates whether persistent memory is active.

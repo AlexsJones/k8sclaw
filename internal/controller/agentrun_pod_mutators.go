@@ -36,6 +36,21 @@ func agentContainer(podSpec *corev1.PodSpec) *corev1.Container {
 	return nil
 }
 
+// hasEnvVar reports whether c already declares an env var named name.
+//
+// A mutator that renders a user-settable knob checks this before appending: the
+// mutator pass runs after buildContainers has appended agentRun.Spec.Env, and a
+// duplicate name resolves last-wins at the kubelet, so an unconditional append
+// overrides whatever the user asked for.
+func hasEnvVar(c *corev1.Container, name string) bool {
+	for i := range c.Env {
+		if c.Env[i].Name == name {
+			return true
+		}
+	}
+	return false
+}
+
 // podMutator is a named pod-spec transformation applied to every agent pod,
 // whichever backend ships it.
 //
@@ -55,6 +70,7 @@ var podMutators = []podMutator{
 	{"sharedMemory", (*AgentRunReconciler).injectSharedMemory},
 	{"relationshipContext", (*AgentRunReconciler).injectRelationshipContext},
 	{"subagentsConfig", (*AgentRunReconciler).injectSubagentsConfig},
+	{"memoryConfig", (*AgentRunReconciler).injectMemoryConfig},
 }
 
 // applyPodMutators runs every registered mutator against podSpec in registration
@@ -293,4 +309,39 @@ func (r *AgentRunReconciler) injectSubagentsConfig(ctx context.Context, agentRun
 			corev1.EnvVar{Name: "SUBAGENTS_MAX_DEPTH", Value: fmt.Sprintf("%d", maxDepth)},
 		)
 	}
+}
+
+// injectMemoryConfig threads per-Agent memory settings that aren't derivable
+// from the AgentRun spec into the agent container. Currently it disables the
+// automatic per-run memory write (MEMORY_AUTO_STORE=false) when the owning
+// Agent sets memory.autoStore=false. The env var is only injected when
+// auto-store is disabled — the agent-runner defaults to enabled — so existing
+// runs are unaffected. It is a no-op unless the run uses the memory skill,
+// which is what provides the memory server that auto-store writes to.
+//
+// An explicit MEMORY_AUTO_STORE from spec.env takes precedence: buildContainers
+// appends spec.env before this pass, and duplicate names resolve last-wins at the
+// kubelet, so appending unconditionally would silently beat the user's value.
+// Everything injected inside buildContainers (RUN_TIMEOUT, MEMORY_SERVER_URL, …)
+// sits ahead of spec.env and is overridable; skipping here keeps that contract —
+// spec.env is the last word — rather than making this one variable the exception.
+func (r *AgentRunReconciler) injectMemoryConfig(ctx context.Context, agentRun *sympoziumv1alpha1.AgentRun, podSpec *corev1.PodSpec) {
+	if !agentRunHasMemorySkill(agentRun) || agentRun.Spec.AgentRef == "" {
+		return
+	}
+	agent := agentContainer(podSpec)
+	if agent == nil || hasEnvVar(agent, "MEMORY_AUTO_STORE") {
+		return
+	}
+	var inst sympoziumv1alpha1.Agent
+	if err := r.Get(ctx, types.NamespacedName{Name: agentRun.Spec.AgentRef, Namespace: agentRun.Namespace}, &inst); err != nil {
+		return
+	}
+	// nil or true → default (enabled); nothing to inject.
+	if inst.Spec.Memory == nil || inst.Spec.Memory.AutoStore == nil || *inst.Spec.Memory.AutoStore {
+		return
+	}
+	agent.Env = append(agent.Env,
+		corev1.EnvVar{Name: "MEMORY_AUTO_STORE", Value: "false"},
+	)
 }
