@@ -208,11 +208,21 @@ export function RunsPage() {
                   </SelectContent>
                 </Select>
                 {form.backend === "celln" && (
-                  <p className="text-xs text-muted-foreground mt-1">
-                    Celln runs one bounded computation in a sealed microVM.
-                    No ensembles, delegation, shared memory, or streaming.
-                    Best for single-shot high-risk or sensitive tasks.
-                  </p>
+                  <>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      Celln runs one bounded computation in a sealed microVM.
+                      No ensembles, delegation, shared memory, or streaming.
+                      Best for single-shot high-risk or sensitive tasks.
+                    </p>
+                    <p className="text-xs text-amber-500/80 mt-1">
+                      Uses whatever AI provider is configured on the KVM
+                      host, not this run's Model field — and may be
+                      disabled or unconfigured for this cluster. If the run
+                      fails immediately with a router or provider error,
+                      ask your cluster admin whether Celln is enabled and
+                      has an API key or CLI set up.
+                    </p>
+                  </>
                 )}
               </div>
               <Button

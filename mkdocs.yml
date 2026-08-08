@@ -90,6 +90,7 @@ nav:
       - Adding a Task Mode: modes/extension-guide.md
     - Channels: concepts/channels.md
     - Agent Sandboxing: concepts/agent-sandbox.md
+    - Celln Backend: concepts/celln-backend.md
     - Security: concepts/security.md
     - Persistent Memory: concepts/persistent-memory.md
     - Scheduled Tasks: concepts/scheduled-tasks.md
