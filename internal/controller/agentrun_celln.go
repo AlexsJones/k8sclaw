@@ -124,8 +124,11 @@ func (r *AgentRunReconciler) reconcilePendingCelln(
 	resp, err := cellnHTTPClient.Do(req)
 	if err != nil {
 		log.Error(err, "Celln router unreachable", "url", routerURL)
-		return ctrl.Result{RequeueAfter: 10 * time.Second},
-			fmt.Errorf("celln router unreachable at %s: %w", routerURL, err)
+		// Return a nil error so controller-runtime honors RequeueAfter as a
+		// fixed 10s retry cadence, rather than routing through its own
+		// rate-limited workqueue backoff (which ignores Result when err != nil
+		// and does not retry at a reliable fixed interval).
+		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
 	defer resp.Body.Close()
 
@@ -190,8 +193,10 @@ func (r *AgentRunReconciler) reconcileRunningCelln(
 	resp, err := cellnHTTPClient.Do(req)
 	if err != nil {
 		log.Error(err, "Celln router unreachable during poll", "url", routerURL)
-		return ctrl.Result{RequeueAfter: 10 * time.Second},
-			fmt.Errorf("celln router unreachable during poll at %s: %w", routerURL, err)
+		// nil error so controller-runtime honors RequeueAfter as a fixed 10s
+		// retry cadence instead of its own workqueue backoff (see the
+		// matching comment in reconcilePendingCelln).
+		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
 	defer resp.Body.Close()
 
