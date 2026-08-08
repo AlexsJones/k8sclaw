@@ -55,10 +55,7 @@ func newOpenAIProvider(provider, apiKey, baseURL, model, systemPrompt, task stri
 			return nil, fmt.Errorf("Azure OpenAI requires MODEL_NAME to be set")
 		}
 		apiVersion := getEnv("AZURE_OPENAI_API_VERSION", "2024-06-01")
-		// Azure SDK's azure.WithEndpoint() should transform paths like /chat/completions
-		// to /openai/deployments/{model}/chat/completions automatically, but v3.22.0
-		// has a bug where this middleware isn't applied. Work around by manually
-		// constructing the deployment URL as expected by Azure's API.
+		// azure.WithEndpoint path transform not applied in openai-go v3.22.0 — construct manually
 		deploymentURL := strings.TrimRight(baseURL, "/") + "/openai/deployments/" + model
 		opts = append(opts,
 			openaioption.WithBaseURL(deploymentURL),
