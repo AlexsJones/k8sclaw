@@ -36,6 +36,16 @@ func cellnRouterURL() string {
 	return defaultCellnRouterURL
 }
 
+// cellnActionID builds a Celln action id that is unique per Kubernetes object
+// identity (not just per name). Kubernetes object names are reusable — delete
+// an AgentRun and recreate one with the same name and it gets a fresh UID, but
+// the Celln router's action registry (keyed by this id, idempotent-by-design,
+// with a TTL on stale entries) would otherwise return the previous run's
+// stale status instead of dispatching a new one.
+func cellnActionID(agentRun *sympoziumv1alpha1.AgentRun) string {
+	return agentRun.Name + "-" + string(agentRun.UID)
+}
+
 var cellnHTTPClient = &http.Client{Timeout: 30 * time.Second}
 
 // cellnSubmitAction is the JSON body for POST /v1/actions.
@@ -72,7 +82,7 @@ func (r *AgentRunReconciler) reconcilePendingCelln(
 	}
 
 	action := cellnSubmitAction{
-		ID:   agentRun.Name,
+		ID:   cellnActionID(agentRun),
 		Task: task,
 	}
 	if agentRun.Spec.Timeout != nil {
@@ -107,7 +117,9 @@ func (r *AgentRunReconciler) reconcilePendingCelln(
 			fmt.Sprintf("Celln router refused dispatch (HTTP %d): %s", resp.StatusCode, string(detail)))
 	}
 
-	// Transition to Running. The Celln action ID is the AgentRun name.
+	// Transition to Running. The Celln action ID is derived from the AgentRun's
+	// name and UID (see cellnActionID) and persisted to status so
+	// reconcileRunningCelln polls using the exact id we dispatched with.
 	now := metav1.Time{Time: time.Now()}
 	if err := r.updateStatusWithRetry(ctx, agentRun, func(ar *sympoziumv1alpha1.AgentRun) {
 		ar.Status.CellnActionID = action.ID
