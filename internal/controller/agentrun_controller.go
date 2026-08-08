@@ -689,6 +689,15 @@ func (r *AgentRunReconciler) reconcilePending(ctx context.Context, log logr.Logg
 		return ctrl.Result{}, r.failRun(ctx, agentRun, fmt.Sprintf("token budget exceeded: %v", err))
 	}
 
+	// Reject configurations that select two mutually exclusive execution
+	// backends at once. Without this check AgentSandbox is evaluated first
+	// below and celln would be silently dropped with no signal to whoever
+	// authored the run that their backend: celln choice was ignored.
+	if agentRun.Spec.Backend == "celln" && agentRun.Spec.AgentSandbox != nil && agentRun.Spec.AgentSandbox.Enabled {
+		return ctrl.Result{}, r.failRun(ctx, agentRun,
+			"backend: celln and agentSandbox.enabled are mutually exclusive execution backends; set only one")
+	}
+
 	// Agent Sandbox mode — create Sandbox CR instead of Job.
 	if agentRun.Spec.AgentSandbox != nil && agentRun.Spec.AgentSandbox.Enabled {
 		return r.reconcilePendingAgentSandbox(ctx, log, agentRun)
