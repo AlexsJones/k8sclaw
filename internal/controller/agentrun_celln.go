@@ -29,11 +29,33 @@ import (
 
 const defaultCellnRouterURL = "http://celln-router.celln-system.svc.cluster.local:8787"
 
+// defaultCellnTimeout is the Celln agent's own internal timeout when
+// spec.timeout is unset.
+const defaultCellnTimeout = 90 * time.Second
+
+// cellnDeadlineSlack is added on top of the effective Celln timeout before the
+// controller gives up waiting on the router. The Celln-side timeout should
+// fire first under normal operation; this is a backstop against a wedged
+// Celln backend (crashed dispatcher, network partition, etc.) that never
+// writes a terminal phase.
+const cellnDeadlineSlack = 30 * time.Second
+
 func cellnRouterURL() string {
 	if u := os.Getenv("CELLN_ROUTER_URL"); u != "" {
 		return u
 	}
 	return defaultCellnRouterURL
+}
+
+// cellnEffectiveTimeout returns the timeout used both as the Celln agent's own
+// internal deadline (sent to the router at dispatch) and as the basis for the
+// controller-side backstop deadline in reconcileRunningCelln. Kept as a single
+// helper so the default can't drift between the two call sites.
+func cellnEffectiveTimeout(agentRun *sympoziumv1alpha1.AgentRun) time.Duration {
+	if agentRun.Spec.Timeout != nil {
+		return agentRun.Spec.Timeout.Duration
+	}
+	return defaultCellnTimeout
 }
 
 // cellnActionID builds a Celln action id that is unique per Kubernetes object
@@ -82,13 +104,9 @@ func (r *AgentRunReconciler) reconcilePendingCelln(
 	}
 
 	action := cellnSubmitAction{
-		ID:   cellnActionID(agentRun),
-		Task: task,
-	}
-	if agentRun.Spec.Timeout != nil {
-		action.Timeout = uint64(agentRun.Spec.Timeout.Duration.Seconds())
-	} else {
-		action.Timeout = 90 // Celln agent default
+		ID:      cellnActionID(agentRun),
+		Task:    task,
+		Timeout: uint64(cellnEffectiveTimeout(agentRun).Seconds()),
 	}
 
 	body, err := json.Marshal(action)
@@ -145,6 +163,22 @@ func (r *AgentRunReconciler) reconcileRunningCelln(
 	actionID := agentRun.Status.CellnActionID
 	if actionID == "" {
 		return ctrl.Result{}, r.failRun(ctx, agentRun, "Celln action ID missing from status")
+	}
+
+	// Controller-side backstop deadline. The Celln agent's own timeout
+	// (sent at dispatch, see cellnEffectiveTimeout) should fire first under
+	// normal operation and produce a terminal "Failed" phase from the
+	// router. This guards against a wedged Celln backend — dispatcher
+	// crashed mid-request, network partition, etc. — that never writes a
+	// terminal phase, which would otherwise leave the run in Running
+	// forever since the phases below requeue indefinitely.
+	if agentRun.Status.StartedAt != nil {
+		deadline := cellnEffectiveTimeout(agentRun) + cellnDeadlineSlack
+		if elapsed := time.Since(agentRun.Status.StartedAt.Time); elapsed > deadline {
+			log.Info("Celln backend deadline exceeded", "elapsed", elapsed, "deadline", deadline)
+			return ctrl.Result{}, r.failRun(ctx, agentRun,
+				fmt.Sprintf("Celln backend deadline exceeded: no terminal status after %s (deadline %s)", elapsed.Round(time.Second), deadline))
+		}
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
