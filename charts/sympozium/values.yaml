@@ -400,8 +400,6 @@ celln:
     image:
       repository: "ghcr.io/sympozium-ai/celln-router"
       tag: "v0.4.13"
-    # -- Shared token for router → dispatcher authentication.
-    dispatcherToken: ""
 
 # -- Persona delegation behavior.
 delegation:

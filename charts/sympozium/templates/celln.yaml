@@ -165,6 +165,9 @@ spec:
         hostPath:
           path: /usr/local/bin/celln
           type: File
+      # Dispatcher token is generated on the host by the installer script
+      # (openssl rand -base64 32, once) and read here via hostPath — it is
+      # not a Kubernetes Secret and has no Helm-managed source of truth.
       - name: token-vol
         hostPath:
           path: /etc/celln/dispatcher-token
@@ -192,15 +195,4 @@ spec:
     port: 8787
     targetPort: 8788
     protocol: TCP
----
-apiVersion: v1
-kind: Secret
-metadata:
-  name: celln-dispatcher-token
-  namespace: celln-system
-  labels:
-    app.kubernetes.io/part-of: sympozium
-type: Opaque
-stringData:
-  token: {{ .Values.celln.router.dispatcherToken | default (randAlphaNum 32) | quote }}
 {{- end }}
