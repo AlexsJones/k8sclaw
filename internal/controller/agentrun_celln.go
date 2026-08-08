@@ -7,6 +7,15 @@
 // Celln is for one-shot hermetic computations. It does not support ensembles,
 // delegation, shared memory, IPC, NATS, streaming, or sub-agent spawns.
 // Tasks that need those capabilities must use the Job backend.
+//
+// This speaks the celln.dev/v1alpha1 ExecutionRequest/ExecutionReceipt
+// contract over POST/GET /v1/executions — not Celln's older, free-form
+// /v1/actions. Every AgentRun task is a forge-from-task request: Sympozium
+// has no pre-declared, hash-pinned program to name, so it asks the
+// dispatcher to have a model write one. The task string itself is never
+// treated as executable authority on the Celln side — only the hash Celln
+// computes after actually compiling it is. See the "forge" field on
+// ExecutionRequest in the Celln repo for the full contract.
 package controller
 
 import (
@@ -40,6 +49,14 @@ const defaultCellnTimeout = 90 * time.Second
 // writes a terminal phase.
 const cellnDeadlineSlack = 30 * time.Second
 
+// Capability bounds for a Celln-dispatched AgentRun. Not yet exposed as
+// AgentRun spec fields — fixed, conservative defaults matching Celln's own
+// examples until there's a real need to make them configurable per run.
+const (
+	cellnMemoryBytes = 268435456 // 256MiB
+	cellnOutputBytes = 65536
+)
+
 func cellnRouterURL() string {
 	if u := os.Getenv("CELLN_ROUTER_URL"); u != "" {
 		return u
@@ -47,10 +64,11 @@ func cellnRouterURL() string {
 	return defaultCellnRouterURL
 }
 
-// cellnEffectiveTimeout returns the timeout used both as the Celln agent's own
-// internal deadline (sent to the router at dispatch) and as the basis for the
-// controller-side backstop deadline in reconcileRunningCelln. Kept as a single
-// helper so the default can't drift between the two call sites.
+// cellnEffectiveTimeout returns the timeout used both as the forged
+// program's own run deadline (sent to the dispatcher at dispatch) and as
+// the basis for the controller-side backstop deadline in
+// reconcileRunningCelln. Kept as a single helper so the default can't drift
+// between the two call sites.
 func cellnEffectiveTimeout(agentRun *sympoziumv1alpha1.AgentRun) time.Duration {
 	if agentRun.Spec.Timeout != nil {
 		return agentRun.Spec.Timeout.Duration
@@ -58,33 +76,79 @@ func cellnEffectiveTimeout(agentRun *sympoziumv1alpha1.AgentRun) time.Duration {
 	return defaultCellnTimeout
 }
 
-// cellnActionID builds a Celln action id that is unique per Kubernetes object
-// identity (not just per name). Kubernetes object names are reusable — delete
-// an AgentRun and recreate one with the same name and it gets a fresh UID, but
-// the Celln router's action registry (keyed by this id, idempotent-by-design,
-// with a TTL on stale entries) would otherwise return the previous run's
-// stale status instead of dispatching a new one.
+// cellnActionID builds a Celln execution id that is unique per Kubernetes
+// object identity (not just per name). Kubernetes object names are
+// reusable — delete an AgentRun and recreate one with the same name and it
+// gets a fresh UID, but the Celln dispatcher's execution registry (keyed by
+// this id, idempotent-by-design, with a TTL on stale entries) would
+// otherwise return the previous run's stale status instead of dispatching a
+// new one.
 func cellnActionID(agentRun *sympoziumv1alpha1.AgentRun) string {
 	return agentRun.Name + "-" + string(agentRun.UID)
 }
 
 var cellnHTTPClient = &http.Client{Timeout: 30 * time.Second}
 
-// cellnSubmitAction is the JSON body for POST /v1/actions.
-type cellnSubmitAction struct {
-	ID      string `json:"id"`
-	Task    string `json:"task"`
-	Timeout uint64 `json:"timeout"`
+// executionRequest mirrors celln.dev/v1alpha1's ExecutionRequest, forge
+// variant only. Field names/JSON tags must match crates/celln-spec exactly.
+type executionRequest struct {
+	APIVersion   string              `json:"apiVersion"`
+	ID           string              `json:"id"`
+	Workload     executionWorkload   `json:"workload"`
+	Forge        *executionForge     `json:"forge,omitempty"`
+	Capabilities executionCapability `json:"capabilities"`
+	Execution    executionPolicy     `json:"execution"`
 }
 
-// cellnActionStatus is the JSON body returned by the Celln router.
-type cellnActionStatus struct {
-	ID          string `json:"id"`
-	Phase       string `json:"phase"`
-	Output      string `json:"output,omitempty"`
-	OutputHash  string `json:"outputHash,omitempty"`
-	OutputBytes uint64 `json:"outputBytes,omitempty"`
-	Error       string `json:"error,omitempty"`
+type executionWorkload struct {
+	ID     string `json:"id"`
+	Caller string `json:"caller"`
+}
+
+type executionForge struct {
+	Task string `json:"task"`
+}
+
+type executionCapability struct {
+	Workspace   string `json:"workspace"`
+	TimeoutMs   uint64 `json:"timeoutMs"`
+	MemoryBytes uint64 `json:"memoryBytes"`
+	OutputBytes uint64 `json:"outputBytes"`
+}
+
+type executionPolicy struct {
+	Lane                     string `json:"lane"`
+	RequireHardwareIsolation bool   `json:"requireHardwareIsolation"`
+}
+
+// executionRecord is the Celln dispatcher's own polling wrapper around a
+// terminal ExecutionReceipt — not the receipt itself, which is an immutable
+// wire contract with no room for a human-readable reason or bounded text
+// output. This is where those live instead.
+type executionRecord struct {
+	RequestID string            `json:"requestId"`
+	Phase     string            `json:"phase"`
+	Reason    string            `json:"reason,omitempty"`
+	Output    string            `json:"output,omitempty"`
+	Receipt   *executionReceipt `json:"receipt,omitempty"`
+}
+
+// executionReceipt mirrors celln.dev/v1alpha1's ExecutionReceipt. Only
+// decoded for the fields worth logging — Sympozium doesn't persist
+// provenance on AgentRun.status beyond what already exists (Result).
+type executionReceipt struct {
+	CellID   string            `json:"cellId"`
+	Resolved executionResolved `json:"resolved"`
+	Output   *executionOutput  `json:"output,omitempty"`
+}
+
+type executionResolved struct {
+	Tools []string `json:"tools,omitempty"`
+}
+
+type executionOutput struct {
+	Hash  string `json:"hash"`
+	Bytes uint64 `json:"bytes"`
 }
 
 // reconcilePendingCelln dispatches a pending AgentRun to the Celln router.
@@ -103,19 +167,34 @@ func (r *AgentRunReconciler) reconcilePendingCelln(
 		return ctrl.Result{}, r.failRun(ctx, agentRun, "Celln backend requires a string-form task")
 	}
 
-	action := cellnSubmitAction{
-		ID:      cellnActionID(agentRun),
-		Task:    task,
-		Timeout: uint64(cellnEffectiveTimeout(agentRun).Seconds()),
+	id := cellnActionID(agentRun)
+	request := executionRequest{
+		APIVersion: "celln.dev/v1alpha1",
+		ID:         id,
+		Workload: executionWorkload{
+			ID:     agentRun.Spec.AgentRef,
+			Caller: fmt.Sprintf("sympozium:%s/%s", agentRun.Namespace, agentRun.Name),
+		},
+		Forge: &executionForge{Task: task},
+		Capabilities: executionCapability{
+			Workspace:   "none",
+			TimeoutMs:   uint64(cellnEffectiveTimeout(agentRun).Milliseconds()),
+			MemoryBytes: cellnMemoryBytes,
+			OutputBytes: cellnOutputBytes,
+		},
+		Execution: executionPolicy{
+			Lane:                     "agent",
+			RequireHardwareIsolation: true,
+		},
 	}
 
-	body, err := json.Marshal(action)
+	body, err := json.Marshal(request)
 	if err != nil {
-		return ctrl.Result{}, r.failRun(ctx, agentRun, fmt.Sprintf("Celln: marshal submit action: %v", err))
+		return ctrl.Result{}, r.failRun(ctx, agentRun, fmt.Sprintf("Celln: marshal execution request: %v", err))
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		routerURL+"/v1/actions", bytes.NewReader(body))
+		routerURL+"/v1/executions", bytes.NewReader(body))
 	if err != nil {
 		return ctrl.Result{}, r.failRun(ctx, agentRun, fmt.Sprintf("Celln: build request: %v", err))
 	}
@@ -138,12 +217,12 @@ func (r *AgentRunReconciler) reconcilePendingCelln(
 			fmt.Sprintf("Celln router refused dispatch (HTTP %d): %s", resp.StatusCode, string(detail)))
 	}
 
-	// Transition to Running. The Celln action ID is derived from the AgentRun's
-	// name and UID (see cellnActionID) and persisted to status so
+	// Transition to Running. The Celln execution id is derived from the
+	// AgentRun's name and UID (see cellnActionID) and persisted to status so
 	// reconcileRunningCelln polls using the exact id we dispatched with.
 	now := metav1.Time{Time: time.Now()}
 	if err := r.updateStatusWithRetry(ctx, agentRun, func(ar *sympoziumv1alpha1.AgentRun) {
-		ar.Status.CellnActionID = action.ID
+		ar.Status.CellnActionID = id
 		ar.Status.StartedAt = &now
 		ar.Status.Phase = sympoziumv1alpha1.AgentRunPhaseRunning
 	}); err != nil {
@@ -151,12 +230,12 @@ func (r *AgentRunReconciler) reconcilePendingCelln(
 		return ctrl.Result{RequeueAfter: 2 * time.Second}, err
 	}
 
-	log.Info("Celln dispatch accepted", "actionId", action.ID)
+	log.Info("Celln dispatch accepted", "executionId", id)
 	return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
 }
 
-// reconcileRunningCelln polls the Celln router for a running action's status
-// and maps the result back to the AgentRun.
+// reconcileRunningCelln polls the Celln router for a running execution's
+// status and maps the result back to the AgentRun.
 func (r *AgentRunReconciler) reconcileRunningCelln(
 	ctx context.Context,
 	log logr.Logger,
@@ -165,7 +244,7 @@ func (r *AgentRunReconciler) reconcileRunningCelln(
 	routerURL := cellnRouterURL()
 	actionID := agentRun.Status.CellnActionID
 	if actionID == "" {
-		return ctrl.Result{}, r.failRun(ctx, agentRun, "Celln action ID missing from status")
+		return ctrl.Result{}, r.failRun(ctx, agentRun, "Celln execution ID missing from status")
 	}
 
 	// Controller-side backstop deadline. The Celln agent's own timeout
@@ -185,7 +264,7 @@ func (r *AgentRunReconciler) reconcileRunningCelln(
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
-		routerURL+"/v1/actions/"+actionID, nil)
+		routerURL+"/v1/executions/"+actionID, nil)
 	if err != nil {
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
@@ -202,7 +281,7 @@ func (r *AgentRunReconciler) reconcileRunningCelln(
 
 	if resp.StatusCode == http.StatusNotFound {
 		return ctrl.Result{}, r.failRun(ctx, agentRun,
-			fmt.Sprintf("Celln action %q not found on router", actionID))
+			fmt.Sprintf("Celln execution %q not found on router", actionID))
 	}
 
 	if resp.StatusCode != http.StatusOK {
@@ -211,16 +290,16 @@ func (r *AgentRunReconciler) reconcileRunningCelln(
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
 
-	var status cellnActionStatus
-	if err := json.NewDecoder(resp.Body).Decode(&status); err != nil {
-		log.Error(err, "Failed to decode Celln action status")
+	var record executionRecord
+	if err := json.NewDecoder(resp.Body).Decode(&record); err != nil {
+		log.Error(err, "Failed to decode Celln execution record")
 		return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
 	}
 
-	log.Info("Celln action status", "phase", status.Phase)
+	log.Info("Celln execution status", "phase", record.Phase)
 
-	switch status.Phase {
-	case "Pending", "Admitting":
+	switch record.Phase {
+	case "Admitting", "Forging", "Resolving":
 		return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
 
 	case "Running":
@@ -231,23 +310,32 @@ func (r *AgentRunReconciler) reconcileRunningCelln(
 		if err := r.updateStatusWithRetry(ctx, agentRun, func(ar *sympoziumv1alpha1.AgentRun) {
 			ar.Status.Phase = sympoziumv1alpha1.AgentRunPhaseSucceeded
 			ar.Status.CompletedAt = &now
-			ar.Status.Result = status.Output
+			ar.Status.Result = record.Output
 		}); err != nil {
 			log.Error(err, "Failed to persist Celln Succeeded status")
 			return ctrl.Result{RequeueAfter: 5 * time.Second}, err
 		}
 
-		log.Info("Celln action succeeded",
-			"outputBytes", status.OutputBytes,
-			"outputHash", status.OutputHash)
+		if record.Receipt != nil {
+			log.Info("Celln execution succeeded",
+				"cellId", record.Receipt.CellID,
+				"programHash", firstOrEmpty(record.Receipt.Resolved.Tools))
+		}
 		return ctrl.Result{}, nil
 
-	case "Failed":
+	case "Failed", "Refused", "Cancelled":
 		return ctrl.Result{}, r.failRun(ctx, agentRun,
-			fmt.Sprintf("Celln action failed: %s", status.Error))
+			fmt.Sprintf("Celln execution %s: %s", record.Phase, record.Reason))
 
 	default:
-		log.Info("Celln action in unknown phase", "phase", status.Phase)
+		log.Info("Celln execution in unknown phase", "phase", record.Phase)
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
+}
+
+func firstOrEmpty(values []string) string {
+	if len(values) == 0 {
+		return ""
+	}
+	return values[0]
 }

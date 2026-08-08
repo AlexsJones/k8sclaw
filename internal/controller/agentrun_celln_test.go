@@ -82,7 +82,7 @@ func TestReconcilePendingCelln_ActionIDUniquePerUID(t *testing.T) {
 
 func TestReconcileRunningCelln_DeadlineExceeded_FailsRun(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewEncoder(w).Encode(cellnActionStatus{ID: "whatever", Phase: "Running"})
+		_ = json.NewEncoder(w).Encode(executionRecord{RequestID: "whatever", Phase: "Running"})
 	}))
 	defer srv.Close()
 	t.Setenv("CELLN_ROUTER_URL", srv.URL)
@@ -150,6 +150,97 @@ func TestReconcileRunningCelln_RouterUnreachable_RequeuesWithoutError(t *testing
 	}
 	if result.RequeueAfter != 10*time.Second {
 		t.Errorf("RequeueAfter = %v, want 10s", result.RequeueAfter)
+	}
+}
+
+// ── Migration: /v1/executions, forge-from-task, not /v1/actions ────────────
+
+func TestReconcilePendingCelln_PostsAWellFormedForgeExecutionRequest(t *testing.T) {
+	var gotMethod, gotPath string
+	var got executionRequest
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod, gotPath = r.Method, r.URL.Path
+		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+			t.Errorf("decoding request body: %v", err)
+		}
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	defer srv.Close()
+	t.Setenv("CELLN_ROUTER_URL", srv.URL)
+
+	run := newTestCellnRun("well-formed", types.UID("uid-ffff"))
+	run.Spec.Task = sympoziumv1alpha1.NewStringTask("write a haiku generator")
+	run.Spec.Timeout = &metav1.Duration{Duration: 45 * time.Second}
+
+	r := newAgentRunTestReconciler(t, run)
+	if _, err := r.reconcilePendingCelln(context.Background(), logr.Discard(), run); err != nil {
+		t.Fatalf("reconcilePendingCelln: %v", err)
+	}
+
+	if gotMethod != http.MethodPost || gotPath != "/v1/executions" {
+		t.Fatalf("expected POST /v1/executions, got %s %s", gotMethod, gotPath)
+	}
+	if got.APIVersion != "celln.dev/v1alpha1" {
+		t.Errorf("apiVersion = %q, want celln.dev/v1alpha1", got.APIVersion)
+	}
+	if got.ID != cellnActionID(run) {
+		t.Errorf("id = %q, want %q", got.ID, cellnActionID(run))
+	}
+	if got.Forge == nil || got.Forge.Task != "write a haiku generator" {
+		t.Fatalf("expected forge.task to carry the AgentRun task, got %+v", got.Forge)
+	}
+	if got.Execution.Lane != "agent" {
+		t.Errorf("execution.lane = %q, want \"agent\" — forged code is never tool-lane authority", got.Execution.Lane)
+	}
+	if !got.Execution.RequireHardwareIsolation {
+		t.Error("expected requireHardwareIsolation: true")
+	}
+	if got.Capabilities.TimeoutMs != 45000 {
+		t.Errorf("capabilities.timeoutMs = %d, want 45000 (spec.timeout converted to ms)", got.Capabilities.TimeoutMs)
+	}
+	// This is the whole point of the migration: no pre-declared mote/tools/
+	// invocation should ever be sent for an AgentRun task — there isn't one.
+	body, _ := json.Marshal(got)
+	if strings.Contains(string(body), `"mote"`) || strings.Contains(string(body), `"invocation"`) {
+		t.Errorf("forge request must not carry mote/invocation fields, got %s", body)
+	}
+}
+
+func TestReconcileRunningCelln_SucceededSetsResultFromExecutionRecordOutput(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(executionRecord{
+			RequestID: "succeeded-run-uid-9999",
+			Phase:     "Succeeded",
+			Output:    "42",
+			Receipt: &executionReceipt{
+				CellID:   "cell-abc123",
+				Resolved: executionResolved{Tools: []string{"blake3:deadbeef"}},
+			},
+		})
+	}))
+	defer srv.Close()
+	t.Setenv("CELLN_ROUTER_URL", srv.URL)
+
+	run := newTestCellnRun("succeeded-run", types.UID("uid-9999"))
+	run.Status.Phase = sympoziumv1alpha1.AgentRunPhaseRunning
+	run.Status.CellnActionID = "succeeded-run-uid-9999"
+	started := metav1.NewTime(time.Now())
+	run.Status.StartedAt = &started
+
+	r := newAgentRunTestReconciler(t, run)
+	if _, err := r.reconcileRunningCelln(context.Background(), logr.Discard(), run); err != nil {
+		t.Fatalf("reconcileRunningCelln: %v", err)
+	}
+
+	var stored sympoziumv1alpha1.AgentRun
+	if err := r.Client.Get(context.Background(), client.ObjectKeyFromObject(run), &stored); err != nil {
+		t.Fatalf("get stored run: %v", err)
+	}
+	if stored.Status.Phase != sympoziumv1alpha1.AgentRunPhaseSucceeded {
+		t.Fatalf("expected phase Succeeded, got %q", stored.Status.Phase)
+	}
+	if stored.Status.Result != "42" {
+		t.Errorf("expected status.result to come from the executionRecord's own Output field, got %q", stored.Status.Result)
 	}
 }
 
