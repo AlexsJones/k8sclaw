@@ -841,6 +841,7 @@ export interface CapabilityStatus {
 
 export interface CapabilitiesResponse {
   agentSandbox: CapabilityStatus;
+  celln: CapabilityStatus;
 }
 
 // ── Model Density (llmfit DaemonSet telemetry) ─────────────────────────────────────

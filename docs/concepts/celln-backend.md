@@ -2,7 +2,9 @@
 
 Sympozium optionally integrates with [Celln](https://github.com/sympozium-ai/celln) to run a single bounded, high-risk, or sensitive computation in a hardware-isolated microVM instead of a Kubernetes Job. It is selected per run with `spec.backend: "celln"` on an `AgentRun`.
 
-Celln is **on by default** in the Helm chart. This page covers what that means, how to turn it off, and the one requirement that's easy to miss: Celln needs its own AI provider access on the host, separate from whatever provider your `Agent`/`AgentRun` is configured with.
+Celln is **opt-in**: `celln.enabled=false` by default in the Helm chart, because the installer DaemonSet it deploys runs privileged, with `hostPID`, and a read-write mount of the host root filesystem — necessary to set up KVM on the host, but a materially different trust boundary than the rest of Sympozium's pods. Enable it explicitly with `sympozium install --enable-hermetic-workloads` (or `helm upgrade --set celln.enabled=true`). This page covers what that turns on, and the one requirement that's easy to miss: Celln needs its own AI provider access on the host, separate from whatever provider your `Agent`/`AgentRun` is configured with.
+
+The web UI's Runs page shows a live banner if any listed run uses `backend: celln` while the router is unreachable, and the New Run dialog checks live reachability when you select the Celln backend — both backed by `GET /api/v1/capabilities`.
 
 ## What Celln is (and isn't)
 
@@ -39,17 +41,23 @@ AgentRun (backend: celln)
 
 The installer and router only schedule onto nodes labeled `celln.dev/kvm: "true"` — Celln needs `/dev/kvm` and is not a container-level isolation mechanism, so it can't run on arbitrary nodes the way the `job` backend can.
 
-## Disabling Celln
+## Enabling / Disabling Celln
+
+```bash
+sympozium install --enable-hermetic-workloads
+# or: make install ENABLE_HERMETIC_WORKLOADS=true
+# or: helm upgrade --install sympozium charts/sympozium/ --set celln.enabled=true ...
+```
 
 ```yaml
-# values.yaml
+# values.yaml — the master switch, false by default
 celln:
   enabled: false
 ```
 
-This is the master switch. When `false`, no `celln-system` namespace, installer, or router is deployed, and the controller isn't given a router URL — zero footprint.
+When `false` (the default), no `celln-system` namespace, installer, or router is deployed, and the controller/apiserver aren't given a router URL — zero footprint.
 
-**Disabling it does not remove `"celln"` as a valid `backend` value on the CRD.** A run submitted with `backend: celln` after disabling will still be admitted; the controller will attempt to reach the router at the default in-cluster DNS name, fail to resolve it, and the run transitions to `Failed` with a router-unreachable error. If you disable Celln, communicate that to whoever authors `AgentRun`s or agent defaults that set `backend: celln`.
+**Disabling it does not remove `"celln"` as a valid `backend` value on the CRD.** A run submitted with `backend: celln` while disabled will still be admitted; the controller will attempt to reach the router at the default in-cluster DNS name, fail to resolve it, and the run transitions to `Failed` with a router-unreachable error. If you disable Celln after enabling it, communicate that to whoever authors `AgentRun`s or agent defaults that set `backend: celln` — or watch for the live banner on the Runs page, which flags exactly this case.
 
 ## Enabling Celln: the AI provider requirement
 

@@ -33,6 +33,10 @@ Both charts are kept in lockstep. Always upgrade `sympozium-crds` before `sympoz
 
 See [`charts/sympozium/values.yaml`](https://github.com/sympozium-ai/sympozium/blob/main/charts/sympozium/values.yaml) for all configuration options. The `sympozium-crds` chart has no configurable values.
 
+### Celln (hermetic execution)
+
+Off by default (`celln.enabled: false`) — opt in with `--set celln.enabled=true`, or via the CLI's `sympozium install --enable-hermetic-workloads`. It deploys a **privileged**, `hostPID` DaemonSet with a read-write mount of the host root filesystem to set up KVM host-side, so treat it as a deliberate opt-in rather than a routine flag. See [Celln Backend](../concepts/celln-backend.md) before enabling it.
+
 ## Observability
 
 The Helm chart deploys a built-in OpenTelemetry collector by default:

@@ -11,9 +11,6 @@ Components:
 {{- if .Values.webhook.enabled }}
   ✅ Admission Webhook ({{ .Values.webhook.replicas }} replica(s))
 {{- end }}
-{{- if .Values.celln.enabled }}
-  ✅ Celln hermetic backend — AgentRuns with backend: "celln" dispatch to router at {{ .Values.celln.routerUrl }}
-{{- end }}
 {{- if .Values.nats.enabled }}
   ✅ NATS JetStream (built-in event bus)
 {{- else }}
@@ -23,6 +20,17 @@ Components:
 {{- if .Values.gateway.enabled }}
 ⚠️  Gateway is enabled. Make sure Gateway API CRDs are installed:
   kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.2.1/standard-install.yaml
+{{- end }}
+{{- if .Values.celln.enabled }}
+
+⚠️  Hermetic workloads (Celln) are enabled. This installed a PRIVILEGED,
+    hostPID DaemonSet with a read-write mount of the host root filesystem
+    on every node labeled celln.dev/kvm=true, to set up KVM host-side —
+    router at {{ .Values.celln.routerUrl }}. AgentRuns with backend: "celln"
+    dispatch here; the host also needs its own AI provider access,
+    independent of the run's model: field. See
+    https://github.com/sympozium-ai/sympozium/blob/main/docs/concepts/celln-backend.md
+    To turn this off: --set celln.enabled=false
 {{- end }}
 
 Next steps:

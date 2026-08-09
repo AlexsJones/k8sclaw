@@ -413,9 +413,9 @@ type AgentRunStatus struct {
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 
-	// CellnActionID is the action identifier returned by the Celln dispatcher
+	// CellnActionID is the execution identifier returned by the Celln dispatcher
 	// when this run is dispatched through the Celln backend. Empty for
-	// non-Celln backends. The controller polls /v1/actions/<id> on the
+	// non-Celln backends. The controller polls /v1/executions/<id> on the
 	// router to track progress.
 	// +optional
 	CellnActionID string `json:"cellnActionId,omitempty"`

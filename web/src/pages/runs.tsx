@@ -7,6 +7,7 @@ import {
   useAgents,
   useObservabilityMetrics,
   useGateVerdict,
+  useCapabilities,
 } from "@/hooks/use-api";
 import { StatusBadge } from "@/components/status-badge";
 import {
@@ -44,6 +45,7 @@ import {
   ShieldAlert,
   Check,
   X,
+  AlertTriangle,
 } from "lucide-react";
 import {
   costTooltip,
@@ -68,6 +70,7 @@ export function RunsPage() {
   const { data, isLoading } = useRuns();
   const instances = useAgents();
   const observability = useObservabilityMetrics();
+  const capabilities = useCapabilities();
   const deleteRun = useDeleteRun();
   const createRun = useCreateRun();
   const gateVerdict = useGateVerdict();
@@ -105,6 +108,10 @@ export function RunsPage() {
   );
 
   const spend = sumEffectiveCosts(filtered);
+
+  const cellnUnavailable =
+    capabilities.data && !capabilities.data.celln.available;
+  const hasCellnRuns = sorted.some((r) => r.spec.backend === "celln");
 
   const handleCreate = () => {
     createRun.mutate(form, {
@@ -216,12 +223,24 @@ export function RunsPage() {
                     </p>
                     <p className="text-xs text-amber-500/80 mt-1">
                       Uses whatever AI provider is configured on the KVM
-                      host, not this run's Model field — and may be
-                      disabled or unconfigured for this cluster. If the run
-                      fails immediately with a router or provider error,
-                      ask your cluster admin whether Celln is enabled and
-                      has an API key or CLI set up.
+                      host, not this run's Model field.
                     </p>
+                    {capabilities.data && !capabilities.data.celln.available ? (
+                      <p className="flex items-start gap-1 text-xs text-red-400 mt-1">
+                        <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
+                        <span>
+                          Celln is not currently active in this cluster
+                          {capabilities.data.celln.reason
+                            ? `: ${capabilities.data.celln.reason}`
+                            : "."}{" "}
+                          This run will fail at dispatch.
+                        </span>
+                      </p>
+                    ) : capabilities.data?.celln.available ? (
+                      <p className="text-xs text-emerald-500/80 mt-1">
+                        Celln router is reachable in this cluster.
+                      </p>
+                    ) : null}
                   </>
                 )}
               </div>
@@ -238,6 +257,23 @@ export function RunsPage() {
           </DialogContent>
         </Dialog>
       </div>
+
+      {cellnUnavailable && hasCellnRuns && (
+        <div className="flex items-start gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-400">
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+          <div>
+            <p className="font-medium">
+              Celln backend is not active in this cluster
+            </p>
+            <p className="text-xs text-amber-400/80 mt-0.5">
+              {capabilities.data?.celln.reason ||
+                "The Celln router is not reachable."}{" "}
+              Runs below with backend "celln" will fail or stay stuck until
+              this is resolved.
+            </p>
+          </div>
+        </div>
+      )}
 
       <Input
         placeholder="Search runs…"

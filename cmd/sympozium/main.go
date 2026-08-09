@@ -1195,6 +1195,7 @@ func kubectlApplyStdin(yaml string) error {
 func newInstallCmd() *cobra.Command {
 	var imageTag string
 	var setValues []string
+	var enableHermeticWorkloads bool
 	cmd := &cobra.Command{
 		Use:   "install",
 		Short: "Install Sympozium into the current Kubernetes cluster",
@@ -1205,13 +1206,27 @@ network policies, and default SkillPacks/Policies/Ensembles.
 Use --image-tag to override the container image tag, for example when
 you have sideloaded images into Kind with a custom tag.
 
-Use --set to override arbitrary Helm values (e.g. --set controller.replicas=2).`,
+Use --set to override arbitrary Helm values (e.g. --set controller.replicas=2).
+
+Use --enable-hermetic-workloads to opt into the Celln backend (spec.backend:
+"celln" on AgentRuns): hardware-isolated, single-task execution in a sealed
+KVM cell instead of a Kubernetes Job. This is off by default because it
+deploys a DaemonSet that installs a host-level dispatcher on KVM-capable
+nodes, running privileged with hostPID and a read-write mount of the host
+root filesystem — necessary to set up KVM on the host, but a materially
+different trust boundary than the rest of Sympozium's pods. See
+docs/concepts/celln-backend.md before enabling it.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if enableHermeticWorkloads {
+				setValues = append(setValues, "celln.enabled=true")
+			}
 			return runInstall(imageTag, setValues)
 		},
 	}
 	cmd.Flags().StringVar(&imageTag, "image-tag", "", "Override image tag (e.g. 'latest')")
 	cmd.Flags().StringArrayVar(&setValues, "set", nil, "Set Helm values (key=value, can be repeated)")
+	cmd.Flags().BoolVar(&enableHermeticWorkloads, "enable-hermetic-workloads", false,
+		"Opt into the Celln backend: hardware-isolated execution via a privileged host-installer DaemonSet on KVM-capable nodes")
 	return cmd
 }
 
@@ -1302,6 +1317,15 @@ func runInstall(imageTag string, setValues []string) error {
 		ver = "embedded"
 	}
 	fmt.Printf("  Installing Sympozium %s...\n", ver)
+	for _, kv := range setValues {
+		if kv == "celln.enabled=true" {
+			fmt.Println("  ⚠️  Hermetic workloads (Celln) enabled — this deploys a privileged,")
+			fmt.Println("      hostPID DaemonSet with a read-write mount of the host root")
+			fmt.Println("      filesystem on any node labeled celln.dev/kvm=true, to set up KVM")
+			fmt.Println("      host-side. See docs/concepts/celln-backend.md.")
+			break
+		}
+	}
 
 	// Load the embedded Helm chart.
 	ch, err := helmchart.Load()
