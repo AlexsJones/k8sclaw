@@ -1,5 +1,32 @@
 # Changelog
 
+## [0.10.47](https://github.com/sympozium-ai/sympozium/compare/v0.10.46...v0.10.47) (2026-08-09)
+
+
+### Features
+
+* Celln hermetic-action backend for AgentRun ([da364c4](https://github.com/sympozium-ai/sympozium/commit/da364c4c303f6b0a474934c2b322bbc99923fb87))
+* Celln hermetic-action backend for AgentRun ([abea691](https://github.com/sympozium-ai/sympozium/commit/abea6914b3d410409d7752a1b5ef877e662adf19))
+* deploy celln installer + router via Helm ([bda32eb](https://github.com/sympozium-ai/sympozium/commit/bda32ebed47a35ab9df1ab3cc56b2e47f0084d2b))
+* enable Celln backend by default in Helm chart ([e92e58a](https://github.com/sympozium-ai/sympozium/commit/e92e58a14ca0f58554d2e4e9296a15858a0d287a))
+* gate Celln behind explicit opt-in, add live status banner ([2d0c2ef](https://github.com/sympozium-ai/sympozium/commit/2d0c2ef34b2b71de65c2261ba6764800b48bcca6))
+* migrate Celln dispatch to /v1/executions (forge mode) ([6b8b200](https://github.com/sympozium-ai/sympozium/commit/6b8b200db97f7ee573fcc546f575aa876d84af82))
+* opt out for automatic memories ([8b74fa0](https://github.com/sympozium-ai/sympozium/commit/8b74fa0ab9115b308d4d5fc63ca4fd6bb0467f30))
+* router DaemonSet with downward API, zero IP config ([348cd3c](https://github.com/sympozium-ai/sympozium/commit/348cd3caef9dbeb4122a68703bbaaa7ba06ba4b4))
+
+
+### Bug Fixes
+
+* **celln:** remove unused celln-dispatcher-token Secret ([183b8a5](https://github.com/sympozium-ai/sympozium/commit/183b8a52b97d507ad48fc93e61a62cef7646c322))
+* derive Celln action IDs from AgentRun name+UID, not name alone ([7d8f85c](https://github.com/sympozium-ai/sympozium/commit/7d8f85cf8c2326d431491f0ba684087907e597bc))
+* enforce a controller-side deadline for wedged Celln backends ([d4f46d7](https://github.com/sympozium-ai/sympozium/commit/d4f46d7c2cba31e30e265a49b2f64a4073835363))
+* manually construct Azure OpenAI deployment URL ([58dbcb1](https://github.com/sympozium-ai/sympozium/commit/58dbcb1faf83a5e8d978e975013900a441608893))
+* manually construct Azure OpenAI deployment URL to work around SDK middleware bug ([ac9cdb5](https://github.com/sympozium-ai/sympozium/commit/ac9cdb53ad7276d6631dc68d6ba1782e3d12f129))
+* provider-agnostic API key secret (openaiApiKey, anthropicApiKey, deepseekApiKey) ([1321032](https://github.com/sympozium-ai/sympozium/commit/1321032c1f546c487aba14f2ca08ae2f56f10004))
+* reject AgentRuns with both backend=celln and agentSandbox.enabled ([2de81c8](https://github.com/sympozium-ai/sympozium/commit/2de81c841eed5a91020cfac9daaf2c5406b81f13))
+* retry Celln router-unreachable errors on a fixed 10s cadence ([eff0d03](https://github.com/sympozium-ai/sympozium/commit/eff0d03e0489ec71310750a04d2429e256d76e12))
+* router port 8788 (dispatcher uses 8787), TCP probes ([8165c72](https://github.com/sympozium-ai/sympozium/commit/8165c7246cb38eb660cf85491718eeb086e0d3b1))
+
 ## [0.10.46](https://github.com/sympozium-ai/sympozium/compare/v0.10.45...v0.10.46) (2026-08-06)
 
 
