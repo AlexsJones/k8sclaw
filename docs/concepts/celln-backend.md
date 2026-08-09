@@ -41,6 +41,12 @@ AgentRun (backend: celln)
 
 The installer and router only schedule onto nodes labeled `celln.dev/kvm: "true"` — Celln needs `/dev/kvm` and is not a container-level isolation mechanism, so it can't run on arbitrary nodes the way the `job` backend can.
 
+## Trust model: your task always runs in the agent lane
+
+Celln draws a hard line between two authority levels for code running inside a cell: the **tool lane** (an already-attested host binary, sealed in read-only — full but narrow authority) and the **agent lane** (agent-authored code, generated at run time — gets only what's explicitly loaned to it, permanently, no matter how well it's built). Full model: [tool lane](https://sympozium-ai.github.io/celln/tool-lane.html) / [agent lane](https://sympozium-ai.github.io/celln/agent-lane.html).
+
+A Sympozium `backend: celln` `AgentRun` **always executes in the agent lane.** The controller always sends the task as a `forge` request — a model writes a program from the task string, it gets rebuilt twice and hash-compared — and that program is `author=agent` by construction, which is agent-lane authority regardless of how cleanly it reproduces. There is currently no `AgentRun` field for naming a pre-declared, hash-pinned tool instead of a task string, so tool-lane execution isn't reachable from Sympozium today — only from the `celln` CLI directly (`celln spec` / `celln run`). Practically, that means every `backend: celln` run gets: no ambient host tools or filesystem beyond its own generated program and workspace, no persisted workspace between runs (`workspace: "none"`), a fixed 256MiB/64KiB memory/output envelope (not yet configurable per run), and hardware isolation with no softer fallback. See [Sympozium × Celln actions](https://sympozium-ai.github.io/celln/sympozium-celln-actions.html) for the full breakdown of what the dispatched request actually contains.
+
 ## Enabling / Disabling Celln
 
 ```bash
