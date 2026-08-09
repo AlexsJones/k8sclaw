@@ -890,6 +890,7 @@ type CreateRunRequest struct {
 	SessionKey string `json:"sessionKey,omitempty"`
 	Model      string `json:"model,omitempty"`
 	Timeout    string `json:"timeout,omitempty"`
+	Backend    string `json:"backend,omitempty"`
 }
 
 func (s *Server) createRun(w http.ResponseWriter, r *http.Request) {
@@ -965,6 +966,14 @@ func (s *Server) createRun(w http.ResponseWriter, r *http.Request) {
 		model = inst.Spec.Agents.Default.Model
 	}
 
+	// Use request-supplied timeout or fall back to the instance default.
+	timeout := inst.Spec.Agents.Default.ParseRunTimeout()
+	if req.Timeout != "" {
+		if d, err := time.ParseDuration(req.Timeout); err == nil {
+			timeout = &metav1.Duration{Duration: d}
+		}
+	}
+
 	run := &sympoziumv1alpha1.AgentRun{
 		ObjectMeta: metav1.ObjectMeta{
 			GenerateName: req.AgentRef + "-",
@@ -978,6 +987,7 @@ func (s *Server) createRun(w http.ResponseWriter, r *http.Request) {
 			AgentID:    req.AgentID,
 			SessionKey: req.SessionKey,
 			Task:       sympoziumv1alpha1.NewStringTask(req.Task),
+			Backend:    req.Backend,
 			Model: sympoziumv1alpha1.ModelSpec{
 				Provider:                 provider,
 				Model:                    model,
@@ -991,7 +1001,7 @@ func (s *Server) createRun(w http.ResponseWriter, r *http.Request) {
 			ImagePullSecrets: inst.Spec.ImagePullSecrets,
 			Lifecycle:        inst.Spec.Agents.Default.Lifecycle,
 			Env:              inst.Spec.Agents.Default.Env,
-			Timeout:          inst.Spec.Agents.Default.ParseRunTimeout(),
+			Timeout:          timeout,
 		},
 	}
 
@@ -3565,6 +3575,38 @@ type CapabilityStatus struct {
 // CapabilitiesResponse lists optional features and whether their prerequisites are met.
 type CapabilitiesResponse struct {
 	AgentSandbox CapabilityStatus `json:"agentSandbox"`
+	Celln        CapabilityStatus `json:"celln"`
+}
+
+// defaultCellnRouterURL mirrors internal/controller/agentrun_celln.go's fallback:
+// the controller will still attempt this address even if CELLN_ROUTER_URL isn't
+// set on this pod, so capability reporting checks the same default.
+const defaultCellnRouterURL = "http://celln-router.celln-system.svc.cluster.local:8787"
+
+// getCellnStatus reports whether the Celln backend is reachable from the
+// apiserver. The router has no HTTP health endpoint, so this does a short
+// TCP dial, matching the TCP probes the chart's own Service/pod probes use.
+func (s *Server) getCellnStatus() CapabilityStatus {
+	routerURL := os.Getenv("CELLN_ROUTER_URL")
+	if routerURL == "" {
+		routerURL = defaultCellnRouterURL
+	}
+	u, err := url.Parse(routerURL)
+	if err != nil || u.Host == "" {
+		return CapabilityStatus{
+			Available: false,
+			Reason:    fmt.Sprintf("Celln router URL is misconfigured: %q", routerURL),
+		}
+	}
+	conn, err := net.DialTimeout("tcp", u.Host, 2*time.Second)
+	if err != nil {
+		return CapabilityStatus{
+			Available: false,
+			Reason:    fmt.Sprintf("Celln router at %s is not reachable: %v", u.Host, err),
+		}
+	}
+	_ = conn.Close()
+	return CapabilityStatus{Available: true}
 }
 
 func (s *Server) getCapabilities(w http.ResponseWriter, r *http.Request) {
@@ -3610,6 +3652,8 @@ func (s *Server) getCapabilities(w http.ResponseWriter, r *http.Request) {
 			Reason:    "Kubernetes client not available",
 		}
 	}
+
+	resp.Celln = s.getCellnStatus()
 
 	writeJSON(w, resp)
 }

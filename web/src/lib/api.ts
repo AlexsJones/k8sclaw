@@ -184,6 +184,7 @@ export interface AgentRunSpec {
   timeout?: string;
   cleanup?: string;
   mode?: string;
+  backend?: string;
   lifecycle?: LifecycleHooks;
   parent?: ParentRunRef;
 }
@@ -840,6 +841,7 @@ export interface CapabilityStatus {
 
 export interface CapabilitiesResponse {
   agentSandbox: CapabilityStatus;
+  celln: CapabilityStatus;
 }
 
 // ── Model Density (llmfit DaemonSet telemetry) ─────────────────────────────────────
@@ -1189,6 +1191,7 @@ export const api = {
       task: string;
       model?: string;
       timeout?: string;
+      backend?: string;
     }) =>
       apiFetch<AgentRun>("/api/v1/runs", {
         method: "POST",

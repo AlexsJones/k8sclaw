@@ -1,0 +1,43 @@
+# celln-demo.yaml — One-shot hermetic Celln AgentRun.
+#
+# Celln is opt-in. Install (or upgrade) with hermetic workloads enabled:
+#   sympozium install --enable-hermetic-workloads
+#   # or: make install ENABLE_HERMETIC_WORKLOADS=true
+#
+# That deploys the celln-installer DaemonSet, which sets up the host-level
+# dispatcher itself on any node labeled celln.dev/kvm=true — no manual
+# celln/systemd setup on the host is needed. See
+# docs/concepts/celln-backend.md for the one thing that IS manual: the
+# dispatcher needs its own AI provider access on the host (an API key via
+# Helm, a local ollama, or an already-authenticated CLI) — independent of
+# the model: block below, which this backend ignores entirely.
+#
+# Apply:
+#   kubectl apply -f celln-demo.yaml
+#
+# Watch:
+#   kubectl get agentrun celln-demo -w
+#
+# Verify on the host:
+#   celln --root /var/lib/celln ps -a
+#
+apiVersion: sympozium.ai/v1alpha1
+kind: AgentRun
+metadata:
+  name: celln-demo
+  namespace: default
+spec:
+  agentRef: demo
+  agentId: primary
+  sessionKey: demo
+  backend: celln
+  timeout: 300s
+  task: |-
+    write a Rust program that prints Hello from Celln and exits 0
+  # model is required by the CRD schema but ignored for backend: celln —
+  # the task is actually run with whatever provider is configured on the
+  # KVM host (see docs/concepts/celln-backend.md). Left as a placeholder.
+  model:
+    provider: deepseek
+    model: deepseek-chat
+    authSecretRef: ""

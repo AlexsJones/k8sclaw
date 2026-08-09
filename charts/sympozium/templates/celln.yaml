@@ -1,0 +1,198 @@
+{{- if .Values.celln.enabled }}
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: celln-system
+  labels:
+    app.kubernetes.io/part-of: sympozium
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: celln-agent-key
+  namespace: celln-system
+  labels:
+    app.kubernetes.io/part-of: sympozium
+type: Opaque
+stringData:
+  {{- if .Values.celln.anthropicApiKey }}
+  ANTHROPIC_API_KEY: {{ .Values.celln.anthropicApiKey | quote }}
+  {{- end }}
+  {{- if .Values.celln.openaiApiKey }}
+  OPENAI_API_KEY: {{ .Values.celln.openaiApiKey | quote }}
+  {{- end }}
+  {{- if .Values.celln.deepseekApiKey }}
+  DEEPSEEK_API_KEY: {{ .Values.celln.deepseekApiKey | quote }}
+  {{- end }}
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: celln-installer
+  namespace: celln-system
+  labels:
+    app.kubernetes.io/name: celln-installer
+    app.kubernetes.io/part-of: sympozium
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: celln-installer
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: celln-installer
+    spec:
+      hostPID: true
+      containers:
+      - name: installer
+        image: {{ .Values.celln.image.repository | default "ghcr.io/sympozium-ai/celln-installer" }}:{{ .Values.celln.image.tag | default "v0.4.13" }}
+        imagePullPolicy: {{ .Values.image.pullPolicy }}
+        securityContext:
+          privileged: true
+        env:
+        - name: DEEPSEEK_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: celln-agent-key
+              key: DEEPSEEK_API_KEY
+              optional: true
+        - name: ANTHROPIC_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: celln-agent-key
+              key: ANTHROPIC_API_KEY
+              optional: true
+        - name: OPENAI_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: celln-agent-key
+              key: OPENAI_API_KEY
+              optional: true
+        - name: OPENAI_BASE_URL
+          valueFrom:
+            secretKeyRef:
+              name: celln-agent-key
+              key: OPENAI_BASE_URL
+              optional: true
+        volumeMounts:
+        - name: host-root
+          mountPath: /host
+        - name: host-run
+          mountPath: /run/systemd
+        - name: kvm
+          mountPath: /dev/kvm
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "2Gi"
+            cpu: "2000m"
+      volumes:
+      - name: host-root
+        hostPath:
+          path: /
+          type: Directory
+      - name: host-run
+        hostPath:
+          path: /run
+          type: Directory
+      - name: kvm
+        hostPath:
+          path: /dev/kvm
+          type: CharDevice
+      nodeSelector:
+        celln.dev/kvm: "true"
+      tolerations:
+      - key: node-role.kubernetes.io/control-plane
+        operator: Exists
+        effect: NoSchedule
+---
+# Router DaemonSet — one per KVM node. Uses downward API to discover
+# the host IP, forwards to the systemd dispatcher on that IP.
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: celln-router
+  namespace: celln-system
+  labels:
+    app.kubernetes.io/name: celln-router
+    app.kubernetes.io/part-of: sympozium
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: celln-router
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: celln-router
+    spec:
+      containers:
+      - name: router
+        image: {{ .Values.celln.router.image.repository | default "ghcr.io/sympozium-ai/celln-router" }}:{{ .Values.celln.router.image.tag | default "v0.4.13" }}
+        imagePullPolicy: {{ .Values.image.pullPolicy }}
+        command: ["/bin/sh", "-c"]
+        args:
+        - "exec /usr/local/bin/celln route --listen 0.0.0.0:8788 --backends http://${NODE_IP}:8787 --token-file /etc/celln/dispatcher-token/token --mode round-robin"
+        ports:
+        - name: http
+          containerPort: 8788
+          protocol: TCP
+        env:
+        - name: NODE_IP
+          valueFrom:
+            fieldRef:
+              fieldPath: status.hostIP
+        - name: PATH
+          value: /usr/local/bin:/usr/bin:/bin
+        volumeMounts:
+        - name: host-bin
+          mountPath: /usr/local/bin/celln
+          readOnly: true
+        - name: token-vol
+          mountPath: /etc/celln/dispatcher-token
+          readOnly: true
+        resources:
+          requests:
+            memory: "16Mi"
+            cpu: "10m"
+          limits:
+            memory: "64Mi"
+            cpu: "200m"
+      volumes:
+      - name: host-bin
+        hostPath:
+          path: /usr/local/bin/celln
+          type: File
+      # Dispatcher token is generated on the host by the installer script
+      # (openssl rand -base64 32, once) and read here via hostPath — it is
+      # not a Kubernetes Secret and has no Helm-managed source of truth.
+      - name: token-vol
+        hostPath:
+          path: /etc/celln/dispatcher-token
+          type: Directory
+      nodeSelector:
+        celln.dev/kvm: "true"
+      tolerations:
+      - key: node-role.kubernetes.io/control-plane
+        operator: Exists
+        effect: NoSchedule
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: celln-router
+  namespace: celln-system
+  labels:
+    app.kubernetes.io/name: celln-router
+    app.kubernetes.io/part-of: sympozium
+spec:
+  selector:
+    app.kubernetes.io/name: celln-router
+  ports:
+  - name: http
+    port: 8787
+    targetPort: 8788
+    protocol: TCP
+{{- end }}

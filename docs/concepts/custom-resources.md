@@ -69,6 +69,8 @@ spec:
 
 Phase transitions: `Pending` → `Running` → `Succeeded` (or `Failed`). When [lifecycle hooks](lifecycle-hooks.md) with `postRun` are defined: `Pending` → `Running` → `PostRunning` → `Succeeded` (or `Failed`).
 
+Setting `spec.backend: celln` routes the run to a hardware-isolated microVM instead of a Job — no ensembles, delegation, or shared memory, and the run's own `model:` field is ignored in favor of whatever AI provider is configured on the KVM host. See [Celln Backend](celln-backend.md).
+
 ---
 
 ## SympoziumPolicy

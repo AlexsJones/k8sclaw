@@ -108,6 +108,10 @@ spec:
             - name: MEMORY_ADMIN_TOKEN_SECRET
               value: {{ printf "%s-memory-admin-token" (include "sympozium.fullname" .) | quote }}
             {{- end }}
+            {{- if .Values.celln.enabled }}
+            - name: CELLN_ROUTER_URL
+              value: {{ .Values.celln.routerUrl | quote }}
+            {{- end }}
             {{- if .Values.pricing.enabled }}
             - name: SYMPOZIUM_PRICING_CONFIGMAP
               value: "sympozium-model-pricing"

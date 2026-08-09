@@ -388,6 +388,12 @@ kind-reload: docker-build kind-load ## Build all images and load into Kind
 
 GATEWAY_API_CRDS_URL ?= https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.2.1/standard-install.yaml
 
+# Celln (hermetic KVM-isolated execution) is opt-in: its installer DaemonSet
+# runs privileged with hostPID and a read-write host-root mount to perform
+# KVM host setup. `make install ENABLE_HERMETIC_WORKLOADS=true` opts in;
+# the plain CLI equivalent is `sympozium install --enable-hermetic-workloads`.
+ENABLE_HERMETIC_WORKLOADS ?= false
+
 install: manifests ## Install Sympozium via Helm chart (CRDs, control plane, built-ins)
 	kubectl apply --server-side --force-conflicts -f charts/sympozium/crds/
 	@echo "Installing Gateway API CRDs..."
@@ -398,6 +404,7 @@ install: manifests ## Install Sympozium via Helm chart (CRDs, control plane, bui
 		--set image.tag=$(TAG) \
 		--set certManager.enabled=false \
 		--set webhook.enabled=false \
+		--set celln.enabled=$(ENABLE_HERMETIC_WORKLOADS) \
 		--skip-crds
 
 uninstall: ## Uninstall Sympozium (Helm release, CRDs, namespace)
