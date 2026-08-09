@@ -33,18 +33,6 @@
 ---
 
 > **Full documentation:** [deploy.sympozium.ai/docs](https://deploy.sympozium.ai/docs/)
->
-> **The problem this solves:** [The Sticky-Note Problem](https://axjns.dev/blog/sticky-note-problem) &mdash; why message-passing between agents breaks down, and what to build instead.
-
----
-
-## The Problem
-
-Most multi-agent systems communicate through messages &mdash; strings of tokens that one agent serialises and another deserialises. A detection agent spots a threat while a containment agent takes the server offline for maintenance. Neither knows what the other is doing. The breach is missed.
-
-This is the **sticky-note problem**: agents passing notes instead of sharing a situational board. Kubernetes solved this for containers with a shared control plane. Agents need the same thing &mdash; not better message-passing, but **shared coordination infrastructure**.
-
-Sympozium provides that infrastructure: a [synthetic membrane](https://zenodo.org/records/20070699) that wraps agent teams with selective permeability, shared memory, structured handoffs, and circuit breakers &mdash; all expressed as Kubernetes-native CRDs.
 
 ---
 
@@ -148,6 +136,7 @@ Sympozium is a **Kubernetes-native coordination layer** for multi-agent AI syste
 | Persistent Memory | [deploy.sympozium.ai/docs/concepts/persistent-memory](https://deploy.sympozium.ai/docs/concepts/persistent-memory/) |
 | Channels | [deploy.sympozium.ai/docs/concepts/channels](https://deploy.sympozium.ai/docs/concepts/channels/) |
 | Agent Sandboxing | [deploy.sympozium.ai/docs/concepts/agent-sandbox](https://deploy.sympozium.ai/docs/concepts/agent-sandbox/) |
+| Hermetic Workloads (Celln) | [deploy.sympozium.ai/docs/concepts/celln-backend](https://deploy.sympozium.ai/docs/concepts/celln-backend/) |
 | Security | [deploy.sympozium.ai/docs/concepts/security](https://deploy.sympozium.ai/docs/concepts/security/) |
 | CLI & TUI Reference | [deploy.sympozium.ai/docs/reference/cli](https://deploy.sympozium.ai/docs/reference/cli/) |
 | Helm Chart | [deploy.sympozium.ai/docs/reference/helm](https://deploy.sympozium.ai/docs/reference/helm/) |
