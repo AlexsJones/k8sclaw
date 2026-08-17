@@ -27,6 +27,18 @@ spec:
     - jsonPath: .metadata.creationTimestamp
       name: Age
       type: date
+    - jsonPath: .status.gateVerdict
+      name: Gate
+      priority: 1
+      type: string
+    - jsonPath: .status.attempt
+      name: Attempt
+      priority: 1
+      type: integer
+    - jsonPath: .status.retryOf
+      name: Retry Of
+      priority: 1
+      type: string
     name: v1alpha1
     schema:
       openAPIV3Schema:
@@ -270,8 +282,16 @@ spec:
                           type: string
                         timeout:
                           description: |-
-                            Timeout is the maximum duration for this hook container.
-                            Defaults to 5 minutes.
+                            Timeout is the budget for this hook container. Defaults to 5 minutes.
+
+                            PostRun hooks run sequentially in one Job, so their timeouts are summed
+                            into that Job's deadline; the total is never less than 10 minutes. Because
+                            Kubernetes has no per-init-container timeout, this bounds the Job as a
+                            whole rather than each container — use it to give a slow hook (or a
+                            human-in-the-loop gate) the room it needs, not to police a fast one.
+
+                            Not yet honoured on preRun hooks, which are bounded by the agent run's
+                            own spec.timeout.
                           type: string
                       required:
                       - image
@@ -369,8 +389,16 @@ spec:
                           type: string
                         timeout:
                           description: |-
-                            Timeout is the maximum duration for this hook container.
-                            Defaults to 5 minutes.
+                            Timeout is the budget for this hook container. Defaults to 5 minutes.
+
+                            PostRun hooks run sequentially in one Job, so their timeouts are summed
+                            into that Job's deadline; the total is never less than 10 minutes. Because
+                            Kubernetes has no per-init-container timeout, this bounds the Job as a
+                            whole rather than each container — use it to give a slow hook (or a
+                            human-in-the-loop gate) the room it needs, not to police a fast one.
+
+                            Not yet honoured on preRun hooks, which are bounded by the agent run's
+                            own spec.timeout.
                           type: string
                       required:
                       - image
@@ -412,6 +440,43 @@ spec:
                       - verbs
                       type: object
                     type: array
+                  retry:
+                    description: |-
+                      Retry lets a response gate hand its rejection back to the agent for
+                      another attempt instead of ending the run. Absent means a gate verdict
+                      is terminal, which is the historical behaviour.
+                    properties:
+                      backoff:
+                        description: Backoff delays the successor attempt. Absent
+                          means start immediately.
+                        type: string
+                      maxAttempts:
+                        default: 2
+                        description: |-
+                          MaxAttempts is the total number of attempts including the first, so
+                          maxAttempts: 3 permits two retries. A bound SympoziumPolicy may cap this
+                          further via lifecyclePolicy.maxRetryAttempts.
+                        minimum: 1
+                        type: integer
+                      maxChainTokens:
+                        description: |-
+                          MaxChainTokens caps the cumulative status.tokenUsage.totalTokens of every
+                          attempt in the chain. When the sum reaches it, the chain stops and the
+                          gate verdict resolves as retries-exhausted. 0 means unlimited.
+                        format: int64
+                        type: integer
+                      "on":
+                        description: |-
+                          On selects which outcomes may trigger a retry. Only "gate" is wired
+                          today; "failure" is accepted by the schema but ignored by the controller.
+                          Empty means ["gate"].
+                        items:
+                          enum:
+                          - gate
+                          - failure
+                          type: string
+                        type: array
+                    type: object
                 type: object
               mode:
                 default: task
@@ -2628,6 +2693,11 @@ spec:
           status:
             description: AgentRunStatus defines the observed state of AgentRun.
             properties:
+              attempt:
+                description: |-
+                  Attempt is this run's 1-based position in its retry chain. 0 or 1 both
+                  mean "first attempt"; only retry successors carry an explicit value.
+                type: integer
               cellnActionId:
                 description: |-
                   CellnActionID is the execution identifier returned by the Celln dispatcher
@@ -2800,7 +2870,8 @@ spec:
               gateVerdict:
                 description: |-
                   GateVerdict records the outcome of the response gate hook, if configured.
-                  One of: approved, rejected, rewritten, timeout, error, allowed-by-default.
+                  One of: approved, rejected, rewritten, timeout, error, allowed-by-default,
+                  retried (superseded by a successor attempt), retries-exhausted.
                   Empty when no gate hook is configured.
                 type: string
               jobName:
@@ -2819,6 +2890,11 @@ spec:
                 type: string
               result:
                 description: Result is the agent's final reply (populated on success).
+                type: string
+              retryOf:
+                description: |-
+                  RetryOf is the name of the predecessor AgentRun this attempt retries.
+                  Empty on a first attempt. Walk it backwards to reconstruct the chain.
                 type: string
               sandboxClaimName:
                 description: SandboxClaimName is the name of the SandboxClaim when

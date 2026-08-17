@@ -74,6 +74,22 @@ PostRun hooks execute in a **follow-up Job** after the agent completes. They rec
 
 The workspace is shared between the agent and postRun hooks via a PersistentVolumeClaim. PostRun failures are **best-effort** — they're recorded as a `PostRunFailed` Condition but don't change the agent's final phase.
 
+#### PostRun timeouts
+
+PostRun hooks run sequentially in one Job, and that Job's budget is the **sum of the hooks' `timeout` fields** — 5 minutes each when unset, and never less than 10 minutes in total.
+
+```yaml
+postRun:
+  - name: upload-artifacts
+    image: amazon/aws-cli:latest
+    timeout: 30m          # a slow upload gets the room it needs
+```
+
+Two things to know:
+
+- The budget is measured from when the **postRun Job** starts, not from when the agent run started. A long-running agent still gets its full postRun budget.
+- Kubernetes has no per-init-container timeout, so `timeout` bounds the Job as a whole rather than each container. Use it to give a slow hook room, not to police a fast one — a hook that overruns simply eats into what is left for the hooks after it.
+
 **Use cases:** Upload artifacts to S3, post a summary to Slack, clean up temporary resources, trigger downstream pipelines.
 
 ### Environment Variables
@@ -252,16 +268,131 @@ The gate hook patches the annotation `sympozium.ai/gate-verdict` with a JSON obj
 | `approve` | Passes the original response through unchanged | `{"action":"approve"}` |
 | `reject` | Replaces the response with a custom message | `{"action":"reject","response":"Blocked by policy"}` |
 | `rewrite` | Replaces the response with a sanitized version | `{"action":"rewrite","response":"cleaned output"}` |
+| `retry` | Hands the rejection back to the agent for another attempt — see [Retrying a rejected response](#retrying-a-rejected-response) | `{"action":"retry","reason":"npm run check failed","response":"<gate output>"}` |
 
 All actions accept an optional `reason` field for audit logging.
+
+### Retrying a Rejected Response
+
+`reject` and `rewrite` are terminal: the run ends and the user sees the gate's
+message. `retry` instead feeds the gate's output back to the agent as a **new
+attempt**, so the agent can fix what the gate objected to.
+
+This is not the Job's `backoffLimit` (which is disabled). That replays the pod
+with an identical task and no knowledge of why the last attempt was rejected. A
+retry attempt is a fresh AgentRun whose task carries the feedback.
+
+Enable it with `lifecycle.retry`:
+
+```yaml
+spec:
+  lifecycle:
+    gateDefault: block
+    retry:
+      maxAttempts: 3          # total attempts including the first
+      backoff: 30s            # optional delay before the next attempt starts
+      maxChainTokens: 200000  # cumulative across the chain; 0 = unlimited
+      on: [gate]              # only "gate" is wired today
+    postRun:
+      - name: build-check
+        image: my-org/build-check:latest
+        gate: true
+        command: ["sh", "-c"]
+        args:
+          - |
+            if OUT=$(npm run check 2>&1); then
+              VERDICT='{"action":"approve"}'
+            else
+              VERDICT=$(jq -nc --arg out "$OUT" \
+                '{action:"retry", reason:"npm run check failed", response:$out}')
+            fi
+            kubectl patch agentrun $AGENT_RUN_ID -n $AGENT_NAMESPACE --type=merge \
+              -p "{\"metadata\":{\"annotations\":{\"sympozium.ai/gate-verdict\":$(echo $VERDICT | jq -Rs .)}}}"
+```
+
+The successor attempt receives a structured card in place of its task:
+
+```
+## Retry 2 of 3
+
+### Original Task
+<the original task, with earlier retry cards stripped>
+
+### Your Previous Attempt
+<the rejected output>
+
+### Why It Was Rejected
+npm run check failed
+
+### Gate Output
+<the gate's stdout/stderr>
+```
+
+Gate output is clipped to 4000 characters, with the clip announced in the card.
+Set `SYMPOZIUM_RETRY_GATE_OUTPUT_MAX_CHARS` on the controller to change it — a
+test-suite dump needs more room than a lint summary.
+
+#### Inspecting a chain
+
+Each attempt is named `<run>-retry-<n>` and records its lineage in
+`status.attempt` / `status.retryOf`, plus labels for querying:
+
+```bash
+kubectl get agentruns -l sympozium.ai/retry-of=my-run
+kubectl get agentrun my-run-retry-2 -o jsonpath='{.status.retryOf}{"\n"}'
+```
+
+A superseded attempt ends in the `Failed` phase with
+`status.gateVerdict: retried` and a `Retried` condition naming its successor. It
+publishes nothing — no channel reply, no failure event — because the chain has
+not finished. When the attempts or the token budget run out, the last attempt
+resolves as `retries-exhausted` and `gateDefault` decides whether its output is
+blocked or passed through.
+
+#### Why this is safe
+
+**The retry decision is not agent-controlled.** The gate hook is an
+operator-declared image in `lifecycle.postRun`, and the agent has no permission
+to patch the `sympozium.ai/gate-verdict` annotation for its own run. An agent
+cannot grant itself another attempt. That property is the reason retry is safe
+here and would not be if the agent could self-retry.
+
+Two further bounds on a gate that always says `retry`:
+
+- `maxAttempts` is capped at admission by the bound `SympoziumPolicy`, so an
+  operator sets the ceiling regardless of what a run requests:
+
+  ```yaml
+  apiVersion: sympozium.ai/v1alpha1
+  kind: SympoziumPolicy
+  metadata:
+    name: default-governance
+  spec:
+    lifecyclePolicy:
+      maxRetryAttempts: 3
+  ```
+
+- `maxChainTokens` caps the cumulative `status.tokenUsage.totalTokens` of every
+  attempt in the chain.
 
 ### Manual (Human-in-the-Loop) Approval
 
 If you want a human to approve or reject each response:
 
-1. Set the gate hook to sleep indefinitely (or for a long timeout)
+1. Set the gate hook to sleep indefinitely, and declare a matching `timeout` — otherwise the reviewer only gets the 10-minute default before `gateDefault` decides for them
 2. Set `gateDefault: block` so unapproved responses are blocked
 3. Use the web UI or API to approve or reject
+
+```yaml
+postRun:
+  - name: manual-approval-gate
+    image: busybox:1.36
+    gate: true
+    timeout: 24h        # how long a human has to respond
+    command: ["sh", "-c", "sleep 86400"]
+```
+
+The `requireApproval` toggle in the API and UI configures exactly this, with a 24-hour window.
 
 In the web UI, gated runs show an amber "Approval" badge on the runs list and an approval bar on the run detail page with Approve and Reject buttons. A warning toast fires when a run requires approval.
 
@@ -313,6 +444,8 @@ spec:
 | Approved | Green "approved" banner on detail page |
 | Rejected | Red "rejected" banner on detail page |
 | Rewritten | Blue "rewritten" banner on detail page |
+| Retried | Amber "retried" banner on detail page — superseded, not failed |
+| Retries exhausted | Red "retries-exhausted" banner on detail page |
 | Timeout/error | Red "timeout" or "error" banner on detail page |
 
 ## Agent Sandbox Compatibility

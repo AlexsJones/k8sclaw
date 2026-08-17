@@ -1034,6 +1034,10 @@ func (s *Server) deleteRun(w http.ResponseWriter, r *http.Request) {
 
 const manualGateHookName = "manual-approval-gate"
 
+// manualGateApprovalWindow is how long a run waits for a human verdict before
+// gateDefault decides for them. It matches the gate hook's own `sleep 86400`.
+const manualGateApprovalWindow = 24 * time.Hour
+
 // applyRequireApproval adds or removes a built-in manual approval gate hook
 // on the instance's lifecycle. When enabled, all runs from this instance will
 // pause in PostRunning until an operator approves via the UI or API.
@@ -1056,9 +1060,14 @@ func applyRequireApproval(inst *sympoziumv1alpha1.Agent, enable bool) {
 
 		lc.GateDefault = "block"
 		lc.PostRun = append(lc.PostRun, sympoziumv1alpha1.LifecycleHookContainer{
-			Name:    manualGateHookName,
-			Image:   "busybox:1.36",
-			Gate:    true,
+			Name:  manualGateHookName,
+			Image: "busybox:1.36",
+			Gate:  true,
+			// The hook sleeps for a day; declare that as its timeout so the
+			// postRun Job's deadline matches. Without it the reviewer gets the
+			// 10-minute default, and a run left overnight is blocked by
+			// gateDefault before anyone has looked at it.
+			Timeout: &metav1.Duration{Duration: manualGateApprovalWindow},
 			Command: []string{"sh", "-c", "echo 'Waiting for manual approval...'; sleep 86400"},
 		})
 
