@@ -86,13 +86,31 @@ func gateRetrySpec(agentRun *sympoziumv1alpha1.AgentRun) *sympoziumv1alpha1.Retr
 	return nil
 }
 
-// currentAttempt reports the run's 1-based position in its chain. A first
-// attempt may leave status.attempt unset, so 0 reads as 1.
+// currentAttempt reports the run's 1-based position in its chain.
+//
+// status.attempt is the record, but it is written after the successor's Create
+// and can be lost; the sympozium.ai/attempt label is set atomically as part of
+// that Create. Reading through to the label keeps maxAttempts bounding the
+// chain even when the status write never landed — without it currentAttempt
+// reads 1 forever, the bound never trips, and retryChainName recomputes the
+// name the run already has. A first attempt has neither, and reads as 1.
 func currentAttempt(agentRun *sympoziumv1alpha1.AgentRun) int {
-	if agentRun.Status.Attempt < 1 {
-		return 1
+	if agentRun.Status.Attempt >= 1 {
+		return agentRun.Status.Attempt
 	}
-	return agentRun.Status.Attempt
+	if n, err := strconv.Atoi(agentRun.Labels[retryAttemptLabel]); err == nil && n >= 1 {
+		return n
+	}
+	return 1
+}
+
+// retryPredecessor names the attempt this run supersedes, falling back to the
+// lineage label for the same reason currentAttempt does.
+func retryPredecessor(agentRun *sympoziumv1alpha1.AgentRun) string {
+	if agentRun.Status.RetryOf != "" {
+		return agentRun.Status.RetryOf
+	}
+	return agentRun.Labels[retryOfLabel]
 }
 
 // retryChainName builds the successor's name, stripping the predecessor's own
@@ -118,7 +136,7 @@ func (r *AgentRunReconciler) retryChainTokens(ctx context.Context, agentRun *sym
 	}
 
 	seen := map[string]bool{agentRun.Name: true}
-	name := agentRun.Status.RetryOf
+	name := retryPredecessor(agentRun)
 	for i := 0; i < retryChainWalkLimit && name != "" && !seen[name]; i++ {
 		seen[name] = true
 		var prev sympoziumv1alpha1.AgentRun
@@ -128,7 +146,7 @@ func (r *AgentRunReconciler) retryChainTokens(ctx context.Context, agentRun *sym
 		if prev.Status.TokenUsage != nil {
 			total += int64(prev.Status.TokenUsage.TotalTokens)
 		}
-		name = prev.Status.RetryOf
+		name = retryPredecessor(&prev)
 	}
 	return total
 }
@@ -254,11 +272,19 @@ func (r *AgentRunReconciler) createRetryRun(
 		return runName, nil
 	}
 
-	// Status is a subresource, so lineage is written after Create.
-	_ = r.updateStatusWithRetry(ctx, successor, func(ar *sympoziumv1alpha1.AgentRun) {
+	// Status is a subresource, so lineage is written after Create — through the
+	// uncached reader, since the informer cache has not seen the object yet.
+	if err := r.updateFreshStatusWithRetry(ctx, successor, func(ar *sympoziumv1alpha1.AgentRun) {
 		ar.Status.Attempt = attempt
 		ar.Status.RetryOf = agentRun.Name
-	})
+	}); err != nil {
+		// Not fatal: the lineage labels carry the same facts and
+		// currentAttempt/retryPredecessor read through to them, so the chain
+		// stays bounded. Log it — a missing status.attempt is otherwise
+		// invisible until someone reads the print columns.
+		log.Error(err, "Failed to write retry lineage to successor status",
+			"run", runName, "attempt", attempt)
+	}
 
 	log.Info("Created retry successor run", "run", runName, "attempt", attempt, "maxAttempts", spec.MaxAttempts)
 	return runName, nil

@@ -7,10 +7,14 @@ import (
 	"time"
 
 	"github.com/go-logr/logr"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	sympoziumv1alpha1 "github.com/sympozium-ai/sympozium/api/v1alpha1"
 )
@@ -77,6 +81,39 @@ func retryReconciler(t *testing.T, objs ...*sympoziumv1alpha1.AgentRun) (*AgentR
 		Log:      logr.Discard(),
 		EventBus: bus,
 	}, bus
+}
+
+// retryReconcilerWithLaggingCache mirrors the production client topology: the
+// reconciler's Client reads through an informer cache that has not observed
+// laggingName, while APIReader goes straight to the apiserver. A plain fake
+// client cannot express that split, which is why the Get-after-Create hazard
+// never showed up in unit tests.
+func retryReconcilerWithLaggingCache(t *testing.T, laggingName string, objs ...*sympoziumv1alpha1.AgentRun) (*AgentRunReconciler, client.Client) {
+	t.Helper()
+	scheme := retryScheme(t)
+	builder := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithStatusSubresource(&sympoziumv1alpha1.AgentRun{})
+	for _, o := range objs {
+		builder = builder.WithObjects(o)
+	}
+	direct := builder.Build()
+	cached := interceptor.NewClient(direct, interceptor.Funcs{
+		Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+			if key.Name == laggingName {
+				return apierrors.NewNotFound(
+					schema.GroupResource{Group: sympoziumv1alpha1.GroupVersion.Group, Resource: "agentruns"}, key.Name)
+			}
+			return c.Get(ctx, key, obj, opts...)
+		},
+	})
+	return &AgentRunReconciler{
+		Client:    cached,
+		APIReader: direct,
+		Scheme:    scheme,
+		Log:       logr.Discard(),
+		EventBus:  &recordingEventBus{},
+	}, direct
 }
 
 func getRun(t *testing.T, r *AgentRunReconciler, name string) *sympoziumv1alpha1.AgentRun {
@@ -186,6 +223,81 @@ func TestResolveGate_RetryChainNamesDoNotCompound(t *testing.T) {
 	successor := getRun(t, r, "demo-run-retry-3")
 	if successor.Status.Attempt != 3 {
 		t.Errorf("attempt = %d, want 3", successor.Status.Attempt)
+	}
+	if !strings.HasPrefix(successor.Spec.Task.GetPrompt(), "## Retry 3 of 3") {
+		t.Errorf("unexpected card header:\n%s", successor.Spec.Task.GetPrompt())
+	}
+}
+
+// The lineage write targets an object created microseconds earlier, so a
+// cached Get can miss it. When it did, every real chain rendered an empty
+// Attempt / Retry Of column while the labels looked correct.
+func TestResolveGate_RetryLineageSurvivesACacheMiss(t *testing.T) {
+	run := withVerdict(
+		gatedRun("demo-run", &sympoziumv1alpha1.RetrySpec{MaxAttempts: 3}),
+		`{"action":"retry","reason":"tests failed"}`)
+
+	r, direct := retryReconcilerWithLaggingCache(t, "demo-run-retry-2", run)
+	if _, err := r.resolveGate(context.Background(), logr.Discard(), run, true, false); err != nil {
+		t.Fatalf("resolveGate: %v", err)
+	}
+
+	var successor sympoziumv1alpha1.AgentRun
+	if err := direct.Get(context.Background(),
+		types.NamespacedName{Name: "demo-run-retry-2", Namespace: "default"}, &successor); err != nil {
+		t.Fatalf("get successor: %v", err)
+	}
+	if successor.Status.Attempt != 2 {
+		t.Errorf("successor status.attempt = %d, want 2 — the lineage write was lost to the cache miss", successor.Status.Attempt)
+	}
+	if successor.Status.RetryOf != "demo-run" {
+		t.Errorf("successor status.retryOf = %q, want %q", successor.Status.RetryOf, "demo-run")
+	}
+}
+
+// Even with the write repaired, the bound must not depend on it. Without the
+// label fallback this run names itself as its own successor and the chain
+// dead-ends silently.
+func TestResolveGate_AttemptLabelBoundsAChainMissingItsStatus(t *testing.T) {
+	run := withVerdict(
+		gatedRun("demo-run-retry-2", &sympoziumv1alpha1.RetrySpec{MaxAttempts: 2}),
+		`{"action":"retry","reason":"still failing"}`)
+	run.Labels[retryOfLabel] = "demo-run"
+	run.Labels[retryAttemptLabel] = "2"
+	// status.attempt deliberately unset — this is the run the bug produced.
+
+	r, _ := retryReconciler(t, run)
+	if _, err := r.resolveGate(context.Background(), logr.Discard(), run, true, false); err != nil {
+		t.Fatalf("resolveGate: %v", err)
+	}
+
+	var runs sympoziumv1alpha1.AgentRunList
+	if err := r.List(context.Background(), &runs); err != nil {
+		t.Fatalf("list runs: %v", err)
+	}
+	if len(runs.Items) != 1 {
+		t.Fatalf("expected no successor once attempts are exhausted, got %d runs", len(runs.Items))
+	}
+	if got := getRun(t, r, "demo-run-retry-2"); got.Status.GateVerdict != "retries-exhausted" {
+		t.Errorf("gateVerdict = %q, want %q", got.Status.GateVerdict, "retries-exhausted")
+	}
+}
+
+// ...and the third attempt a maxAttempts:3 chain is owed still gets created.
+func TestResolveGate_AttemptLabelContinuesAChainMissingItsStatus(t *testing.T) {
+	run := withVerdict(
+		gatedRun("demo-run-retry-2", &sympoziumv1alpha1.RetrySpec{MaxAttempts: 3}),
+		`{"action":"retry","reason":"still failing"}`)
+	run.Labels[retryOfLabel] = "demo-run"
+	run.Labels[retryAttemptLabel] = "2"
+
+	r, _ := retryReconciler(t, run)
+	if _, err := r.resolveGate(context.Background(), logr.Discard(), run, true, false); err != nil {
+		t.Fatalf("resolveGate: %v", err)
+	}
+	successor := getRun(t, r, "demo-run-retry-3")
+	if successor.Labels[retryAttemptLabel] != "3" {
+		t.Errorf("successor attempt label = %q, want %q", successor.Labels[retryAttemptLabel], "3")
 	}
 	if !strings.HasPrefix(successor.Spec.Task.GetPrompt(), "## Retry 3 of 3") {
 		t.Errorf("unexpected card header:\n%s", successor.Spec.Task.GetPrompt())
@@ -523,6 +635,46 @@ func TestRetryChainTokens_TerminatesOnCycle(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("retryChainTokens did not terminate on a cyclic chain")
+	}
+}
+
+// The chain token budget walks the same lineage, so it needs the same fallback.
+func TestRetryChainTokens_WalksTheLineageLabel(t *testing.T) {
+	first := gatedRun("demo-run", nil)
+	first.Status.TokenUsage = &sympoziumv1alpha1.TokenUsage{TotalTokens: 800}
+
+	second := gatedRun("demo-run-retry-2", nil)
+	second.Labels[retryOfLabel] = "demo-run" // status.retryOf never landed
+	second.Status.TokenUsage = &sympoziumv1alpha1.TokenUsage{TotalTokens: 400}
+
+	r, _ := retryReconciler(t, first, second)
+	if got := r.retryChainTokens(context.Background(), second); got != 1200 {
+		t.Errorf("chain tokens = %d, want 1200", got)
+	}
+}
+
+func TestCurrentAttempt_FallsBackToTheLabel(t *testing.T) {
+	cases := []struct {
+		name   string
+		status int
+		label  string
+		want   int
+	}{
+		{"no lineage at all", 0, "", 1},
+		{"status wins when both are set", 3, "2", 3},
+		{"label carries a lost status write", 0, "2", 2},
+		{"a junk label reads as attempt 1", 0, "two", 1},
+		{"a zero label reads as attempt 1", 0, "0", 1},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			run := gatedRun("r", nil)
+			run.Status.Attempt = tc.status
+			run.Labels[retryAttemptLabel] = tc.label
+			if got := currentAttempt(run); got != tc.want {
+				t.Errorf("currentAttempt() = %d, want %d", got, tc.want)
+			}
+		})
 	}
 }
 

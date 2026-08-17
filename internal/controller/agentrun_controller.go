@@ -176,11 +176,41 @@ type AgentRunReconciler struct {
 
 const imageRegistry = "ghcr.io/sympozium-ai/sympozium"
 
+// statusReader returns the uncached APIReader when one is wired, falling back
+// to the cached client. Use it for reads that must see a write the informer
+// cache may not have observed yet.
+func (r *AgentRunReconciler) statusReader() client.Reader {
+	if r.APIReader != nil {
+		return r.APIReader
+	}
+	return r.Client
+}
+
 // updateStatusWithRetry safely updates status handling resourceVersion conflicts
 func (r *AgentRunReconciler) updateStatusWithRetry(ctx context.Context, agentRun *sympoziumv1alpha1.AgentRun, mutate func(ar *sympoziumv1alpha1.AgentRun)) error {
 	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
 		latest := &sympoziumv1alpha1.AgentRun{}
 		if err := r.Get(ctx, client.ObjectKeyFromObject(agentRun), latest); err != nil {
+			return err
+		}
+		mutate(latest)
+		return r.Status().Update(ctx, latest)
+	})
+}
+
+// updateFreshStatusWithRetry is updateStatusWithRetry for an object created
+// moments ago. The cached client's Get can miss an object the informer has not
+// observed yet, and RetryOnConflict does not retry NotFound — so a plain
+// updateStatusWithRetry straight after a Create silently loses the write. Read
+// through the uncached reader, and treat NotFound as retriable too for the
+// case where no APIReader is wired.
+func (r *AgentRunReconciler) updateFreshStatusWithRetry(ctx context.Context, agentRun *sympoziumv1alpha1.AgentRun, mutate func(ar *sympoziumv1alpha1.AgentRun)) error {
+	reader := r.statusReader()
+	return retry.OnError(retry.DefaultBackoff, func(err error) bool {
+		return errors.IsConflict(err) || errors.IsNotFound(err)
+	}, func() error {
+		latest := &sympoziumv1alpha1.AgentRun{}
+		if err := reader.Get(ctx, client.ObjectKeyFromObject(agentRun), latest); err != nil {
 			return err
 		}
 		mutate(latest)
@@ -830,11 +860,7 @@ func (r *AgentRunReconciler) reconcileRunning(ctx context.Context, log logr.Logg
 			// status update yet) — if the run is already terminal, don't
 			// override it with "Job not found".
 			fresh := &sympoziumv1alpha1.AgentRun{}
-			reader := client.Reader(r.APIReader)
-			if reader == nil {
-				reader = r.Client
-			}
-			if getErr := reader.Get(ctx, client.ObjectKeyFromObject(agentRun), fresh); getErr == nil {
+			if getErr := r.statusReader().Get(ctx, client.ObjectKeyFromObject(agentRun), fresh); getErr == nil {
 				switch fresh.Status.Phase {
 				case sympoziumv1alpha1.AgentRunPhaseSucceeded,
 					sympoziumv1alpha1.AgentRunPhaseFailed,
