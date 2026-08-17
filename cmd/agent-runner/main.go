@@ -750,7 +750,7 @@ func main() {
 // backward-compatible test coverage.
 func callAnthropic(ctx context.Context, apiKey, baseURL, model, systemPrompt, task string, tools []ToolDef, headers map[string]string) (string, int, int, int, error) {
 	p := newAnthropicProvider(apiKey, baseURL, model, systemPrompt, task, tools, headers)
-	return runAgentLoop(ctx, p)
+	return runAgentLoop(ctx, p, tools)
 }
 
 // callOpenAI dispatches an agent run to the OpenAI-compatible provider path
@@ -760,7 +760,7 @@ func callOpenAI(ctx context.Context, provider, apiKey, baseURL, model, systemPro
 	if err != nil {
 		return "", 0, 0, 0, err
 	}
-	return runAgentLoop(ctx, p)
+	return runAgentLoop(ctx, p, tools)
 }
 
 // callBedrock dispatches an agent run to the AWS Bedrock provider.
@@ -769,7 +769,7 @@ func callBedrock(ctx context.Context, model, systemPrompt, task string, tools []
 	if err != nil {
 		return "", 0, 0, 0, err
 	}
-	return runAgentLoop(ctx, p)
+	return runAgentLoop(ctx, p, tools)
 }
 
 // callBedrockWithClient accepts a pre-built client; used by tests to inject
@@ -779,7 +779,7 @@ func callBedrockWithClient(ctx context.Context, client bedrockClientAPI, model, 
 	if err != nil {
 		return "", 0, 0, 0, err
 	}
-	return runAgentLoop(ctx, p)
+	return runAgentLoop(ctx, p, tools)
 }
 
 func writeJSON(path string, v any) {

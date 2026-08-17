@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"strconv"
+	"strings"
 	"unicode/utf8"
 )
 
@@ -17,6 +19,12 @@ const (
 	// as it did before unless one of the CONTEXT_* vars is set.
 	defaultToolResultMaxBytes = 0
 	defaultKeepRecentResults  = 3
+
+	// defaultElisionSpillDir is where elided tool output is parked so the model
+	// can read it back. It sits under the same /workspace/.sympozium prefix the
+	// runner already uses for trace-context.json, and is only ever created when
+	// elision actually fires.
+	defaultElisionSpillDir = "/workspace/.sympozium/elided"
 )
 
 // contextPolicy bounds how much tool-result content accumulates in the
@@ -39,6 +47,11 @@ const (
 //     batched: we elide all the way down to HistoryLowBytes in one pass rather
 //     than trimming a little each round. That pays one cache write and then
 //     runs every remaining round against a much smaller prefix.
+//
+// Elision moves output out of the conversation; it does not destroy it. The
+// full result is written to SpillDir first and the placeholder names that path,
+// so the model recovers detail with read_file (which paginates) instead of
+// re-running a tool whose side effects may not be repeatable.
 type contextPolicy struct {
 	// ToolResultMaxBytes clamps a single tool result at insertion. 0 disables.
 	ToolResultMaxBytes int
@@ -51,6 +64,10 @@ type contextPolicy struct {
 	// those are what the model is actively reasoning over. The current round's
 	// results are protected regardless of this value; see protectedCutoff.
 	KeepRecent int
+	// SpillDir is where an elided result's full output is written so the model
+	// can recover it with read_file instead of re-running the tool. Empty
+	// disables spilling, and elision falls back to a bare placeholder.
+	SpillDir string
 }
 
 // elisionEnabled reports whether retroactive elision is configured.
@@ -66,6 +83,12 @@ func loadContextPolicy() contextPolicy {
 		HistoryBudgetBytes: envInt("CONTEXT_HISTORY_BUDGET_BYTES", 0),
 		HistoryLowBytes:    envInt("CONTEXT_HISTORY_BUDGET_LOW_BYTES", 0),
 		KeepRecent:         envInt("CONTEXT_KEEP_RECENT_RESULTS", defaultKeepRecentResults),
+		SpillDir:           getEnv("CONTEXT_ELISION_SPILL_DIR", defaultElisionSpillDir),
+	}
+	// "off" is the explicit opt-out: an empty env var is indistinguishable from
+	// an unset one, so it cannot carry that meaning.
+	if cp.SpillDir == "off" {
+		cp.SpillDir = ""
 	}
 	if cp.ToolResultMaxBytes < 0 {
 		cp.ToolResultMaxBytes = 0
@@ -144,13 +167,85 @@ func (cp contextPolicy) clampToolResult(tool, content string) (string, int) {
 		dropped, len(content), tool), dropped
 }
 
-// elisionStub is the placeholder left in history in place of an elided result.
-// It names the tool and the reclaimed size so the model can decide whether to
-// re-run rather than assuming the tool returned nothing.
+// elisionStub is the placeholder left in history in place of an elided result
+// whose output could not be spilled to disk. It names the tool and the
+// reclaimed size so the model can decide whether to re-run rather than assuming
+// the tool returned nothing.
 func elisionStub(tool string, size int) string {
 	return fmt.Sprintf(
 		"[earlier %s result elided to reclaim context — %d bytes. Re-run the tool if you still need this output.]",
 		tool, size)
+}
+
+// elisionStubSpilled is the placeholder for a result whose full output was
+// written to path. Every elided entry carries one of these for the rest of the
+// run, so it stays terse: read_file's own description covers pagination, and
+// re-running the tool is not worth suggesting once the output is on disk.
+func elisionStubSpilled(tool string, size int, path string) string {
+	return fmt.Sprintf("[earlier %s result elided — %d bytes saved to %s; read_file to recover.]",
+		tool, size, path)
+}
+
+// resultSpiller persists elided tool output. Path is separate from Write so
+// selectForElision can size a stub against the path it would use before
+// committing to the write, and skip entries too small to be worth eliding
+// without leaving an orphan file behind.
+type resultSpiller interface {
+	// Path is pure and deterministic: the same seq always maps to the same
+	// location.
+	Path(seq int) string
+	// Write persists content at a path previously returned by Path, creating
+	// parent directories as needed.
+	Write(path, content string) error
+}
+
+// spillUnavailable reports why an elided result could not be read back again,
+// or "" when it can. Spilling is only worth doing if the stub's instruction is
+// actionable: read_file has to survive this run's tool policy, and the spill
+// directory has to sit under a root read_file will open. When it isn't, the
+// caller keeps the destructive placeholder rather than pointing the model at a
+// file it cannot reach.
+func spillUnavailable(dir string, tools []ToolDef) string {
+	found := false
+	for _, t := range tools {
+		if t.Name == ToolReadFile {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return ToolReadFile + " is not available to this run"
+	}
+	if !underAnyPrefix(filepath.Clean(dir), readableRoots) {
+		return fmt.Sprintf("%s is outside the roots %s can read (%s)",
+			dir, ToolReadFile, strings.Join(readableRoots, ", "))
+	}
+	return ""
+}
+
+// dirSpiller writes each elided result to its own file under Dir.
+type dirSpiller struct {
+	Dir string
+}
+
+// Path names the file for the seq-th ledger entry. The filename is built
+// entirely from the ledger index — no tool name, no call ID, nothing the model
+// or an MCP server can influence — so it cannot traverse out of Dir by
+// construction rather than by sanitizing. The tool a file came from is recorded
+// where it is actually read: the stub that replaces the result, and the elision
+// log event.
+func (s dirSpiller) Path(seq int) string {
+	return filepath.Join(s.Dir, fmt.Sprintf("%04d.txt", seq))
+}
+
+// Write persists content. Permissions match the detailed logger's (0o700/0o600):
+// tool output can carry whatever a command echoed, so it stays readable only by
+// the agent container's own user.
+func (s dirSpiller) Write(path, content string) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	return os.WriteFile(path, []byte(content), 0o600)
 }
 
 // ledgerEntry records one tool result that was handed to the provider.
@@ -160,6 +255,10 @@ type ledgerEntry struct {
 	bytes  int
 	round  int
 	elided bool
+	// content is the result as inserted. Held so elision can spill it; it is
+	// the same string the provider already retains, so this costs a reference
+	// rather than a copy, and is released once the entry is elided.
+	content string
 }
 
 // toolResultLedger tracks the live byte cost of every tool result inserted into
@@ -169,15 +268,26 @@ type ledgerEntry struct {
 type toolResultLedger struct {
 	entries []ledgerEntry
 	live    int
+	// spill persists elided output. Nil leaves elision destructive, which is
+	// the behaviour when no spill directory is configured.
+	spill resultSpiller
+	// spillFailed suppresses repeat logging once a write has failed — a
+	// read-only or absent /workspace fails identically for every entry.
+	spillFailed bool
 }
 
-// add records a tool result of n bytes inserted at the given round. round is
-// load-bearing, not just diagnostic: protectedCutoff uses it to keep the
-// current round's results out of the elision window. Callers must pass a
-// non-decreasing round.
-func (l *toolResultLedger) add(callID, tool string, n, round int) {
-	l.entries = append(l.entries, ledgerEntry{callID: callID, tool: tool, bytes: n, round: round})
-	l.live += n
+// add records a tool result inserted at the given round. round is load-bearing,
+// not just diagnostic: protectedCutoff uses it to keep the current round's
+// results out of the elision window. Callers must pass a non-decreasing round.
+func (l *toolResultLedger) add(callID, tool, content string, round int) {
+	l.entries = append(l.entries, ledgerEntry{
+		callID:  callID,
+		tool:    tool,
+		bytes:   len(content),
+		round:   round,
+		content: content,
+	})
+	l.live += len(content)
 }
 
 // liveBytes is the current tool-result contribution to every outgoing request.
@@ -245,17 +355,45 @@ func (l *toolResultLedger) selectForElision(cp contextPolicy) (map[string]string
 		if e.elided {
 			continue
 		}
+
+		var path string
 		stub := elisionStub(e.tool, e.bytes)
+		if l.spill != nil {
+			path = l.spill.Path(i)
+			stub = elisionStubSpilled(e.tool, e.bytes, path)
+		}
 		// Eliding a result that is already smaller than its own stub would
-		// grow the request rather than shrink it.
+		// grow the request rather than shrink it. Checked before the write so
+		// a skipped entry leaves no orphan file.
 		if len(stub) >= e.bytes {
 			continue
 		}
+
+		if l.spill != nil {
+			if err := l.spill.Write(path, e.content); err != nil {
+				if !l.spillFailed {
+					l.spillFailed = true
+					log.Printf("WARNING: cannot spill elided tool output to %s: %v — "+
+						"elision continues without it and elided results are unrecoverable", path, err)
+				}
+				// Fall back to the bare stub. It is not necessarily shorter
+				// than the spilled one (a short spill dir makes it longer), so
+				// the size guard has to be re-applied.
+				stub = elisionStub(e.tool, e.bytes)
+				if len(stub) >= e.bytes {
+					continue
+				}
+			}
+		}
+
 		replacements[e.callID] = stub
 		reclaimed += e.bytes - len(stub)
 		l.live -= e.bytes - len(stub)
 		e.elided = true
 		e.bytes = len(stub)
+		// The provider is about to drop its reference to the original; release
+		// ours so a long run does not retain every elided result.
+		e.content = ""
 	}
 
 	if len(replacements) == 0 {

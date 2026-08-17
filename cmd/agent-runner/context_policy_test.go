@@ -2,6 +2,9 @@ package main
 
 import (
 	"context"
+	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -139,10 +142,13 @@ func TestClampToolResult_Disabled(t *testing.T) {
 	}
 }
 
+// body returns n bytes of filler so ledger tests can keep expressing sizes.
+func body(n int) string { return strings.Repeat("x", n) }
+
 func TestLedger_TracksLiveBytes(t *testing.T) {
 	l := &toolResultLedger{}
-	l.add("a", "execute_command", 100, 1)
-	l.add("b", "fetch_url", 250, 2)
+	l.add("a", "execute_command", body(100), 1)
+	l.add("b", "fetch_url", body(250), 2)
 	if l.liveBytes() != 350 {
 		t.Errorf("liveBytes = %d, want 350", l.liveBytes())
 	}
@@ -151,7 +157,7 @@ func TestLedger_TracksLiveBytes(t *testing.T) {
 func TestLedger_NoElisionBelowBudget(t *testing.T) {
 	cp := contextPolicy{HistoryBudgetBytes: 1000, HistoryLowBytes: 500, KeepRecent: 1}
 	l := &toolResultLedger{}
-	l.add("a", "fetch_url", 300, 1)
+	l.add("a", "fetch_url", body(300), 1)
 
 	replacements, reclaimed := l.selectForElision(cp)
 	if replacements != nil || reclaimed != 0 {
@@ -162,9 +168,9 @@ func TestLedger_NoElisionBelowBudget(t *testing.T) {
 func TestLedger_ElidesOldestDownToLowWaterMark(t *testing.T) {
 	cp := contextPolicy{HistoryBudgetBytes: 1000, HistoryLowBytes: 500, KeepRecent: 1}
 	l := &toolResultLedger{}
-	l.add("a", "fetch_url", 600, 1)
-	l.add("b", "fetch_url", 600, 2)
-	l.add("c", "execute_command", 400, 3) // newest — protected by KeepRecent
+	l.add("a", "fetch_url", body(600), 1)
+	l.add("b", "fetch_url", body(600), 2)
+	l.add("c", "execute_command", body(400), 3) // newest — protected by KeepRecent
 
 	replacements, reclaimed := l.selectForElision(cp)
 	if len(replacements) == 0 {
@@ -194,7 +200,7 @@ func TestLedger_ReachesLowWaterMarkWhenUnobstructed(t *testing.T) {
 	cp := contextPolicy{HistoryBudgetBytes: 1000, HistoryLowBytes: 500, KeepRecent: 0}
 	l := &toolResultLedger{}
 	for i, id := range []string{"a", "b", "c", "d"} {
-		l.add(id, "fetch_url", 400, i+1)
+		l.add(id, "fetch_url", body(400), i+1)
 	}
 
 	if _, reclaimed := l.selectForElision(cp); reclaimed == 0 {
@@ -217,7 +223,7 @@ func TestLedger_CurrentRoundIsNeverElided(t *testing.T) {
 	cp := contextPolicy{HistoryBudgetBytes: 1000, HistoryLowBytes: 500, KeepRecent: 3}
 	l := &toolResultLedger{}
 	for _, id := range []string{"r1-a", "r1-b", "r1-c", "r1-d", "r1-e"} {
-		l.add(id, "read_file", 400, 1)
+		l.add(id, "read_file", body(400), 1)
 	}
 
 	if replacements, reclaimed := l.selectForElision(cp); replacements != nil || reclaimed != 0 {
@@ -226,7 +232,7 @@ func TestLedger_CurrentRoundIsNeverElided(t *testing.T) {
 
 	// Once a later round arrives, round 1 becomes fair game — but only the
 	// entries outside the KeepRecent window.
-	l.add("r2-a", "read_file", 400, 2)
+	l.add("r2-a", "read_file", body(400), 2)
 	replacements, _ := l.selectForElision(cp)
 	if len(replacements) == 0 {
 		t.Fatal("expected elision once the model had a turn to read round 1")
@@ -249,9 +255,9 @@ func TestLedger_CurrentRoundIsNeverElided(t *testing.T) {
 func TestLedger_SecondPassIsNoOp(t *testing.T) {
 	cp := contextPolicy{HistoryBudgetBytes: 1000, HistoryLowBytes: 500, KeepRecent: 1}
 	l := &toolResultLedger{}
-	l.add("a", "fetch_url", 600, 1)
-	l.add("b", "fetch_url", 600, 2)
-	l.add("c", "execute_command", 100, 3)
+	l.add("a", "fetch_url", body(600), 1)
+	l.add("b", "fetch_url", body(600), 2)
+	l.add("c", "execute_command", body(100), 3)
 
 	if replacements, _ := l.selectForElision(cp); len(replacements) == 0 {
 		t.Fatal("first pass should elide")
@@ -266,10 +272,10 @@ func TestLedger_SecondPassIsNoOp(t *testing.T) {
 func TestLedger_SkipsResultsSmallerThanTheirStub(t *testing.T) {
 	cp := contextPolicy{HistoryBudgetBytes: 10, HistoryLowBytes: 5, KeepRecent: 0}
 	l := &toolResultLedger{}
-	l.add("a", "execute_command", 12, 1)
+	l.add("a", "execute_command", body(12), 1)
 	// A second round so "a" is genuinely eligible and the stub-size guard is
 	// what rejects it, rather than the in-flight-round protection.
-	l.add("b", "execute_command", 12, 2)
+	l.add("b", "execute_command", body(12), 2)
 
 	replacements, _ := l.selectForElision(cp)
 	if len(replacements) != 0 {
@@ -280,7 +286,7 @@ func TestLedger_SkipsResultsSmallerThanTheirStub(t *testing.T) {
 func TestLedger_KeepRecentLargerThanHistory(t *testing.T) {
 	cp := contextPolicy{HistoryBudgetBytes: 100, HistoryLowBytes: 50, KeepRecent: 5}
 	l := &toolResultLedger{}
-	l.add("a", "fetch_url", 500, 1)
+	l.add("a", "fetch_url", body(500), 1)
 
 	if replacements, _ := l.selectForElision(cp); replacements != nil {
 		t.Error("nothing is eligible when KeepRecent covers the whole history")
@@ -293,6 +299,202 @@ func TestElisionStub_NamesToolAndSize(t *testing.T) {
 		t.Errorf("stub should name the tool and reclaimed size, got %q", stub)
 	}
 }
+
+func TestLoadContextPolicy_SpillDirDefaultsAndOptOut(t *testing.T) {
+	t.Setenv("CONTEXT_ELISION_SPILL_DIR", "")
+	if got := loadContextPolicy().SpillDir; got != defaultElisionSpillDir {
+		t.Errorf("SpillDir = %q, want default %q", got, defaultElisionSpillDir)
+	}
+
+	t.Setenv("CONTEXT_ELISION_SPILL_DIR", "off")
+	if got := loadContextPolicy().SpillDir; got != "" {
+		t.Errorf(`SpillDir = %q, want "" — "off" is the explicit opt-out`, got)
+	}
+
+	t.Setenv("CONTEXT_ELISION_SPILL_DIR", "/tmp/custom")
+	if got := loadContextPolicy().SpillDir; got != "/tmp/custom" {
+		t.Errorf("SpillDir = %q, want /tmp/custom", got)
+	}
+}
+
+// Spilling is only useful if the stub's instruction can actually be followed.
+func TestSpillUnavailable(t *testing.T) {
+	withRead := []ToolDef{{Name: ToolExecuteCommand}, {Name: ToolReadFile}}
+
+	if reason := spillUnavailable(defaultElisionSpillDir, withRead); reason != "" {
+		t.Errorf("default config should be spillable, got %q", reason)
+	}
+
+	// A tool policy that denies read_file leaves the model no way back to the file.
+	noRead := []ToolDef{{Name: ToolExecuteCommand}}
+	if reason := spillUnavailable(defaultElisionSpillDir, noRead); reason == "" {
+		t.Error("expected a reason when read_file is filtered out by tool policy")
+	} else if !strings.Contains(reason, ToolReadFile) {
+		t.Errorf("reason %q should name the missing tool", reason)
+	}
+
+	// read_file refuses paths outside its readable roots, so a spill directory
+	// there produces files the agent cannot open.
+	if reason := spillUnavailable("/var/log/agent", withRead); reason == "" {
+		t.Error("expected a reason for a spill dir outside read_file's roots")
+	}
+
+	// Every readable root is a legitimate destination.
+	for _, root := range readableRoots {
+		if reason := spillUnavailable(root+"/elided", withRead); reason != "" {
+			t.Errorf("%s should be spillable, got %q", root, reason)
+		}
+	}
+}
+
+// When the promise cannot be kept, elision must still happen — the context
+// pressure is real either way — but without pointing at an unreachable file.
+func TestRunAgentLoop_NoSpillWhenReadFileUnavailable(t *testing.T) {
+	spillDir, err := os.MkdirTemp("/tmp", "spill")
+	if err != nil {
+		t.Fatalf("MkdirTemp: %v", err)
+	}
+	t.Cleanup(func() { os.RemoveAll(spillDir) })
+
+	t.Setenv("CONTEXT_HISTORY_BUDGET_BYTES", "10000")
+	t.Setenv("CONTEXT_HISTORY_BUDGET_LOW_BYTES", "4000")
+	t.Setenv("CONTEXT_KEEP_RECENT_RESULTS", "1")
+	t.Setenv("CONTEXT_ELISION_SPILL_DIR", spillDir)
+
+	path := writeReadFileFixture(t, strings.Repeat("abcdefghij", 600))
+	args := `{"path":"` + path + `"}`
+	var turns []ChatResult
+	for _, id := range []string{"c1", "c2", "c3", "c4"} {
+		turns = append(turns, ChatResult{
+			ToolCalls:    []ToolCall{{ID: id, Name: "read_file", Input: args}},
+			FinishReason: "tool_calls",
+		})
+	}
+	turns = append(turns, ChatResult{Text: "done", FinishReason: "stop"})
+
+	p := &mockProvider{name: "mock", model: "mock-1", turns: turns}
+	// Tool policy stripped read_file from this run.
+	onlyExec := []ToolDef{{Name: ToolExecuteCommand}}
+	if _, _, _, _, err := runAgentLoop(context.Background(), p, onlyExec); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(p.replaceLog) == 0 {
+		t.Fatal("elision must still fire when spilling is unavailable")
+	}
+	if stub := p.replaceLog[0]["c1"]; strings.Contains(stub, spillDir) {
+		t.Errorf("stub %q points at a file the run cannot read", stub)
+	}
+	if entries, err := os.ReadDir(spillDir); err == nil && len(entries) != 0 {
+		t.Errorf("wrote %d spill file(s) the run cannot read back", len(entries))
+	}
+}
+
+// The spill filename is built from the ledger index alone. Nothing the model or
+// an MCP server chooses — tool name, call ID — may reach it, so there is no
+// input to traverse with. Reintroducing such a component would break this.
+func TestDirSpiller_PathIsDerivedOnlyFromIndex(t *testing.T) {
+	const dir = "/workspace/.sympozium/elided"
+	s := dirSpiller{Dir: dir}
+
+	got := s.Path(3)
+	if want := filepath.Join(dir, "0003.txt"); got != want {
+		t.Errorf("Path(3) = %q, want %q", got, want)
+	}
+	// One path element under Dir, so filepath.Join has nothing to resolve away.
+	if filepath.Dir(got) != dir {
+		t.Errorf("Path(3) = %q, escaped the spill directory", got)
+	}
+	// Zero-padding keeps directory listings in ledger order past entry 10.
+	if base := filepath.Base(s.Path(12)); base != "0012.txt" {
+		t.Errorf("Path(12) base = %q, want 0012.txt", base)
+	}
+	if s.Path(3) == s.Path(4) {
+		t.Error("distinct ledger entries must not share a file")
+	}
+}
+
+// The whole point of the feature: an elided result is moved to disk intact,
+// and the stub tells the model where to find it.
+func TestLedger_ElisionSpillsFullOutput(t *testing.T) {
+	dir := t.TempDir()
+	cp := contextPolicy{HistoryBudgetBytes: 1000, HistoryLowBytes: 500, KeepRecent: 0}
+	l := &toolResultLedger{spill: dirSpiller{Dir: dir}}
+
+	original := strings.Repeat("finding-", 100) // 800 bytes
+	l.add("a", "execute_command", original, 1)
+	l.add("b", "fetch_url", body(800), 2)
+
+	replacements, reclaimed := l.selectForElision(cp)
+	if len(replacements) == 0 {
+		t.Fatal("expected elision above budget")
+	}
+	if reclaimed <= 0 {
+		t.Fatalf("reclaimed = %d, want > 0", reclaimed)
+	}
+
+	want := dirSpiller{Dir: dir}.Path(0)
+	got, err := os.ReadFile(want)
+	if err != nil {
+		t.Fatalf("elided output was not spilled: %v", err)
+	}
+	if string(got) != original {
+		t.Errorf("spilled content does not match the original result (%d vs %d bytes)", len(got), len(original))
+	}
+	if !strings.Contains(replacements["a"], want) {
+		t.Errorf("stub %q should name the spill path %q", replacements["a"], want)
+	}
+
+	// The ledger must not keep holding output it has already written out.
+	if l.entries[0].content != "" {
+		t.Error("elided entry still retains its content")
+	}
+}
+
+// A read-only or absent /workspace must degrade to the old behaviour rather
+// than abandoning elision — the context pressure is real either way.
+func TestLedger_SpillFailureFallsBackToBareStub(t *testing.T) {
+	cp := contextPolicy{HistoryBudgetBytes: 1000, HistoryLowBytes: 500, KeepRecent: 0}
+	l := &toolResultLedger{spill: failingSpiller{}}
+	l.add("a", "execute_command", body(800), 1)
+	l.add("b", "fetch_url", body(800), 2)
+
+	replacements, reclaimed := l.selectForElision(cp)
+	if len(replacements) == 0 {
+		t.Fatal("elision must still happen when spilling fails")
+	}
+	if reclaimed <= 0 {
+		t.Errorf("reclaimed = %d, want > 0", reclaimed)
+	}
+	if strings.Contains(replacements["a"], "saved to") {
+		t.Errorf("stub %q promises a spill file that was never written", replacements["a"])
+	}
+	if !strings.Contains(replacements["a"], "Re-run the tool") {
+		t.Errorf("stub %q should fall back to the re-run hint", replacements["a"])
+	}
+}
+
+// An entry too small to be worth eliding must not leave a file behind.
+func TestLedger_SkippedEntryLeavesNoSpillFile(t *testing.T) {
+	dir := t.TempDir()
+	cp := contextPolicy{HistoryBudgetBytes: 10, HistoryLowBytes: 5, KeepRecent: 0}
+	l := &toolResultLedger{spill: dirSpiller{Dir: dir}}
+	l.add("a", "execute_command", body(12), 1)
+	l.add("b", "execute_command", body(12), 2)
+
+	if replacements, _ := l.selectForElision(cp); len(replacements) != 0 {
+		t.Fatalf("should skip results smaller than their stub, got %v", replacements)
+	}
+	if entries, err := os.ReadDir(dir); err == nil && len(entries) != 0 {
+		t.Errorf("skipped entry left %d orphan file(s) behind", len(entries))
+	}
+}
+
+// failingSpiller stands in for an unwritable spill directory.
+type failingSpiller struct{}
+
+func (failingSpiller) Path(seq int) string              { return "/nope/x.txt" }
+func (failingSpiller) Write(path, content string) error { return errors.New("read-only file system") }
 
 // TestRunAgentLoop_ElidesAtHighWaterMark exercises the full wiring: real tool
 // execution produces oversized results, the ledger crosses the budget, and the
@@ -315,7 +517,7 @@ func TestRunAgentLoop_ElidesAtHighWaterMark(t *testing.T) {
 	turns = append(turns, ChatResult{Text: "done", FinishReason: "stop"})
 
 	p := &mockProvider{name: "mock", model: "mock-1", turns: turns}
-	if _, _, _, _, err := runAgentLoop(context.Background(), p); err != nil {
+	if _, _, _, _, err := runAgentLoop(context.Background(), p, mockTools); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -329,6 +531,57 @@ func TestRunAgentLoop_ElidesAtHighWaterMark(t *testing.T) {
 	}
 }
 
+// End-to-end proof that elision is no longer lossy: run the loop until the
+// budget forces a rewrite, then recover the elided output through the same
+// read_file tool the stub points the model at.
+func TestRunAgentLoop_ElidedOutputRecoverableViaReadFile(t *testing.T) {
+	fixture := strings.Repeat("abcdefghij", 600) // 6000 bytes, under read_file's cap
+	path := writeReadFileFixture(t, fixture)
+
+	// The spill dir has to sit under a readable root or read_file will refuse
+	// to open it — which is exactly the constraint production runs are under.
+	spillDir, err := os.MkdirTemp("/tmp", "spill")
+	if err != nil {
+		t.Fatalf("MkdirTemp: %v", err)
+	}
+	t.Cleanup(func() { os.RemoveAll(spillDir) })
+
+	t.Setenv("CONTEXT_HISTORY_BUDGET_BYTES", "10000")
+	t.Setenv("CONTEXT_HISTORY_BUDGET_LOW_BYTES", "4000")
+	t.Setenv("CONTEXT_KEEP_RECENT_RESULTS", "1")
+	t.Setenv("CONTEXT_ELISION_SPILL_DIR", spillDir)
+
+	args := `{"path":"` + path + `"}`
+	var turns []ChatResult
+	for _, id := range []string{"c1", "c2", "c3", "c4"} {
+		turns = append(turns, ChatResult{
+			ToolCalls:    []ToolCall{{ID: id, Name: "read_file", Input: args}},
+			FinishReason: "tool_calls",
+		})
+	}
+	turns = append(turns, ChatResult{Text: "done", FinishReason: "stop"})
+
+	p := &mockProvider{name: "mock", model: "mock-1", turns: turns}
+	if _, _, _, _, err := runAgentLoop(context.Background(), p, mockTools); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(p.replaceLog) == 0 {
+		t.Fatal("expected elision once the budget was crossed")
+	}
+
+	// c1 is the oldest result and the first elided, so it is ledger entry 0.
+	spilled := dirSpiller{Dir: spillDir}.Path(0)
+	stub := p.replaceLog[0]["c1"]
+	if !strings.Contains(stub, spilled) {
+		t.Fatalf("stub %q should point at %q", stub, spilled)
+	}
+
+	recovered := readFileTool(map[string]any{"path": spilled})
+	if recovered != fixture {
+		t.Errorf("read_file recovered %d bytes, want the original %d", len(recovered), len(fixture))
+	}
+}
+
 // With no budget configured the loop must never rewrite history.
 func TestRunAgentLoop_NoElisionWhenBudgetUnset(t *testing.T) {
 	p := &mockProvider{
@@ -338,7 +591,7 @@ func TestRunAgentLoop_NoElisionWhenBudgetUnset(t *testing.T) {
 			{Text: "done", FinishReason: "stop"},
 		},
 	}
-	if _, _, _, _, err := runAgentLoop(context.Background(), p); err != nil {
+	if _, _, _, _, err := runAgentLoop(context.Background(), p, mockTools); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if len(p.replaceLog) != 0 {
