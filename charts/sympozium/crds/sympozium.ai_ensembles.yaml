@@ -450,6 +450,21 @@ spec:
                               description: Backoff delays the successor attempt. Absent
                                 means start immediately.
                               type: string
+                            inPlace:
+                              default: true
+                              description: |-
+                                InPlace keeps the agent pod alive across the gate cycle and runs the next
+                                attempt on the same conversation, instead of cloning the spec onto a
+                                successor AgentRun. The retried attempt then still has its own reasoning,
+                                its tool results, and everything it wrote to /workspace.
+
+                                Requires a backend that gives the run a pod to park in — the Job and
+                                Agent Sandbox backends do; Celln dispatches to a remote executor and has
+                                no pod, so it always uses successor runs whatever this says.
+
+                                Defaults to true. Set false to force successor runs, for example when a
+                                gate takes long enough that holding the pod is not worth the resources.
+                              type: boolean
                             maxAttempts:
                               default: 2
                               description: |-

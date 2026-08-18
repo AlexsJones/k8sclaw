@@ -1126,6 +1126,16 @@ type GateVerdictRequest struct {
 	Reason   string `json:"reason,omitempty"`   // audit trail
 }
 
+// gateVerdictAttempt returns the run's current 1-based attempt. status.attempt
+// is 0 on a first attempt that has never been retried, which means the same
+// thing as 1.
+func gateVerdictAttempt(run *sympoziumv1alpha1.AgentRun) int {
+	if run.Status.Attempt >= 1 {
+		return run.Status.Attempt
+	}
+	return 1
+}
+
 func (s *Server) patchRunGateVerdict(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	ns := r.URL.Query().Get("namespace")
@@ -1157,8 +1167,12 @@ func (s *Server) patchRunGateVerdict(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if run.Status.Phase != sympoziumv1alpha1.AgentRunPhasePostRunning {
-		http.Error(w, fmt.Sprintf("run is in phase %q, gate verdict can only be set during PostRunning", run.Status.Phase), http.StatusConflict)
+	// AwaitingGate is the in-place retry phase: the pod is parked holding its
+	// conversation while the gate decides, rather than having exited into a
+	// postRun Job. A verdict is equally valid in either.
+	if run.Status.Phase != sympoziumv1alpha1.AgentRunPhasePostRunning &&
+		run.Status.Phase != sympoziumv1alpha1.AgentRunPhaseAwaitingGate {
+		http.Error(w, fmt.Sprintf("run is in phase %q, gate verdict can only be set during PostRunning or AwaitingGate", run.Status.Phase), http.StatusConflict)
 		return
 	}
 
@@ -1167,6 +1181,11 @@ func (s *Server) patchRunGateVerdict(w http.ResponseWriter, r *http.Request) {
 	}
 	verdictJSON, _ := json.Marshal(req)
 	run.Annotations["sympozium.ai/gate-verdict"] = string(verdictJSON)
+	// Stamp the attempt this decision was made against. An in-place retry chain
+	// lives on one CR, so without it a browser tab still showing attempt 1's
+	// controls could resolve attempt 2. The controller drops a verdict whose
+	// stamp does not match the attempt awaiting one.
+	run.Annotations["sympozium.ai/gate-verdict-attempt"] = strconv.Itoa(gateVerdictAttempt(&run))
 
 	if err := s.client.Update(r.Context(), &run); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)

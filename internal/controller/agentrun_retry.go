@@ -127,9 +127,25 @@ func retryChainName(predecessorName string, attempt int) string {
 	return base + suffix
 }
 
-// retryChainTokens sums status.tokenUsage.totalTokens across the chain, walking
-// retryOf backwards. Attempts pruned by run-history limits contribute nothing.
+// retryChainTokens sums the chain's total tokens. The two chain shapes must
+// not be mixed.
+//
+// An in-place gate-retry chain keeps every attempt on one CR: status.attempts[]
+// is the whole chain, and status.tokenUsage is already their aggregate, so
+// walking retryOf as well would double-count. A successor-clone chain spreads
+// attempts across CRs and is summed by walking retryOf backwards; attempts
+// pruned by run-history limits contribute nothing.
 func (r *AgentRunReconciler) retryChainTokens(ctx context.Context, agentRun *sympoziumv1alpha1.AgentRun) int64 {
+	if len(agentRun.Status.Attempts) > 0 {
+		var total int64
+		for _, a := range agentRun.Status.Attempts {
+			if a.TokenUsage != nil {
+				total += int64(a.TokenUsage.TotalTokens)
+			}
+		}
+		return total
+	}
+
 	var total int64
 	if agentRun.Status.TokenUsage != nil {
 		total += int64(agentRun.Status.TokenUsage.TotalTokens)

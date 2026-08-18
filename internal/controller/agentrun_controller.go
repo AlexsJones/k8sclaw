@@ -355,6 +355,8 @@ func (r *AgentRunReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		result, err = r.reconcileServing(ctx, log, agentRun)
 	case sympoziumv1alpha1.AgentRunPhaseAwaitingDelegate:
 		result, err = r.reconcileAwaitingDelegate(ctx, log, agentRun)
+	case sympoziumv1alpha1.AgentRunPhaseAwaitingGate:
+		result, err = r.reconcileAwaitingGate(ctx, log, agentRun)
 	case sympoziumv1alpha1.AgentRunPhaseSucceeded, sympoziumv1alpha1.AgentRunPhaseFailed, sympoziumv1alpha1.AgentRunPhaseSkipped:
 		result, err = r.reconcileCompleted(ctx, log, agentRun)
 	default:
@@ -651,9 +653,9 @@ func (r *AgentRunReconciler) prepareTaskPrerequisites(
 				"Underlying error: %v", err))
 	}
 
-	// Create a workspace PVC when postRun lifecycle hooks are defined, so the
-	// workspace persists between the main pod and the postRun Job.
-	if agentRun.Spec.Lifecycle != nil && len(agentRun.Spec.Lifecycle.PostRun) > 0 {
+	// Create a workspace PVC when the workspace has to outlive the agent pod's
+	// own filesystem — see workspaceNeedsPVC.
+	if workspaceNeedsPVC(agentRun) {
 		if err := r.ensureWorkspacePVC(ctx, agentRun); err != nil {
 			return nil, &ctrl.Result{}, fmt.Errorf("creating workspace PVC: %w", err)
 		}
@@ -901,6 +903,15 @@ func (r *AgentRunReconciler) reconcileRunning(ctx context.Context, log logr.Logg
 	// hasPostRunHooks is true when lifecycle postRun containers are defined.
 	hasPostRunHooks := agentRun.Spec.Lifecycle != nil && len(agentRun.Spec.Lifecycle.PostRun) > 0
 
+	// An in-place gate-retry run parks instead of exiting, so its Job never completes
+	// and none of the checks below fire. Attempts announce themselves through a
+	// stdout marker; pick that up first.
+	if gateInPlaceEnabled(agentRun) {
+		if handled, res, err := r.checkParkedAttempt(ctx, log, agentRun); handled || err != nil {
+			return res, err
+		}
+	}
+
 	// Check Job completion
 	if job.Status.Succeeded > 0 {
 		// Extract the LLM response from pod logs before the pod is gone.
@@ -988,8 +999,8 @@ func (r *AgentRunReconciler) reconcileRunning(ctx context.Context, log logr.Logg
 	}
 
 	// Check timeout (explicit spec timeout or hard default for scheduled runs).
-	if agentRun.Status.StartedAt != nil {
-		elapsed := time.Since(agentRun.Status.StartedAt.Time)
+	if anchor := runTimeoutAnchor(agentRun); anchor != nil {
+		elapsed := time.Since(anchor.Time)
 		timeout := 10 * time.Minute // default hard timeout
 		if agentRun.Spec.Timeout != nil {
 			timeout = agentRun.Spec.Timeout.Duration
@@ -1005,6 +1016,21 @@ func (r *AgentRunReconciler) reconcileRunning(ctx context.Context, log logr.Logg
 	}
 
 	return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+}
+
+// runTimeoutAnchor returns the instant spec.timeout is measured from: the run
+// start normally, the current attempt's start for an in-place retry chain.
+//
+// Parked time is not run time. Anchoring to the run start would let the
+// watchdog kill a pod doing exactly what it was told to do. Each attempt gets
+// the full budget; maxAttempts and maxChainTokens bound the total.
+func runTimeoutAnchor(agentRun *sympoziumv1alpha1.AgentRun) *metav1.Time {
+	if n := len(agentRun.Status.Attempts); n > 0 {
+		if started := agentRun.Status.Attempts[n-1].StartedAt; started != nil {
+			return started
+		}
+	}
+	return agentRun.Status.StartedAt
 }
 
 // checkAgentContainer inspects the pod's container statuses and returns:
@@ -1043,8 +1069,14 @@ func (r *AgentRunReconciler) reconcileCompleted(ctx context.Context, log logr.Lo
 	// Clean up cluster-scoped RBAC created for skill sidecars.
 	r.cleanupSkillRBAC(ctx, log, agentRun)
 
-	// Clean up workspace PVC if it was created for postRun lifecycle hooks.
-	if agentRun.Status.PostRunJobName != "" {
+	// Clean up the workspace PVC. Reached only from a terminal phase, which for
+	// a retry chain means the chain is over — reclaiming it while a parked pod
+	// still holds the workspace would throw away the artifacts the next attempt
+	// is meant to correct.
+	//
+	// Keyed on the condition that creates the PVC, not status.postRunJobName: a
+	// run that failed before its postRun Job existed still had one provisioned.
+	if workspaceNeedsPVC(agentRun) {
 		r.cleanupWorkspacePVC(ctx, log, agentRun)
 	}
 
@@ -2524,6 +2556,14 @@ func (r *AgentRunReconciler) buildJob(
 	if agentRun.Spec.Timeout != nil {
 		deadline = int64(agentRun.Spec.Timeout.Duration.Seconds()) + 60
 	}
+	// An in-place retry run holds its pod across every attempt and gate cycle, so
+	// the deadline has to cover the whole chain. Sized off one attempt,
+	// activeDeadlineSeconds would reclaim the pod mid-chain.
+	if gateInPlaceEnabled(agentRun) {
+		spec := gateRetrySpec(agentRun)
+		perAttempt := deadline + int64(gateParkBudget(agentRun).Seconds())
+		deadline = perAttempt * int64(max(spec.MaxAttempts, 1))
+	}
 	backoffLimit := int32(0)
 
 	return &batchv1.Job{
@@ -2601,6 +2641,19 @@ func (r *AgentRunReconciler) buildContainers(
 		agentEnv = append(agentEnv, corev1.EnvVar{
 			Name: "RUN_TIMEOUT", Value: agentRun.Spec.Timeout.Duration.String(),
 		})
+	}
+
+	// In-place gate retry: park between attempts so the retry reaches the model as a
+	// turn on the conversation it is correcting, not a prose card on a fresh
+	// run. RUN_TIMEOUT becomes a per-attempt budget here; the park is bounded
+	// separately and the controller's watchdog is the outer authority.
+	if gateInPlaceEnabled(agentRun) {
+		spec := gateRetrySpec(agentRun)
+		agentEnv = append(agentEnv,
+			corev1.EnvVar{Name: "GATE_IN_PLACE_ENABLED", Value: "true"},
+			corev1.EnvVar{Name: "GATE_IN_PLACE_MAX_ATTEMPTS", Value: strconv.Itoa(spec.MaxAttempts)},
+			corev1.EnvVar{Name: "GATE_PARK_TIMEOUT", Value: gateParkBudget(agentRun).String()},
+		)
 	}
 
 	ipcEnv := []corev1.EnvVar{
@@ -3617,10 +3670,12 @@ func (r *AgentRunReconciler) buildVolumes(agentRun *sympoziumv1alpha1.AgentRun, 
 	tmpSizeLimit := resource.MustParse("256Mi")
 	memoryMedium := corev1.StorageMediumMemory
 
-	// Use a PVC for /workspace when postRun lifecycle hooks are defined,
-	// so the workspace can be shared between the main Job and the postRun Job.
+	// Use a PVC for /workspace when it has to outlive the agent pod's own
+	// filesystem — see workspaceNeedsPVC. It is also what lets an in-place retry
+	// chain read its own earlier work back: an emptyDir loses every artifact
+	// the agent produced the moment the container restarts.
 	var workspaceVolume corev1.Volume
-	if agentRun.Spec.Lifecycle != nil && len(agentRun.Spec.Lifecycle.PostRun) > 0 {
+	if workspaceNeedsPVC(agentRun) {
 		workspaceVolume = corev1.Volume{
 			Name: "workspace",
 			VolumeSource: corev1.VolumeSource{
@@ -4097,8 +4152,18 @@ const (
 // is true when a preRun lifecycle hook short-circuited the run before any LLM
 // call, in which case result carries the skip reason.
 func (r *AgentRunReconciler) extractResultFromPod(ctx context.Context, log logr.Logger, agentRun *sympoziumv1alpha1.AgentRun) (string, string, *sympoziumv1alpha1.TokenUsage, bool) {
-	if r.Clientset == nil || agentRun.Status.PodName == "" {
+	raw, ok := r.readAgentLogs(ctx, log, agentRun)
+	if !ok {
 		return "", "", nil, false
+	}
+	return parseAgentResultFromLogs(raw, log)
+}
+
+// readAgentLogs tails the agent container's log. Shared by the final-result
+// and in-place attempt paths, which both read structured markers from it.
+func (r *AgentRunReconciler) readAgentLogs(ctx context.Context, log logr.Logger, agentRun *sympoziumv1alpha1.AgentRun) (string, bool) {
+	if r.Clientset == nil || agentRun.Status.PodName == "" {
+		return "", false
 	}
 
 	tailLines := int64(500)
@@ -4109,18 +4174,17 @@ func (r *AgentRunReconciler) extractResultFromPod(ctx context.Context, log logr.
 	req := r.Clientset.CoreV1().Pods(agentRun.Namespace).GetLogs(agentRun.Status.PodName, opts)
 	stream, err := req.Stream(ctx)
 	if err != nil {
-		log.V(1).Info("could not read pod logs for result", "err", err)
-		return "", "", nil, false
+		log.V(1).Info("could not read pod logs", "err", err)
+		return "", false
 	}
 	defer stream.Close()
 
 	raw, err := io.ReadAll(stream)
 	if err != nil {
 		log.V(1).Info("error reading pod logs", "err", err)
-		return "", "", nil, false
+		return "", false
 	}
-
-	return parseAgentResultFromLogs(string(raw), log)
+	return string(raw), true
 }
 
 // parseAgentResultFromLogs parses the structured result marker emitted by the
@@ -5510,7 +5574,19 @@ func (r *AgentRunReconciler) resolveGate(
 	// taking the reject path's result handling.
 	overrideLabel := ""
 	if verdict != nil && verdict.Action == "retry" {
-		successorName, exhausted := r.tryCreateRetryRun(ctx, log, agentRun, verdict)
+		var successorName string
+		var exhausted bool
+		if len(agentRun.Status.Attempts) > 0 {
+			// An in-place chain: resolveInPlaceGate already decided it cannot
+			// continue, which is the only way a retry verdict reaches here.
+			// Cloning now would give the successor a fresh workspace while the
+			// parked pod holds the real one, and leave two live attempts.
+			exhausted = true
+			log.Info("Gate verdict: retry on an in-place chain that cannot continue",
+				"attempt", currentAttempt(agentRun))
+		} else {
+			successorName, exhausted = r.tryCreateRetryRun(ctx, log, agentRun, verdict)
+		}
 		if successorName != "" {
 			return ctrl.Result{}, r.retireForRetry(ctx, agentRun, successorName)
 		}
@@ -5574,6 +5650,13 @@ func (r *AgentRunReconciler) resolveGate(
 	_ = r.updateStatusWithRetry(ctx, agentRun, func(ar *sympoziumv1alpha1.AgentRun) {
 		ar.Status.GateVerdict = verdictLabel
 	})
+
+	// Close out the attempt timeline for an in-place chain. No-op otherwise.
+	if verdict != nil {
+		r.recordFinalAttemptVerdict(ctx, agentRun, verdictLabel, verdict.Reason)
+	} else {
+		r.recordFinalAttemptVerdict(ctx, agentRun, verdictLabel, "")
+	}
 
 	// Publish the completion event that the IPC bridge suppressed.
 	r.publishGatedCompletion(ctx, agentRun, finalResult)
@@ -5668,6 +5751,28 @@ func (r *AgentRunReconciler) publishGatedCompletion(ctx context.Context, agentRu
 				"agent_run", agentRun.Name, "error", pubErr)
 		}
 	}
+}
+
+// workspaceNeedsPVC reports whether /workspace must be a PVC rather than an
+// emptyDir: the workspace has to outlive the agent pod's own filesystem when a
+// second reader exists for it.
+//
+// PostRun hooks are that second reader, and declaring them is the whole
+// condition — a retry chain does not add one. Retry is reachable only from a
+// gate verdict, gate: true is valid only on a postRun hook (validateGateHooks
+// rejects it on preRun), and both retry paths run behind hasResponseGateHook.
+// So every run that can retry already declares a postRun hook and already gets
+// a PVC. Keying on lifecycle.retry as well would only provision storage for
+// runs that configure retry without a gate, which can never retry at all.
+//
+// What retry does change is the PVC's *lifetime*, not its existence: it must
+// survive until the chain terminates rather than being reclaimed after the
+// first attempt. That is enforced at the cleanup site, not here.
+func workspaceNeedsPVC(agentRun *sympoziumv1alpha1.AgentRun) bool {
+	if agentRun.Spec.Lifecycle == nil {
+		return false
+	}
+	return len(agentRun.Spec.Lifecycle.PostRun) > 0
 }
 
 // ensureWorkspacePVC creates a PersistentVolumeClaim for the workspace volume

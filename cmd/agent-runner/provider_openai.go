@@ -253,6 +253,15 @@ func (p *openaiProvider) ReplaceToolResults(replacements map[string]string) {
 	}
 }
 
+// AddUserMessage appends a user turn so the next Chat call sees it, leaving
+// the assistant turns and their tool replies ahead of it intact.
+func (p *openaiProvider) AddUserMessage(text string) {
+	if text == "" {
+		return
+	}
+	p.messages = append(p.messages, openai.UserMessage(text))
+}
+
 // ResetContext rebuilds the message slice to the seed state so
 // the next Chat or Prompt call behaves as if the conversation just began.
 // Used by the sidecar-initiated clearContext IPC between independent units

@@ -88,6 +88,12 @@ type LLMProvider interface {
 	// are ignored.
 	ReplaceToolResults(replacements map[string]string)
 
+	// AddUserMessage appends a user turn without calling the model. It is how
+	// a parked run continues: the gate's rejection becomes the next turn, so the
+	// model corrects work it can still see. Unlike Prompt it only stages the
+	// turn — the next Chat call drives tools.
+	AddUserMessage(text string)
+
 	// ResetContext wipes the conversation history. After
 	// ResetContext the next Chat call behaves like a first-turn conversation.
 	// Used when a sidecar issues clearContext() between independent units of

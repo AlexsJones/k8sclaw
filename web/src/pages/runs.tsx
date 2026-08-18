@@ -59,8 +59,14 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useRunsSeen } from "@/hooks/use-runs-seen";
 import type { AgentRun } from "@/lib/api";
 
-/** Returns true when a run is in PostRunning with a gate hook awaiting a verdict. */
+/** Returns true when a run is waiting on a gate verdict.
+ *
+ *  AwaitingGate says so outright: the pod is parked holding its conversation
+ *  while the gate decides. The PostRunning branch is the older shape, where the
+ *  agent has exited and a postRun Job carries the gate — there is no phase for
+ *  it, so it still has to be inferred from the hook plus an unset verdict. */
 function isAwaitingGate(run: AgentRun): boolean {
+  if (run.status?.phase === "AwaitingGate") return true;
   if (run.status?.phase !== "PostRunning") return false;
   if (run.status?.gateVerdict) return false; // already resolved
   return !!run.spec.lifecycle?.postRun?.some((h) => h.gate);

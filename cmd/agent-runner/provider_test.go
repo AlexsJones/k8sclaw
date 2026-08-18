@@ -24,6 +24,9 @@ type mockProvider struct {
 	// replaceLog records every ReplaceToolResults call so elision tests can
 	// assert both what was rewritten and how many passes it took.
 	replaceLog []map[string]string
+	// userMessages records every AddUserMessage call, in order, so gate-retry
+	// tests can assert the verdict was injected on the live conversation.
+	userMessages []string
 }
 
 func (p *mockProvider) Name() string  { return p.name }
@@ -49,6 +52,13 @@ func (p *mockProvider) AddToolResults(results []ToolResult) {
 
 func (p *mockProvider) ReplaceToolResults(replacements map[string]string) {
 	p.replaceLog = append(p.replaceLog, replacements)
+}
+
+// AddUserMessage records the injected turn instead of holding a message
+// slice, so gate-retry tests can assert what the parked runner fed back without
+// reaching into a provider SDK's message types.
+func (p *mockProvider) AddUserMessage(text string) {
+	p.userMessages = append(p.userMessages, text)
 }
 
 // ResetContext is a no-op for the mock because the test loop

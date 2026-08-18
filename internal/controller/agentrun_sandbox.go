@@ -213,9 +213,20 @@ func (r *AgentRunReconciler) reconcileRunningAgentSandbox(
 
 	switch phase {
 	case "Running", "Ready", "":
-		// Still running — check for timeout.
-		if agentRun.Spec.Timeout != nil && agentRun.Status.StartedAt != nil {
-			elapsed := time.Since(agentRun.Status.StartedAt.Time)
+		// An in-place gate-retry run parks instead of exiting, so the sandbox never
+		// reaches a terminal phase on its own. Its attempts announce themselves
+		// through a stdout marker — same signal, same handler as the Job
+		// backend, since both render the same pod template.
+		if gateInPlaceEnabled(agentRun) {
+			if handled, res, err := r.checkParkedAttempt(ctx, log, agentRun); handled || err != nil {
+				return res, err
+			}
+		}
+
+		// Still running — check for timeout. Anchored per attempt for an in-place
+		// chain: time spent parked on a gate is not the agent working.
+		if anchor := runTimeoutAnchor(agentRun); agentRun.Spec.Timeout != nil && anchor != nil {
+			elapsed := time.Since(anchor.Time)
 			if elapsed > agentRun.Spec.Timeout.Duration {
 				log.Info("Agent Sandbox run timed out", "elapsed", elapsed)
 				_ = r.DynamicClient.Resource(sandboxGVR).Namespace(agentRun.Namespace).Delete(

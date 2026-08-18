@@ -450,6 +450,21 @@ spec:
                         description: Backoff delays the successor attempt. Absent
                           means start immediately.
                         type: string
+                      inPlace:
+                        default: true
+                        description: |-
+                          InPlace keeps the agent pod alive across the gate cycle and runs the next
+                          attempt on the same conversation, instead of cloning the spec onto a
+                          successor AgentRun. The retried attempt then still has its own reasoning,
+                          its tool results, and everything it wrote to /workspace.
+
+                          Requires a backend that gives the run a pod to park in — the Job and
+                          Agent Sandbox backends do; Celln dispatches to a remote executor and has
+                          no pod, so it always uses successor runs whatever this says.
+
+                          Defaults to true. Set false to force successor runs, for example when a
+                          gate takes long enough that holding the pod is not worth the resources.
+                        type: boolean
                       maxAttempts:
                         default: 2
                         description: |-
@@ -2698,6 +2713,131 @@ spec:
                   Attempt is this run's 1-based position in its retry chain. 0 or 1 both
                   mean "first attempt"; only retry successors carry an explicit value.
                 type: integer
+              attempts:
+                description: |-
+                  Attempts records one entry per attempt when the retry chain lives on a
+                  single CR (in-place gate retry). It replaces walking RetryOf across
+                  successor CRs, and bounds the chain: maxChainTokens sums its TokenUsage.
+
+                  Empty for a run that never parked, including every successor-clone chain.
+                items:
+                  description: |-
+                    AttemptStatus records one attempt of an in-place gate-retry chain. The pod
+                    survives the gate cycle, so every attempt lands on the same AgentRun and
+                    there is no successor CR to hold its status.
+
+                    Result and GateReason are bounded by the controller before writing: both
+                    come from outside the control plane, and unbounded text could push the
+                    object past the apiserver's size limit.
+                  properties:
+                    attempt:
+                      description: |-
+                        Attempt is this entry's 1-based position in the chain, matching what
+                        status.attempt read while the attempt was current.
+                      type: integer
+                    completedAt:
+                      description: CompletedAt is when the attempt parked with a result.
+                      format: date-time
+                      type: string
+                    costEstimate:
+                      description: CostEstimate is this attempt's own estimated cost.
+                      properties:
+                        amountMicro:
+                          description: AmountMicro is the total estimated cost in
+                            micro-USD.
+                          format: int64
+                          type: integer
+                        currency:
+                          description: Currency is always "USD" in v1.
+                          type: string
+                        estimatedAt:
+                          description: |-
+                            EstimatedAt records when the estimate was frozen. Estimates are never
+                            recomputed when the price table changes.
+                          format: date-time
+                          type: string
+                        inputAmountMicro:
+                          description: InputAmountMicro is the input-token share of
+                            the total.
+                          format: int64
+                          type: integer
+                        outputAmountMicro:
+                          description: OutputAmountMicro is the output-token share
+                            of the total.
+                          format: int64
+                          type: integer
+                        priceKey:
+                          description: PriceKey is the matched table entry ("provider/matchPrefix")
+                            for audit.
+                          type: string
+                        source:
+                          description: |-
+                            Source identifies the price table used. Persisted estimates are always
+                            "defaultTable"; "simulated" appears only in apiserver responses and is
+                            never written to status.
+                          enum:
+                          - defaultTable
+                          - simulated
+                          type: string
+                      required:
+                      - amountMicro
+                      - currency
+                      - source
+                      type: object
+                    gateReason:
+                      description: GateReason is the (bounded) reason the gate gave.
+                      type: string
+                    gateVerdict:
+                      description: |-
+                        GateVerdict is the verdict this attempt received: approved, rejected,
+                        rewritten, retried, retries-exhausted, timeout, error,
+                        allowed-by-default. Empty while the gate is still deciding.
+                      type: string
+                    result:
+                      description: Result is the (bounded) output this attempt produced.
+                      type: string
+                    startedAt:
+                      description: |-
+                        StartedAt is when this attempt began: run start for attempt 1, verdict
+                        delivery for later ones.
+                      format: date-time
+                      type: string
+                    tokenUsage:
+                      description: |-
+                        TokenUsage is this attempt's own consumption. maxChainTokens sums this
+                        field across attempts.
+                      properties:
+                        durationMs:
+                          description: DurationMs is the wall-clock time of the LLM
+                            interaction in milliseconds.
+                          format: int64
+                          type: integer
+                        inputTokens:
+                          description: InputTokens is the total number of prompt/input
+                            tokens sent to the LLM.
+                          type: integer
+                        outputTokens:
+                          description: OutputTokens is the total number of completion/output
+                            tokens received.
+                          type: integer
+                        toolCalls:
+                          description: ToolCalls is the number of tool invocations
+                            during this run.
+                          type: integer
+                        totalTokens:
+                          description: TotalTokens is InputTokens + OutputTokens.
+                          type: integer
+                      required:
+                      - durationMs
+                      - inputTokens
+                      - outputTokens
+                      - toolCalls
+                      - totalTokens
+                      type: object
+                  required:
+                  - attempt
+                  type: object
+                type: array
               cellnActionId:
                 description: |-
                   CellnActionID is the execution identifier returned by the Celln dispatcher
@@ -2770,10 +2910,12 @@ spec:
                 description: |-
                   CostEstimate is the estimated dollar cost of this run, derived from
                   tokenUsage and the cluster price table at completion time. It is an
-                  ESTIMATE, not billing data: retried runs count only the final attempt
-                  and failed runs report no usage. Absent (never zero) when the provider
-                  is local/self-hosted, the run uses modelRef, or no price-table entry
-                  matches.
+                  ESTIMATE, not billing data: failed runs report no usage, and a
+                  successor-clone retry chain counts only the attempt this CR represents
+                  (sum across the chain by walking retryOf). An in-place gate-retry chain
+                  keeps every attempt on this CR, so its estimate covers all of them.
+                  Absent (never zero) when the provider is local/self-hosted, the run uses
+                  modelRef, or no price-table entry matches.
                 properties:
                   amountMicro:
                     description: AmountMicro is the total estimated cost in micro-USD.
@@ -2895,6 +3037,9 @@ spec:
                 description: |-
                   RetryOf is the name of the predecessor AgentRun this attempt retries.
                   Empty on a first attempt. Walk it backwards to reconstruct the chain.
+
+                  Only the successor-clone retry path writes this; in-place gate retry
+                  records its attempts in Attempts instead.
                 type: string
               sandboxClaimName:
                 description: SandboxClaimName is the name of the SandboxClaim when

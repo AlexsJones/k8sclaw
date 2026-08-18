@@ -33,12 +33,20 @@ export function effectiveCost(run: AgentRun): CostEstimate | null {
   return run.status?.costEstimate ?? run.simulatedCostEstimate ?? null;
 }
 
-/** Tooltip explaining where a cost estimate came from. */
-export function costTooltip(est: CostEstimate): string {
+/** Tooltip explaining where a cost estimate came from.
+ *  A run whose retry chain lives on one CR (in-pod gate resume) carries the
+ *  whole chain's spend; a successor-clone chain carries one attempt per run. */
+export function costTooltip(est: CostEstimate, attempts = 0): string {
   const key = est.priceKey ? ` (${est.priceKey})` : "";
-  return est.source === "simulated"
-    ? `Based on user-defined simulated rates${key}. Estimate covers the final attempt only.`
-    : `Estimated from the cluster price table${key}. Estimate covers the final attempt only.`;
+  const scope =
+    attempts > 1
+      ? ` Covers all ${attempts} attempts of this run.`
+      : " Covers this run's attempt only.";
+  return (
+    (est.source === "simulated"
+      ? `Based on user-defined simulated rates${key}.`
+      : `Estimated from the cluster price table${key}.`) + scope
+  );
 }
 
 /** Sum the effective estimates of a set of runs in integer micro-USD. */
@@ -87,6 +95,8 @@ export function phaseColor(phase: string | undefined): string {
       return "phase-serving";
     case "postrunning":
       return "phase-postrunning";
+    case "awaitinggate":
+      return "phase-awaitinggate";
     default:
       return "bg-secondary text-muted-foreground";
   }

@@ -47,6 +47,7 @@ const (
 	DirSchedules = "schedules"
 	DirPrompts   = "prompts" // sidecar-initiated LLM prompts
 	DirContext   = "context" // clear-context IPC for sidecar-initiated prompts
+	DirGate      = "gate"    // gate verdicts delivered to a parked agent-runner
 )
 
 // Bridge is the IPC bridge sidecar process.
@@ -132,7 +133,7 @@ func (b *Bridge) Start(ctx context.Context) error {
 	)
 
 	// Create IPC directory structure
-	dirs := []string{DirInput, DirOutput, DirSpawn, DirTools, DirMessages, DirSchedules, DirPrompts, DirContext}
+	dirs := []string{DirInput, DirOutput, DirSpawn, DirTools, DirMessages, DirSchedules, DirPrompts, DirContext, DirGate}
 	for _, dir := range dirs {
 		path := filepath.Join(b.BasePath, dir)
 		if err := os.MkdirAll(path, 0750); err != nil {
@@ -242,6 +243,13 @@ func (b *Bridge) handleOutputFile(ctx context.Context, fe FileEvent) {
 		case b.agentDone <- struct{}{}:
 		default:
 		}
+
+	case strings.HasPrefix(filename, "result-"):
+		// A parked attempt's result (see AttemptResult). Not a completion: the
+		// runner is still alive awaiting a verdict, and signalling agentDone
+		// would tear the bridge down mid-chain. The controller reads the
+		// attempt from the runner's stdout marker instead.
+		b.Log.Info("parked attempt result observed; holding the bridge open", "file", filename)
 
 	case filename == "status.json":
 		// Status update
@@ -758,6 +766,13 @@ func (b *Bridge) subscribeToInbound(ctx context.Context) {
 		b.Log.Error(err, "failed to subscribe to subagent result events")
 	}
 
+	// Subscribe to gate verdicts for a parked run. The agent-runner polls
+	// /ipc/gate/ for the file written below.
+	gateVerdictCh, err := b.EventBus.Subscribe(ctx, fmt.Sprintf("%s.%s", eventbus.TopicGateVerdict, b.AgentRunID))
+	if err != nil {
+		b.Log.Error(err, "failed to subscribe to gate verdict events")
+	}
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -817,6 +832,27 @@ func (b *Bridge) subscribeToInbound(ctx context.Context) {
 				} else {
 					b.Log.Info("Wrote subagent batch result", "batchId", parsed.BatchID)
 				}
+			}
+
+		case event := <-gateVerdictCh:
+			// Write the gate verdict to /ipc/gate/verdict-{attempt}.json.
+			// Unlike the delegate/subagent paths the filename component is an
+			// integer from status.attempt, never agent-supplied, so there is no
+			// traversal to guard — but a malformed payload would make a file
+			// the runner can never match, so drop it.
+			var parsed struct {
+				Attempt int `json:"attempt"`
+			}
+			if err := json.Unmarshal(event.Data, &parsed); err != nil || parsed.Attempt < 1 {
+				b.Log.Error(err, "dropping gate verdict with no usable attempt number")
+				continue
+			}
+			filename := fmt.Sprintf("verdict-%d.json", parsed.Attempt)
+			path := filepath.Join(b.BasePath, DirGate, filename)
+			if err := os.WriteFile(path, event.Data, 0640); err != nil {
+				b.Log.Error(err, "failed to write gate verdict", "attempt", parsed.Attempt)
+			} else {
+				b.Log.Info("Wrote gate verdict", "attempt", parsed.Attempt)
 			}
 		}
 	}
