@@ -97,9 +97,6 @@ export function RunsPage() {
   const selectedProvider = selectedBaseURL.includes("databricks.com")
     ? "databricks"
     : selectedAuthRef?.provider || "";
-  const selectedSecretName =
-    selectedAgent?.spec.agents.default.providerHeadersSecretRef ||
-    selectedAuthRef?.secret;
   const {
     models: availableModels,
     isLoading: modelsLoading,
@@ -109,7 +106,7 @@ export function RunsPage() {
     "",
     selectedBaseURL || undefined,
     undefined,
-    selectedSecretName,
+    selectedAgent?.metadata.name,
   );
 
   // Mark all runs as seen after a short delay so "new" dots are visible briefly.

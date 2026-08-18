@@ -88,13 +88,13 @@ async function fetchProviderModelsViaProxy(
   baseURL: string,
   apiKey?: string,
   provider?: string,
-  secretName?: string,
+  agentRef?: string,
 ): Promise<string[]> {
   const res = await api.providers.models(
     baseURL,
     apiKey,
     provider,
-    secretName,
+    agentRef,
   );
   return res.models;
 }
@@ -146,7 +146,7 @@ export function useModelList(
   apiKey: string,
   baseURL?: string,
   bedrockCredentials?: BedrockCredentials,
-  secretName?: string,
+  agentRef?: string,
 ) {
   const isLocalProvider =
     provider === "ollama" ||
@@ -163,7 +163,7 @@ export function useModelList(
     !!bedrockCredentials?.accessKeyId &&
     !!bedrockCredentials?.secretAccessKey;
   const canFetchDatabricks =
-    provider === "databricks" && !!baseURL && (!!apiKey || !!secretName);
+    provider === "databricks" && !!baseURL && (!!apiKey || !!agentRef);
 
   const query = useQuery<string[]>({
     queryKey: [
@@ -173,7 +173,7 @@ export function useModelList(
       baseURL,
       bedrockCredentials?.region,
       bedrockCredentials?.accessKeyId,
-      secretName,
+      agentRef,
     ],
     queryFn: async () => {
       if (canFetchDatabricks)
@@ -181,7 +181,7 @@ export function useModelList(
           baseURL!,
           apiKey || undefined,
           provider,
-          secretName,
+          agentRef,
         );
       if (canFetchLocal)
         return fetchLocalProviderModels(baseURL!, apiKey || undefined);

@@ -2,8 +2,10 @@ package apiserver
 
 import (
 	"encoding/json"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -215,6 +217,76 @@ func TestProxyProviderModels_InvalidScheme(t *testing.T) {
 	}
 }
 
+func TestProxyProviderModels_SecretBackedDiscoveryRequiresAuth(t *testing.T) {
+	srv := newProviderTestServer(t)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/providers/models?provider=databricks&agentRef=example", nil)
+	rec := httptest.NewRecorder()
+	srv.buildMux(nil, nil).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("status = %d, want 403", rec.Code)
+	}
+}
+
+func TestValidateProviderURL(t *testing.T) {
+	tests := []struct {
+		name     string
+		rawURL   string
+		provider string
+		wantErr  bool
+	}{
+		{name: "databricks https", rawURL: "https://workspace.cloud.databricks.com/ai-gateway/mlflow/v1", provider: "databricks"},
+		{name: "databricks explicit 443", rawURL: "https://workspace.cloud.databricks.com:443/v1", provider: "databricks"},
+		{name: "databricks plaintext", rawURL: "http://workspace.cloud.databricks.com/v1", provider: "databricks", wantErr: true},
+		{name: "databricks nonstandard port", rawURL: "https://workspace.cloud.databricks.com:8443/v1", provider: "databricks", wantErr: true},
+		{name: "databricks wrong host", rawURL: "https://example.com/v1", provider: "databricks", wantErr: true},
+		{name: "embedded credentials", rawURL: "https://user:password@example.com/v1", provider: "custom", wantErr: true},
+		{name: "fragment", rawURL: "https://example.com/v1#internal", provider: "custom", wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			parsed, err := url.Parse(tt.rawURL)
+			if err != nil {
+				t.Fatalf("parse URL: %v", err)
+			}
+			err = validateProviderURL(parsed, tt.provider)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("validateProviderURL() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestIsDisallowedProviderIP(t *testing.T) {
+	tests := []struct {
+		ip         string
+		disallowed bool
+	}{
+		{ip: "127.0.0.1", disallowed: true},
+		{ip: "169.254.169.254", disallowed: true},
+		{ip: "10.0.0.1", disallowed: true},
+		{ip: "100.64.0.1", disallowed: true},
+		{ip: "198.18.0.1", disallowed: true},
+		{ip: "::1", disallowed: true},
+		{ip: "fc00::1", disallowed: true},
+		{ip: "8.8.8.8", disallowed: false},
+		{ip: "2606:4700:4700::1111", disallowed: false},
+	}
+	for _, tt := range tests {
+		if got := isDisallowedProviderIP(net.ParseIP(tt.ip)); got != tt.disallowed {
+			t.Errorf("isDisallowedProviderIP(%s) = %v, want %v", tt.ip, got, tt.disallowed)
+		}
+	}
+}
+
+func TestProviderHTTPClientRejectsRedirects(t *testing.T) {
+	client := newProviderHTTPClient()
+	if err := client.CheckRedirect(&http.Request{}, []*http.Request{{}}); err != http.ErrUseLastResponse {
+		t.Errorf("CheckRedirect error = %v, want http.ErrUseLastResponse", err)
+	}
+}
+
 func TestParseProviderModels_OllamaFormat(t *testing.T) {
 	body := `{"models":[{"name":"llama3:latest"},{"name":"codellama:7b"}]}`
 	models := parseProviderModels([]byte(body))
@@ -269,12 +341,58 @@ func TestParseDatabricksServingEndpoints(t *testing.T) {
 	}
 }
 
-func TestProviderAuthorization(t *testing.T) {
+func TestDatabricksAuthorization(t *testing.T) {
 	secret := &corev1.Secret{Data: map[string][]byte{
 		"Authorization": []byte("Bearer db-token"),
 		"API_KEY":       []byte("fallback-token"),
 	}}
-	if got := providerAuthorization(secret); got != "Bearer db-token" {
+	if got := databricksAuthorization(secret); got != "Bearer db-token" {
 		t.Errorf("authorization = %q, want Bearer db-token", got)
+	}
+}
+
+func TestDatabricksAuthorizationIgnoresUnrelatedKeys(t *testing.T) {
+	secret := &corev1.Secret{Data: map[string][]byte{
+		"API_KEY":        []byte("generic-token"),
+		"OPENAI_API_KEY": []byte("openai-token"),
+	}}
+	if got := databricksAuthorization(secret); got != "" {
+		t.Errorf("authorization = %q, want empty", got)
+	}
+}
+
+func TestDatabricksAuthorizationRejectsUnsafeValues(t *testing.T) {
+	tests := []corev1.Secret{
+		{Data: map[string][]byte{"Authorization": []byte("Basic credentials")}},
+		{Data: map[string][]byte{"Authorization": []byte("Bearer token\r\nX-Injected: value")}},
+		{Data: map[string][]byte{"DATABRICKS_TOKEN": []byte("token\nX-Injected: value")}},
+	}
+	for i := range tests {
+		if got := databricksAuthorization(&tests[i]); got != "" {
+			t.Errorf("case %d authorization = %q, want empty", i, got)
+		}
+	}
+}
+
+func TestDatabricksAuthorizationProviderAPIKey(t *testing.T) {
+	secret := &corev1.Secret{Data: map[string][]byte{
+		"PROVIDER_API_KEY": []byte("db-token"),
+	}}
+	if got := databricksAuthorization(secret); got != "Bearer db-token" {
+		t.Errorf("authorization = %q, want Bearer db-token", got)
+	}
+}
+
+func TestProviderSecretRefMatchesProvider(t *testing.T) {
+	agent := &sympoziumv1alpha1.Agent{
+		Spec: sympoziumv1alpha1.AgentSpec{
+			AuthRefs: []sympoziumv1alpha1.SecretRef{
+				{Provider: "openai", Secret: "openai-secret"},
+				{Provider: "databricks", Secret: "databricks-secret"},
+			},
+		},
+	}
+	if got := providerSecretRef(agent, "databricks"); got != "databricks-secret" {
+		t.Errorf("secret ref = %q, want databricks-secret", got)
 	}
 }

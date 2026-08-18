@@ -1549,11 +1549,11 @@ export const api = {
       baseURL: string,
       apiKey?: string,
       provider?: string,
-      secretName?: string,
+      agentRef?: string,
     ) => {
       const params = new URLSearchParams({ baseURL });
       if (provider) params.set("provider", provider);
-      if (secretName) params.set("secretName", secretName);
+      if (agentRef) params.set("agentRef", agentRef);
       return apiFetch<ProviderModelsResponse>(
         `/api/v1/providers/models?${params.toString()}`,
         apiKey ? { headers: { "X-Provider-Api-Key": apiKey } } : undefined,

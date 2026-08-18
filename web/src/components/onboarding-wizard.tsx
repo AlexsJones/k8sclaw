@@ -348,7 +348,6 @@ function ModelSelector({
   provider,
   apiKey,
   baseURL,
-  secretName,
   value,
   onChange,
   bedrockCredentials,
@@ -356,7 +355,6 @@ function ModelSelector({
   provider: string;
   apiKey: string;
   baseURL?: string;
-  secretName?: string;
   value: string;
   onChange: (v: string) => void;
   bedrockCredentials?: import("@/hooks/use-model-list").BedrockCredentials;
@@ -366,7 +364,6 @@ function ModelSelector({
     apiKey,
     baseURL,
     bedrockCredentials,
-    secretName,
   );
   const [search, setSearch] = useState("");
 
@@ -1194,7 +1191,6 @@ export function OnboardingWizard({
               provider={form.provider}
               apiKey={form.apiKey}
               baseURL={form.baseURL}
-              secretName={form.secretName}
               value={form.model}
               onChange={(v) => setForm({ ...form, model: v })}
               bedrockCredentials={
