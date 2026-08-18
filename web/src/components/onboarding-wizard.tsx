@@ -630,7 +630,12 @@ export function OnboardingWizard({
           form.provider === "ollama" ||
           form.provider === "lm-studio" ||
           form.provider === "llama-server" ||
-          form.provider === "unsloth"
+          form.provider === "unsloth" ||
+          // Custom endpoints are commonly self-hosted OpenAI-compatible
+          // servers (for example a node-probed llama-server). Credentials
+          // are optional for those servers, but remain available below for
+          // custom endpoints that do require authentication.
+          form.provider === "custom"
         )
           return true;
         if (form.provider === "bedrock")
@@ -1076,7 +1081,14 @@ export function OnboardingWizard({
                 form.provider !== "llama-server" &&
                 form.provider !== "unsloth" && (
                   <div className="space-y-2">
-                    <Label>API Key</Label>
+                    <Label>
+                      API Key
+                      {form.provider === "custom" && (
+                        <span className="text-muted-foreground font-normal">
+                          {" "}(optional)
+                        </span>
+                      )}
+                    </Label>
                     <Input
                       type="password"
                       value={form.apiKey}
@@ -1087,8 +1099,9 @@ export function OnboardingWizard({
                       autoComplete="off"
                     />
                     <p className="text-xs text-muted-foreground">
-                      A Kubernetes Secret will be created automatically from
-                      this key. Also used to fetch available models.
+                      {form.provider === "custom"
+                        ? "Optional for endpoints that require authentication. Leave blank for unauthenticated local servers."
+                        : "A Kubernetes Secret will be created automatically from this key. Also used to fetch available models."}
                     </p>
                   </div>
                 )}
