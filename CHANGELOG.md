@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.10.48](https://github.com/sympozium-ai/sympozium/compare/v0.10.47...v0.10.48) (2026-08-18)
+
+
+### Bug Fixes
+
+* allow unauthenticated custom providers in wizard ([db1036d](https://github.com/sympozium-ai/sympozium/commit/db1036dcbf2895f737c043d94a4e4017341363b5))
+* allow unauthenticated custom providers in wizard ([bccce53](https://github.com/sympozium-ai/sympozium/commit/bccce53e8a1882585d8c674ad0d72d16de023fc6))
+
 ## [0.10.47](https://github.com/sympozium-ai/sympozium/compare/v0.10.46...v0.10.47) (2026-08-09)
 
 
