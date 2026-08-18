@@ -246,3 +246,35 @@ func TestParseProviderModels_InvalidJSON(t *testing.T) {
 		t.Errorf("expected empty for invalid JSON, got %v", models)
 	}
 }
+
+func TestParseDatabricksServingEndpoints(t *testing.T) {
+	body := `{
+  "endpoints": [
+    {"name":"databricks-claude-sonnet-4-6","state":{"ready":"READY"},"config":{"served_entities":[{"entity_name":"system.ai.databricks-claude-sonnet-4-6"}]}},
+    {"name":"gpt-4-1","state":{"ready":"READY"},"config":{"served_entities":[{"external_model":{"task":"llm/v1/chat"}}]}},
+    {"name":"azure-cohere-embed-v-4-0","state":{"ready":"READY"},"config":{"served_entities":[{"external_model":{"task":"llm/v1/embeddings"}}]}},
+    {"name":"starting-model","state":{"ready":"NOT_READY"},"config":{}}
+  ]
+}`
+
+	models := parseDatabricksServingEndpoints([]byte(body))
+	want := []string{"databricks-claude-sonnet-4-6", "gpt-4-1"}
+	if len(models) != len(want) {
+		t.Fatalf("models = %v, want %v", models, want)
+	}
+	for i := range want {
+		if models[i] != want[i] {
+			t.Errorf("models[%d] = %q, want %q", i, models[i], want[i])
+		}
+	}
+}
+
+func TestProviderAuthorization(t *testing.T) {
+	secret := &corev1.Secret{Data: map[string][]byte{
+		"Authorization": []byte("Bearer db-token"),
+		"API_KEY":       []byte("fallback-token"),
+	}}
+	if got := providerAuthorization(secret); got != "Bearer db-token" {
+		t.Errorf("authorization = %q, want Bearer db-token", got)
+	}
+}

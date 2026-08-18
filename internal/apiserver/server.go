@@ -3796,8 +3796,11 @@ func (s *Server) proxyProviderModels(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	provider := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("provider")))
+
 	// Resolve hostname and check for disallowed IPs.
 	hostname := parsed.Hostname()
+	isDatabricks := provider == "databricks" && isDatabricksHostname(hostname)
 	ips, err := net.LookupHost(hostname)
 	if err != nil {
 		http.Error(w, "cannot resolve baseURL hostname", http.StatusBadRequest)
@@ -3813,19 +3816,25 @@ func (s *Server) proxyProviderModels(w http.ResponseWriter, r *http.Request) {
 		// kube-apiserver or any in-cluster service. This is a best-effort check;
 		// a DNS-rebinding name can still change between resolution here and the
 		// client's own re-resolution below.
-		if ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() ||
-			ip.IsLoopback() || ip.IsPrivate() || ip.IsUnspecified() {
+		if (ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() ||
+			ip.IsLoopback() || ip.IsPrivate() || ip.IsUnspecified()) && !isDatabricks {
 			http.Error(w, "baseURL resolves to a disallowed address", http.StatusForbidden)
 			return
 		}
 	}
 
-	provider := r.URL.Query().Get("provider")
 	apiKey := r.Header.Get("X-Provider-Api-Key")
+	secretName := strings.TrimSpace(r.URL.Query().Get("secretName"))
 
 	// Determine the models endpoint URL.
 	modelsURL := ""
-	if provider == "ollama" || strings.Contains(baseURL, ":11434") {
+	if provider == "databricks" {
+		if !isDatabricks {
+			http.Error(w, "Databricks provider requires a databricks.com baseURL", http.StatusBadRequest)
+			return
+		}
+		modelsURL = databricksWorkspaceRoot(parsed) + "/api/2.0/serving-endpoints"
+	} else if provider == "ollama" || strings.Contains(baseURL, ":11434") {
 		// Ollama uses /api/tags.
 		modelsURL = strings.TrimRight(baseURL, "/")
 		// If baseURL ends with /v1, strip it for the Ollama native API.
@@ -3849,6 +3858,24 @@ func (s *Server) proxyProviderModels(w http.ResponseWriter, r *http.Request) {
 	if apiKey != "" {
 		req.Header.Set("Authorization", "Bearer "+apiKey)
 	}
+	if provider == "databricks" && secretName != "" {
+		ns := r.URL.Query().Get("namespace")
+		if ns == "" {
+			ns = "default"
+		}
+		var secret corev1.Secret
+		if err := s.client.Get(r.Context(), types.NamespacedName{Name: secretName, Namespace: ns}, &secret); err != nil {
+			if k8serrors.IsNotFound(err) {
+				http.Error(w, fmt.Sprintf("secret %q not found in namespace %q", secretName, ns), http.StatusBadRequest)
+				return
+			}
+			http.Error(w, "failed to read provider secret: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if auth := providerAuthorization(&secret); auth != "" {
+			req.Header.Set("Authorization", auth)
+		}
+	}
 	resp, err := client.Do(req)
 	if err != nil {
 		http.Error(w, "failed to reach provider: "+err.Error(), http.StatusBadGateway)
@@ -3869,6 +3896,9 @@ func (s *Server) proxyProviderModels(w http.ResponseWriter, r *http.Request) {
 
 	// Parse models from response.
 	models := parseProviderModels(body)
+	if provider == "databricks" {
+		models = parseDatabricksServingEndpoints(body)
+	}
 
 	writeJSON(w, ProviderModelsResponse{
 		Models: models,
@@ -3941,6 +3971,77 @@ func (s *Server) listBedrockModels(w http.ResponseWriter, r *http.Request) {
 		Models: models,
 		Source: "live",
 	})
+}
+
+func isDatabricksHostname(hostname string) bool {
+	hostname = strings.ToLower(strings.TrimSuffix(strings.TrimSpace(hostname), "."))
+	return hostname == "databricks.com" || strings.HasSuffix(hostname, ".databricks.com")
+}
+
+func databricksWorkspaceRoot(parsed *url.URL) string {
+	return parsed.Scheme + "://" + parsed.Host
+}
+
+func providerAuthorization(secret *corev1.Secret) string {
+	for key, value := range secret.Data {
+		if strings.EqualFold(key, "Authorization") {
+			return strings.TrimSpace(string(value))
+		}
+	}
+	for _, key := range []string{"DATABRICKS_TOKEN", "API_KEY", "PROVIDER_API_KEY", "OPENAI_API_KEY"} {
+		if value := strings.TrimSpace(string(secret.Data[key])); value != "" {
+			return "Bearer " + value
+		}
+	}
+	return ""
+}
+
+func parseDatabricksServingEndpoints(body []byte) []string {
+	var response struct {
+		Endpoints []struct {
+			Name  string `json:"name"`
+			State struct {
+				Ready string `json:"ready"`
+			} `json:"state"`
+			Config struct {
+				ServedEntities []struct {
+					EntityName    string `json:"entity_name"`
+					ExternalModel *struct {
+						Task string `json:"task"`
+					} `json:"external_model"`
+				} `json:"served_entities"`
+			} `json:"config"`
+		} `json:"endpoints"`
+	}
+	if err := json.Unmarshal(body, &response); err != nil {
+		return nil
+	}
+
+	seen := make(map[string]struct{})
+	models := make([]string, 0, len(response.Endpoints))
+	for _, endpoint := range response.Endpoints {
+		if endpoint.Name == "" || (endpoint.State.Ready != "" && endpoint.State.Ready != "READY") {
+			continue
+		}
+		embeddingOnly := false
+		for _, entity := range endpoint.Config.ServedEntities {
+			if entity.ExternalModel != nil && entity.ExternalModel.Task == "llm/v1/embeddings" {
+				embeddingOnly = true
+				break
+			}
+		}
+		lowerName := strings.ToLower(endpoint.Name)
+		if embeddingOnly || strings.Contains(lowerName, "embedding") || strings.Contains(lowerName, "embed-") {
+			continue
+		}
+		if _, exists := seen[endpoint.Name]; exists {
+			continue
+		}
+		seen[endpoint.Name] = struct{}{}
+		models = append(models, endpoint.Name)
+	}
+	sort.Strings(models)
+	return models
 }
 
 // parseProviderModels extracts model names from a JSON response.
