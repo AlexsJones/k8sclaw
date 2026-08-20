@@ -883,14 +883,17 @@ func (s *Server) getRun(w http.ResponseWriter, r *http.Request) {
 }
 
 // CreateRunRequest is the request body for creating a new AgentRun.
+// Task accepts both a JSON string (legacy prompt) and a JSON object
+// (sidecar-driven mode: {mode, tool, parameters}), matching the polymorphic
+// TaskSpec on the CRD.
 type CreateRunRequest struct {
-	AgentRef   string `json:"agentRef"`
-	Task       string `json:"task"`
-	AgentID    string `json:"agentId,omitempty"`
-	SessionKey string `json:"sessionKey,omitempty"`
-	Model      string `json:"model,omitempty"`
-	Timeout    string `json:"timeout,omitempty"`
-	Backend    string `json:"backend,omitempty"`
+	AgentRef   string          `json:"agentRef"`
+	Task       json.RawMessage `json:"task"`
+	AgentID    string          `json:"agentId,omitempty"`
+	SessionKey string          `json:"sessionKey,omitempty"`
+	Model      string          `json:"model,omitempty"`
+	Timeout    string          `json:"timeout,omitempty"`
+	Backend    string          `json:"backend,omitempty"`
 }
 
 func (s *Server) createRun(w http.ResponseWriter, r *http.Request) {
@@ -905,8 +908,14 @@ func (s *Server) createRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.AgentRef == "" || req.Task == "" {
+	if req.AgentRef == "" || len(req.Task) == 0 {
 		http.Error(w, "agentRef and task are required", http.StatusBadRequest)
+		return
+	}
+
+	var taskSpec sympoziumv1alpha1.TaskSpec
+	if err := json.Unmarshal(req.Task, &taskSpec); err != nil {
+		http.Error(w, "task must be a string or object: "+err.Error(), http.StatusBadRequest)
 		return
 	}
 
@@ -986,7 +995,7 @@ func (s *Server) createRun(w http.ResponseWriter, r *http.Request) {
 			AgentRef:   req.AgentRef,
 			AgentID:    req.AgentID,
 			SessionKey: req.SessionKey,
-			Task:       sympoziumv1alpha1.NewStringTask(req.Task),
+			Task:       &taskSpec,
 			Backend:    req.Backend,
 			Model: sympoziumv1alpha1.ModelSpec{
 				Provider:                 provider,
