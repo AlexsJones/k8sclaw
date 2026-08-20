@@ -85,13 +85,19 @@ func newOpenAIProvider(provider, apiKey, baseURL, model, systemPrompt, task stri
 		opts = append(opts, openaioption.WithHeader(k, v))
 	}
 
+	supportsStrict := provider != "ollama" && provider != "lm-studio" && provider != "llama-server" && provider != "unsloth"
+
 	var oaiTools []openai.ChatCompletionToolUnionParam
 	for _, t := range tools {
-		oaiTools = append(oaiTools, openai.ChatCompletionFunctionTool(shared.FunctionDefinitionParam{
+		fd := shared.FunctionDefinitionParam{
 			Name:        t.Name,
 			Description: openai.String(t.Description),
 			Parameters:  shared.FunctionParameters(t.Parameters),
-		}))
+		}
+		if t.Strict && supportsStrict {
+			fd.Strict = openai.Bool(true)
+		}
+		oaiTools = append(oaiTools, openai.ChatCompletionFunctionTool(fd))
 	}
 
 	p := &openaiProvider{
@@ -112,6 +118,15 @@ func newOpenAIProvider(provider, apiKey, baseURL, model, systemPrompt, task stri
 
 func (p *openaiProvider) Name() string  { return p.provider }
 func (p *openaiProvider) Model() string { return p.model }
+
+func (p *openaiProvider) SupportsStrictSchema() bool {
+	switch p.provider {
+	case "ollama", "lm-studio", "llama-server", "unsloth":
+		return false
+	default:
+		return true
+	}
+}
 
 func (p *openaiProvider) Chat(ctx context.Context) (ChatResult, error) {
 	params := openai.ChatCompletionNewParams{

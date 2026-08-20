@@ -108,6 +108,12 @@ type LLMProvider interface {
 	// LLM call succeeded but the model failed to emit valid schema, and
 	// callers receive an error.
 	Prompt(ctx context.Context, prompt string, useContext bool, schema json.RawMessage) (string, []byte, int, int, error)
+
+	// SupportsStrictSchema reports whether the provider's API enforces
+	// schema validation on tool definitions when Strict is set. Providers
+	// that lack grammar-constrained decoding (Ollama, LM Studio,
+	// llama-server) return false and silently ignore the flag.
+	SupportsStrictSchema() bool
 }
 
 // runAgentLoop drives a provider through iterative tool calling until the
