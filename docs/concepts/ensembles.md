@@ -379,6 +379,28 @@ Arguments:
 
 The tool is **blocking** — the parent agent waits (up to 10 minutes) for the child to complete and receives the result directly. Under the hood, the tool writes a spawn request to `/ipc/spawn/`, the SpawnRouter creates a child AgentRun via the Spawner (validating the relationship edge exists), and when the child finishes, the SpawnRouter delivers the result back through NATS to the parent's IPC bridge. The parent's `DelegateStatus` is populated with the child run name, target persona, phase, and result. During the wait, the parent AgentRun transitions to `AwaitingDelegate` phase (timeout checking is paused).
 
+### Delegation execution model
+
+Delegation has a small set of guarantees that apply whether the handoff is
+started by the tool or by the optional controller executor:
+
+1. A persona can delegate only along a declared delegation or sequential edge
+   in its own Ensemble. Without that edge, `delegate_to_persona` is not an
+   available path to another persona.
+2. Tool-driven delegation is the default. The controller executor is an
+   opt-in fallback for models that do not emit the tool call, and does not
+   replace the normal tool-driven path.
+3. A delegated child receives only the time remaining from its parent. It may
+   finish sooner, but it cannot extend the parent run's deadline.
+4. The child records its parent relationship and executor choice in telemetry,
+   so operators can identify both the handoff and the execution path.
+5. A delegation edge authorizes the handoff only. Tool and capability
+   advertisement remains controlled by the applicable policy.
+
+When changing delegation, keep tests for a missing edge, the bounded child
+deadline, executor telemetry, and the unchanged default path when the
+controller option is disabled.
+
 ### Visual Canvas
 
 The Web UI provides two canvas views for visualising persona relationships:
