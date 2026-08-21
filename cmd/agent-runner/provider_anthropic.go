@@ -69,7 +69,7 @@ func newAnthropicProvider(apiKey, baseURL, model, systemPrompt, task string, too
 	}
 }
 
-func (p *anthropicProvider) Name() string              { return "anthropic" }
+func (p *anthropicProvider) Name() string               { return "anthropic" }
 func (p *anthropicProvider) Model() string              { return p.model }
 func (p *anthropicProvider) SupportsStrictSchema() bool { return true }
 

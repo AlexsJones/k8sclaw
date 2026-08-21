@@ -26,7 +26,7 @@ type mockProvider struct {
 	replaceLog []map[string]string
 }
 
-func (p *mockProvider) Name() string              { return p.name }
+func (p *mockProvider) Name() string               { return p.name }
 func (p *mockProvider) Model() string              { return p.model }
 func (p *mockProvider) SupportsStrictSchema() bool { return true }
 
