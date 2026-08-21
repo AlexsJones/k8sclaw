@@ -86,6 +86,12 @@ func newOpenAIProvider(provider, apiKey, baseURL, model, systemPrompt, task stri
 	}
 
 	supportsStrict := provider != "ollama" && provider != "lm-studio" && provider != "llama-server" && provider != "unsloth"
+	if provider == "azure-openai" {
+		apiVersion := getEnv("AZURE_OPENAI_API_VERSION", "2024-06-01")
+		if apiVersion < "2024-08-01" {
+			supportsStrict = false
+		}
+	}
 
 	var oaiTools []openai.ChatCompletionToolUnionParam
 	for _, t := range tools {
@@ -123,6 +129,9 @@ func (p *openaiProvider) SupportsStrictSchema() bool {
 	switch p.provider {
 	case "ollama", "lm-studio", "llama-server", "unsloth":
 		return false
+	case "azure-openai":
+		apiVersion := getEnv("AZURE_OPENAI_API_VERSION", "2024-06-01")
+		return apiVersion >= "2024-08-01"
 	default:
 		return true
 	}

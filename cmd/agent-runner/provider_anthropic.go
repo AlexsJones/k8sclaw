@@ -329,7 +329,11 @@ func (p *anthropicProvider) Prompt(ctx context.Context, prompt string, useContex
 	text := textContent.String()
 
 	if useContext {
-		p.messages = append(p.messages, anthropic.NewAssistantMessage(anthropic.NewTextBlock(text)))
+		historyText := text
+		if historyText == "" && parsed != nil {
+			historyText = string(parsed)
+		}
+		p.messages = append(p.messages, anthropic.NewAssistantMessage(anthropic.NewTextBlock(historyText)))
 		rollbackUserTurn = false
 	}
 
