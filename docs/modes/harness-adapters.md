@@ -99,7 +99,9 @@ loopback and adds it to the registry at `MCP_CONFIG_PATH` as `sympozium-skills`.
 the same way you connect to any other entry — **there is nothing adapter-specific to write.**
 
 That server holds `spec.toolPolicy` and applies it at both `tools/list` and `tools/call`, and
-it is the only thing in the pod that can dispatch to a skill sidecar. So those tools are
+it is the only thing in the pod that can dispatch to a skill sidecar. Its name is protected:
+`sympozium*` is a reserved prefix, and an operator `mcpServers` entry claiming it is rejected,
+so a registry entry with that name is always the real one. So those tools are
 policy-enforced regardless of what your adapter does, and you cannot bypass it even if you
 want to.
 
