@@ -53,6 +53,7 @@ import {
   formatAge,
   formatUsd,
   sumEffectiveCosts,
+  taskText,
   truncate,
 } from "@/lib/utils";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -104,7 +105,7 @@ export function RunsPage() {
     (r) =>
       r.metadata.name.toLowerCase().includes(search.toLowerCase()) ||
       r.spec.agentRef.toLowerCase().includes(search.toLowerCase()) ||
-      r.spec.task.toLowerCase().includes(search.toLowerCase()),
+      taskText(r.spec.task).toLowerCase().includes(search.toLowerCase()),
   );
 
   const spend = sumEffectiveCosts(filtered);
@@ -464,7 +465,7 @@ export function RunsPage() {
                   </Link>
                 </TableCell>
                 <TableCell className="max-w-xs text-sm text-muted-foreground">
-                  {truncate(run.spec.task, 60)}
+                  {truncate(taskText(run.spec.task), 60)}
                 </TableCell>
                 <TableCell>
                   <div className="flex items-center gap-1.5">
