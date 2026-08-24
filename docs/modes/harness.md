@@ -265,8 +265,9 @@ has a direct analogue, and the line falls in the same place:
 
 - **The image is infrastructure.** It is operator-chosen and registry-gated — an agent cannot
   name its own harness, because `parameters.image` is a field on the AgentRun the operator
-  authored, checked against `SympoziumPolicy.imagePolicy.allowedRegistries` at admission.
-  That list is the control bounding which harnesses may run in the cluster.
+  authored, checked against `SympoziumPolicy.imagePolicy.allowedRegistries` both at admission
+  and again in the controller. See [Bounding which harnesses may run](#bounding-which-harnesses-may-run)
+  for what that list does and does not promise.
 - **Everything the harness writes is agent lane.** What lands in `/workspace` and
   `/ipc/output` was produced by an LLM and is treated as adversarial, exactly as for
   `agent-runner`. Validate anything a harness writes before acting on it. The narrowed `/ipc`
@@ -277,12 +278,52 @@ string and cannot forge a result structure. It cannot forge the marker either: a
 prints `__SYMPOZIUM_RESULT__` mid-run is overtaken by the real one, because the controller
 parses the **last** marker in the log.
 
+### Bounding which harnesses may run
+
+`SympoziumPolicy.imagePolicy.allowedRegistries` is the control, and it is worth reading
+literally, because in harness mode the image is not an accessory to the run — it *is* the
+agent process.
+
+**It matches by string prefix.** There is no parsing into registry, repository and tag, so the
+granularity is whatever you write:
+
+| Entry | Admits |
+|---|---|
+| `docker.io/` | every image on Docker Hub |
+| `ghcr.io/acme/` | one organisation |
+| `ghcr.io/acme/harness:v1` | one image and tag |
+| `ghcr.io/acme/harness@sha256:…` | one exact digest |
+
+Two consequences, because the field looks stricter than it is:
+
+- **There is no component boundary.** `ghcr.io/acme` without the trailing slash also admits
+  `ghcr.io/acmecorp-evil/…`, and `:v1` also admits `:v1-evil`. End each entry at a `/`, or at
+  a complete tag or digest.
+- **A short name carries no registry.** `docker.io/library/` does not match `alpine:3.20`.
+  That direction fails closed.
+
+**It does nothing in three cases**, all of which are the documented behaviour rather than a
+bug, and all of which are worth checking before relying on the control:
+
+| Situation | Effect |
+|---|---|
+| The Agent has no `policyRef` | No policy is looked up. No image restriction. |
+| The bound policy has no `imagePolicy` | No image restriction. |
+| `allowedRegistries` is empty | "No list" means "no restriction", per the field docs. |
+
+The check runs in **both** the admission webhook and the controller. The webhook gives the
+better error, at `kubectl apply` time; the controller repeats it because the webhook is a
+separate, optional deployment, and a cluster without it would otherwise have no bound at all
+on which external harness executes. A rejection there fails the run with the image named on
+`status.error`, and no Job is created.
+
 ## Graceful degradation
 
 | Scenario | Behavior |
 |---|---|
 | `parameters.image` missing | Run fails validation in the controller with the missing-parameter name; no pod is created. |
-| Image outside `allowedRegistries` | **Denied at admission**, naming the image. |
+| Image outside `allowedRegistries` | **Denied at admission**, naming the image; and again in the controller, which fails the run without creating a Job. |
+| No `policyRef`, no `imagePolicy`, or an empty `allowedRegistries` | **No image restriction** — see [Bounding which harnesses may run](#bounding-which-harnesses-may-run). |
 | A capability is requested but not declared | **Denied at admission**, naming the mode and the capability. |
 | `backend: celln` | **Denied at admission**: celln never builds the container harness mode replaces. |
 | Image declares a capability it does not honour | Admitted and run. The field is silently dropped — this is the one failure the descriptor cannot catch, and why a claim is a promise. |

@@ -687,22 +687,12 @@ func (pe *PolicyEnforcer) validateImagePolicy(run *sympoziumv1alpha1.AgentRun, p
 	}
 
 	for _, img := range images {
-		if !isImageAllowed(img, policy.Spec.ImagePolicy.AllowedRegistries) {
+		if !policy.Spec.ImagePolicy.Allows(img) {
 			return fmt.Errorf("image %q is not from an allowed registry (allowed: %v)",
 				img, policy.Spec.ImagePolicy.AllowedRegistries)
 		}
 	}
 	return nil
-}
-
-// isImageAllowed checks if an image reference starts with one of the allowed registry prefixes.
-func isImageAllowed(image string, allowedRegistries []string) bool {
-	for _, registry := range allowedRegistries {
-		if strings.HasPrefix(image, registry) {
-			return true
-		}
-	}
-	return false
 }
 
 func (pe *PolicyEnforcer) validateLifecycleRBAC(run *sympoziumv1alpha1.AgentRun, policy *sympoziumv1alpha1.SympoziumPolicy) error {

@@ -2319,6 +2319,22 @@ func (r *AgentRunReconciler) validatePolicy(ctx context.Context, agentRun *sympo
 		return fmt.Errorf("policy %q not found: %w", instance.Spec.PolicyRef, err)
 	}
 
+	// Validate the harness image against the registry allowlist.
+	//
+	// The admission webhook checks this too, and with a better error. It is a
+	// separate, optional deployment though, and for harness mode the image is
+	// not an accessory to the run — it *is* the agent process. A cluster
+	// running without the webhook would otherwise have no bound at all on
+	// which external harness executes, which is exactly what
+	// imagePolicy.allowedRegistries exists to provide. Same
+	// belt-and-braces as the task-mode capability check.
+	if img := taskmodes.HarnessImage(agentRun.Spec.Task); img != "" {
+		if !policy.Spec.ImagePolicy.Allows(img) {
+			return fmt.Errorf("harness image %q is not from an allowed registry (allowed: %v)",
+				img, policy.Spec.ImagePolicy.AllowedRegistries)
+		}
+	}
+
 	// Validate sub-agent depth
 	if agentRun.Spec.Parent != nil && policy.Spec.SubagentPolicy != nil {
 		if agentRun.Spec.Parent.SpawnDepth > policy.Spec.SubagentPolicy.MaxDepth {
