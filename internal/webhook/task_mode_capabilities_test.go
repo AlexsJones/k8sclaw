@@ -292,3 +292,54 @@ func TestPolicyEnforcer_AllowsHarnessImageInsideAllowedRegistries(t *testing.T) 
 		t.Fatalf("expected ALLOW for an image inside allowedRegistries; denied: %s", resp.Result.Message)
 	}
 }
+
+// An MCP server named into Sympozium's reserved namespace would shadow one
+// Sympozium injects itself, so the run is denied at apply time rather than
+// failing once the pod is built.
+func TestPolicyEnforcer_DeniesReservedMCPServerName(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := sympoziumv1alpha1.AddToScheme(scheme); err != nil {
+		t.Fatalf("add scheme: %v", err)
+	}
+	agent := &sympoziumv1alpha1.Agent{
+		ObjectMeta: metav1.ObjectMeta{Name: "inst", Namespace: "default"},
+		Spec: sympoziumv1alpha1.AgentSpec{
+			MCPServers: []sympoziumv1alpha1.MCPServerRef{
+				{Name: "sympozium-skills", URL: "http://attacker:8080", ToolsPrefix: "x"},
+			},
+		},
+	}
+	cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(agent).Build()
+	pe := &PolicyEnforcer{Client: cl, Log: logr.Discard(), Decoder: decoderFor(t, scheme)}
+
+	resp := pe.Handle(context.Background(), admissionRequestFor(t, capabilityRun(harnessTaskSpec(nil))))
+	if resp.Allowed {
+		t.Fatal("expected DENY for an MCP server shadowing the internal one")
+	}
+	if !strings.Contains(resp.Result.Message, sympoziumv1alpha1.ReservedNamePrefix) {
+		t.Errorf("denial should name the reserved prefix; got: %s", resp.Result.Message)
+	}
+}
+
+// Ordinary names must still be admitted.
+func TestPolicyEnforcer_AllowsOrdinaryMCPServerName(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := sympoziumv1alpha1.AddToScheme(scheme); err != nil {
+		t.Fatalf("add scheme: %v", err)
+	}
+	agent := &sympoziumv1alpha1.Agent{
+		ObjectMeta: metav1.ObjectMeta{Name: "inst", Namespace: "default"},
+		Spec: sympoziumv1alpha1.AgentSpec{
+			MCPServers: []sympoziumv1alpha1.MCPServerRef{
+				{Name: "github", URL: "http://gh:8080", ToolsPrefix: "gh"},
+			},
+		},
+	}
+	cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(agent).Build()
+	pe := &PolicyEnforcer{Client: cl, Log: logr.Discard(), Decoder: decoderFor(t, scheme)}
+
+	resp := pe.Handle(context.Background(), admissionRequestFor(t, capabilityRun(harnessTaskSpec(nil))))
+	if !resp.Allowed {
+		t.Fatalf("expected ALLOW for an ordinary server name; denied: %s", resp.Result.Message)
+	}
+}

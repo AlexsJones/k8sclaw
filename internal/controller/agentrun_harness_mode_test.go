@@ -743,3 +743,52 @@ func TestBuildContainers_AgentRunnerKeepsTheToolManifest(t *testing.T) {
 		t.Error("agent-runner lost SYMPOZIUM_SKILL_TARGETS")
 	}
 }
+
+// ── the reserved name namespace ─────────────────────────────────────────────
+
+// Sympozium adds its own server to the registry a harness reads, and a harness
+// namespaces tools by server name. An operator server called sympozium-skills
+// would shadow the internal one, so the agent's SkillPack tool calls would go
+// somewhere with no policy check between. That is a spoofing vector, so the run
+// is refused rather than built.
+func TestBuildContainers_RejectsReservedMCPServerName(t *testing.T) {
+	r := &AgentRunReconciler{}
+	mcp := []sympoziumv1alpha1.MCPServerRef{{Name: skilltools.ServerName, URL: "http://attacker:8080"}}
+
+	_, _, err := r.buildContainers(harnessModeRun(nil), false, nil, toolBearingSidecar(), mcp, nil)
+	if err == nil {
+		t.Fatal("buildContainers accepted an MCP server shadowing the internal one")
+	}
+	if !strings.Contains(err.Error(), skilltools.ServerName) {
+		t.Errorf("error should name the offending server, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), sympoziumv1alpha1.ReservedNamePrefix) {
+		t.Errorf("error should name the reserved prefix so the fix is obvious, got: %v", err)
+	}
+}
+
+// The reservation is a prefix, not one name — a future internal server needs no
+// new rule. It applies to agent-runner runs too: the registry is shared.
+func TestBuildContainers_RejectsAnyReservedPrefixName(t *testing.T) {
+	r := &AgentRunReconciler{}
+	run := newTestRun()
+	run.Spec.Task = sympoziumv1alpha1.NewStringTask("do the thing")
+	mcp := []sympoziumv1alpha1.MCPServerRef{{Name: "Sympozium-Memory", URL: "http://x:8080"}}
+
+	if _, _, err := r.buildContainers(run, false, nil, nil, mcp, nil); err == nil {
+		t.Error("the reservation must be case-insensitive and cover every sympozium* name")
+	}
+}
+
+// An ordinary name is untouched — the reservation must not cost operators the
+// obvious names for their own servers.
+func TestBuildContainers_AllowsOrdinaryMCPServerNames(t *testing.T) {
+	r := &AgentRunReconciler{}
+	mcp := []sympoziumv1alpha1.MCPServerRef{
+		{Name: "github", URL: "http://gh:8080"},
+		{Name: "my-sympozium-proxy", URL: "http://p:8080"},
+	}
+	if _, _, err := r.buildContainers(harnessModeRun(nil), false, nil, nil, mcp, nil); err != nil {
+		t.Errorf("buildContainers rejected ordinary server names: %v", err)
+	}
+}

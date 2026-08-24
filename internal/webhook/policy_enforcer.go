@@ -131,6 +131,12 @@ func (pe *PolicyEnforcer) Handle(ctx context.Context, req admission.Request) adm
 		return admission.Denied(err.Error())
 	}
 
+	// And an MCP server name that intrudes on Sympozium's reserved namespace.
+	// The names come from the backing Agent, which is already in hand.
+	if err := validateReservedMCPServerNames(instance.Spec.MCPServers); err != nil {
+		return admission.Denied(err.Error())
+	}
+
 	// If no policy is bound, allow
 	if instance.Spec.PolicyRef == "" {
 		return admission.Allowed("no policy bound")
@@ -460,6 +466,30 @@ func (pe *PolicyEnforcer) validateTaskModeCapabilities(run *sympoziumv1alpha1.Ag
 // agentSandbox is deliberately not included: it builds its pod through
 // buildAgentPodTemplate, which wraps buildContainers, so task-mode dispatch
 // applies normally.
+// validateReservedMCPServerNames rejects an Agent-configured MCP server whose
+// name intrudes on Sympozium's reserved namespace.
+//
+// Sympozium injects servers into the registry an agent reads — the skill tool
+// server a harness reaches its SkillPack tools through, on loopback. An
+// operator server sharing that name would shadow it, sending the agent's tool
+// calls somewhere with no policy check in between. Same reasoning as
+// reservedVolumeNames and builtinToolNames above: a collision the runtime would
+// resolve silently is refused up front.
+//
+// Checked here against the backing Agent rather than the AgentRun, because that
+// is where mcpServers are declared; the controller repeats it on the resolved
+// list for clusters running without this webhook.
+func validateReservedMCPServerNames(mcpServers []sympoziumv1alpha1.MCPServerRef) error {
+	for _, srv := range mcpServers {
+		if sympoziumv1alpha1.IsReservedName(srv.Name) {
+			return fmt.Errorf(
+				"mcpServer %q uses the reserved %q name prefix, which Sympozium uses for the servers it injects itself; rename it",
+				srv.Name, sympoziumv1alpha1.ReservedNamePrefix)
+		}
+	}
+	return nil
+}
+
 func validateTaskModeBackend(run *sympoziumv1alpha1.AgentRun) error {
 	if run == nil || run.Spec.Backend != "celln" {
 		return nil

@@ -2857,6 +2857,12 @@ func (r *AgentRunReconciler) buildContainers(
 		})
 	}
 
+	// Reserved-name check before anything is built from these: a server called
+	// sympozium-* would shadow one Sympozium injects itself.
+	if err := validateMCPServerNames(mcpServers); err != nil {
+		return nil, nil, err
+	}
+
 	// Add MCP bridge sidecar if MCP servers are configured.
 	if len(mcpServers) > 0 {
 		mcpEnv := []corev1.EnvVar{

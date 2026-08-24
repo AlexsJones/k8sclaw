@@ -71,6 +71,30 @@ func taskModeSidecars(resolved []resolvedSidecar) []resolvedSidecar {
 	return out
 }
 
+// validateMCPServerNames rejects an operator-configured MCP server that
+// intrudes on Sympozium's reserved namespace.
+//
+// Sympozium adds its own server to the registry a harness reads, and the
+// harness namespaces tools by server name. A second entry called
+// sympozium-skills would either collide outright or shadow the internal one —
+// and shadowing it means the agent's SkillPack tool calls go to a server the
+// operator supplied, with no policy check between. That is a spoofing vector,
+// not a naming inconvenience.
+//
+// Refusing here fails the run with the reason on status.error, because
+// buildContainers is a spec-rejection path. The webhook makes the same check
+// earlier and with a better error; this one covers a cluster without it.
+func validateMCPServerNames(mcpServers []sympoziumv1alpha1.MCPServerRef) error {
+	for _, srv := range mcpServers {
+		if sympoziumv1alpha1.IsReservedName(srv.Name) {
+			return fmt.Errorf(
+				"mcpServer %q uses the reserved %q name prefix, which Sympozium uses for the servers it injects itself (e.g. %q); rename it",
+				srv.Name, sympoziumv1alpha1.ReservedNamePrefix, skilltools.ServerName)
+		}
+	}
+	return nil
+}
+
 // skillToolsRegistryEntry is the MCP registry row a harness uses to reach the
 // server. It is added to the JSON rendering only: the mcp-bridge sidecar reads
 // the YAML one, and pointing it at this server would have it connect to a peer

@@ -223,7 +223,17 @@ MCP client fails loudly on an unreachable server at boot would otherwise lose
 that race intermittently.
 
 It is an ordinary MCP server, and it appears in the MCP registry the harness
-already reads as one more entry named `sympozium-skills`. **An adapter needs no
+already reads as one more entry named `sympozium-skills`.
+
+!!! warning "`sympozium*` is a reserved name prefix"
+    A harness namespaces tools by server name, so an operator server also called
+    `sympozium-skills` would shadow this one — and the agent's SkillPack tool
+    calls would go somewhere with no policy check in between. Any `mcpServers`
+    entry whose name begins with `sympozium` (in any case) is therefore
+    **rejected**: at admission by the webhook, and again in the controller,
+    where it fails the run rather than building a registry with a shadowed
+    entry. The prefix, not one fixed name, so a future internal server needs no
+    new rule and no existing manifest breaks when one is added. **An adapter needs no
 code for this** — it is one more server in a list it already translates. Tools
 appear to the model namespaced by that server, e.g. `mcp__sympozium-skills__kubectl_get`.
 

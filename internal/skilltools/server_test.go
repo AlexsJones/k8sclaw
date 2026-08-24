@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	sympoziumv1alpha1 "github.com/sympozium-ai/sympozium/api/v1alpha1"
 	"github.com/sympozium-ai/sympozium/internal/mcpbridge"
 )
 
@@ -256,5 +257,14 @@ func TestNewServer_MissingManifestFails(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("expected an error: an absent manifest means the ConfigMap did not mount")
+	}
+}
+
+// The internal server's own name must sit inside the namespace Sympozium
+// reserves, or the reservation protects nothing.
+func TestServerNameIsReserved(t *testing.T) {
+	if !sympoziumv1alpha1.IsReservedName(ServerName) {
+		t.Errorf("ServerName %q is outside the reserved %q prefix; an operator could claim it",
+			ServerName, sympoziumv1alpha1.ReservedNamePrefix)
 	}
 }
