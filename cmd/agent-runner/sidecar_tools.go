@@ -6,9 +6,10 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"strings"
 	"sync"
 	"time"
+
+	"github.com/sympozium-ai/sympozium/pkg/sidecartools"
 )
 
 // sidecarToolEntry mirrors the JSON the controller writes into the read-only
@@ -140,77 +141,23 @@ func lookupSidecarTool(name string) (sidecarToolEntry, bool) {
 // For stdin-mode tools the remaining (non-positional) arguments are delivered as
 // a JSON object on the process stdin rather than interpolated into a command.
 func buildSidecarExecRequest(ctx context.Context, tool sidecarToolEntry, argsJSON string) (execRequest, error) {
-	args := map[string]any{}
-	if argsJSON != "" {
-		// UseNumber keeps integers exact: without it every JSON number decodes
-		// to float64 and a large id formats in scientific notation.
-		dec := json.NewDecoder(strings.NewReader(argsJSON))
-		dec.UseNumber()
-		if err := dec.Decode(&args); err != nil {
-			return execRequest{}, fmt.Errorf("parsing sidecar tool arguments: %w", err)
-		}
+	// The argv construction lives in pkg/sidecartools so this process and the
+	// skill tool server (which serves the same tools to a harness) cannot
+	// drift on it. The "--" marker and the exact number formatting are
+	// security-relevant; see BuildExecRequest.
+	shared, err := sidecartools.BuildExecRequest(sidecartools.Tool(tool), argsJSON, traceMetadata(ctx))
+	if err != nil {
+		return execRequest{}, err
 	}
-
-	// argv = Exec prefix + optional fixed subcommand + "--" + positional values.
-	// The "--" end-of-options marker ensures a model-supplied positional value
-	// beginning with "-" is treated as an operand, not a flag, by the wrapped
-	// binary (wrapped CLIs must honor "--"; see docs/guides/writing-sidecars.md).
-	argv := append([]string{}, tool.Exec...)
-	if tool.Subcommand != "" {
-		argv = append(argv, tool.Subcommand)
-	}
-	if len(tool.PositionalArgs) > 0 {
-		argv = append(argv, "--")
-	}
-	for _, key := range tool.PositionalArgs {
-		if val, ok := args[key]; ok {
-			argv = append(argv, formatPositionalArg(val))
-			// Remove so it is not also sent on stdin.
-			delete(args, key)
-		}
-	}
-
-	var stdin string
-	if tool.InputMode == "stdin" {
-		// Re-marshal the remaining (non-positional) args as the stdin payload.
-		stdinJSON, err := json.Marshal(args)
-		if err != nil {
-			return execRequest{}, fmt.Errorf("marshalling sidecar tool stdin: %w", err)
-		}
-		stdin = string(stdinJSON)
-	}
-
-	id := fmt.Sprintf("%d", time.Now().UnixNano())
-	req := execRequest{
-		ID:      id,
-		Argv:    argv,
-		Stdin:   stdin,
-		WorkDir: "/workspace",
-		Timeout: 120,
-		Target:  normalizeSidecarTarget(tool.Target),
-	}
-	req.Meta = traceMetadata(ctx)
-	return req, nil
-}
-
-// formatPositionalArg renders a decoded argument value as a single CLI argument.
-// Strings pass through verbatim; numbers (json.Number) keep their exact literal
-// form (no float64 rounding or scientific notation); composites and bools are
-// rendered as canonical JSON. The result is always one argv element.
-func formatPositionalArg(val any) string {
-	switch v := val.(type) {
-	case string:
-		return v
-	case json.Number:
-		return v.String()
-	case nil:
-		return ""
-	default:
-		if b, err := json.Marshal(v); err == nil {
-			return string(b)
-		}
-		return fmt.Sprintf("%v", v)
-	}
+	return execRequest{
+		ID:      shared.ID,
+		Argv:    shared.Argv,
+		Stdin:   shared.Stdin,
+		WorkDir: shared.WorkDir,
+		Timeout: shared.Timeout,
+		Target:  shared.Target,
+		Meta:    shared.Meta,
+	}, nil
 }
 
 // executeSidecarTool dispatches a native sidecar tool through the gated exec IPC

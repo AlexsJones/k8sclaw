@@ -1,0 +1,53 @@
+# Task mode `harness` — run an external agent harness as the pod's primary
+# process instead of agent-runner. See docs/modes/harness.md.
+#
+# Sympozium ships the seam, not the harnesses: every harness-mode run names an
+# adapter image someone else built and maintains. Writing one is
+# docs/modes/harness-adapters.md.
+#
+# The image must come from a registry SympoziumPolicy.imagePolicy.allowedRegistries
+# permits — that list is the control bounding which harnesses may run here.
+apiVersion: sympozium.ai/v1alpha1
+kind: AgentRun
+metadata:
+  name: alice-harness-001
+  namespace: default
+spec:
+  agentRef: alice
+  agentId: primary
+  sessionKey: "session-harness-001"
+  task:
+    mode: harness
+    parameters:
+      # Required. The adapter image that becomes the pod's primary process.
+      # It keeps its own ENTRYPOINT — Sympozium imposes no argv on a binary it
+      # did not build.
+      image: ghcr.io/acme/my-harness:v1
+      # Required. The task text. Object-form tasks have no top-level prompt
+      # field, so harness mode takes it from here and sets TASK from it.
+      prompt: "Review the latest pull request and provide feedback on code quality"
+      # What this image actually honours. Comma-separated; one of
+      # outputSchema, persona, resume, subagents, toolFilter.
+      #
+      # Sympozium did not build the image and cannot vouch for it, so the
+      # declaration is the whole basis for admission: anything undeclared and
+      # requested below is REJECTED at apply time rather than accepted and
+      # silently dropped at runtime. Declaring more than the adapter translates
+      # is how you get the silent drop back.
+      capabilities: "persona"
+      # Optional extra argv, as a JSON array *string* — spec.task.parameters is
+      # map[string]string, so an array has to travel encoded.
+      args: '["--profile","headless"]'
+  # Requested `persona`, and the image declares it above.
+  systemPrompt: "You are a careful reviewer. Prefer concrete, actionable notes."
+  model:
+    provider: deepseek
+    model: deepseek-chat
+    # Injected per-key by SecretKeyRef from the allowedAuthSecretKeys allowlist
+    # — never the whole Secret. Whether the harness routes to MODEL_NAME /
+    # MODEL_BASE_URL is the adapter's business; Sympozium cannot verify it.
+    authSecretRef: alice-deepseek-key
+  # No toolPolicy: the image above declares only `persona`, so adding one would
+  # be denied at admission. Declare `toolFilter` on an image that honours it.
+  timeout: "10m"
+  cleanup: delete

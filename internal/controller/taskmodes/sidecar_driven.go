@@ -41,6 +41,32 @@ func NewSidecarDrivenHandler() *SidecarDrivenHandler {
 // Mode returns "sidecar-driven". See SidecarDriven.
 func (h *SidecarDrivenHandler) Mode() string { return SidecarDriven }
 
+// Capabilities describes what sidecar-driven actually honours. Each value is
+// pinned to a line in cmd/agent-runner/main.go's runPromptServer:
+//
+//   - OutputSchema: yes. The sidecar sets ipc.PromptRequest.Schema per call
+//     and the prompt service returns the validated payload in
+//     PromptResult.Parsed.
+//   - Persona: yes. runPromptServer reads SYSTEM_PROMPT and passes it as
+//     promptServiceDeps.SystemPrompt.
+//   - ToolFilter: no. runPromptServer passes Tools: nil — the LLM answers
+//     individual prompts and has no tool surface, so spec.toolPolicy has
+//     nothing to filter. A run that sets one is asking for enforcement that
+//     cannot happen, which is what this descriptor exists to catch.
+//   - Subagents: no. The orchestrator is the sidecar, not the LLM, and no
+//     spawn path runs in prompt-server mode.
+//   - Resume: no. A driving sidecar cannot be parked mid-workflow, so a
+//     gated run falls back to the successor-clone retry path.
+func (h *SidecarDrivenHandler) Capabilities() Capabilities {
+	return Capabilities{
+		OutputSchema: true,
+		Persona:      true,
+		ToolFilter:   false,
+		Subagents:    false,
+		Resume:       false,
+	}
+}
+
 // Validate enforces required fields for sidecar-driven mode. Called by the
 // controller after registry lookup and before any container configuration.
 func (h *SidecarDrivenHandler) Validate(task *sympoziumv1alpha1.TaskSpec) error {
