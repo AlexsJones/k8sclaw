@@ -587,7 +587,9 @@ func TestModelValidator_AllowsValidSHA256(t *testing.T) {
 // ── Helper function unit tests ───────────────────────────────────────────────
 
 func TestIsImageAllowed(t *testing.T) {
-	allowed := []string{"ghcr.io/sympozium-ai/", "docker.io/library/"}
+	policy := &sympoziumv1alpha1.ImagePolicySpec{
+		AllowedRegistries: []string{"ghcr.io/sympozium-ai/", "docker.io/library/"},
+	}
 
 	tests := []struct {
 		image string
@@ -602,9 +604,9 @@ func TestIsImageAllowed(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.image, func(t *testing.T) {
-			got := isImageAllowed(tt.image, allowed)
+			got := policy.Allows(tt.image)
 			if got != tt.want {
-				t.Errorf("isImageAllowed(%q) = %v, want %v", tt.image, got, tt.want)
+				t.Errorf("Allows(%q) = %v, want %v", tt.image, got, tt.want)
 			}
 		})
 	}
