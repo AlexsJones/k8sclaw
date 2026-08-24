@@ -8,8 +8,8 @@
 // configuration.
 //
 // Adding a new mode is a self-contained change:
-//  1. Implement TaskModeHandler (Mode, Validate, ConfigureAgentContainer,
-//     AdjustSidecars).
+//  1. Implement TaskModeHandler (Mode, Capabilities, Validate,
+//     ConfigureAgentContainer, AdjustSidecars).
 //  2. Register it in the package init() below (or from the controller's
 //     main.go if it lives in a downstream repo).
 //  3. Document it under docs/modes/<mode-name>.md.
@@ -70,6 +70,16 @@ type TaskModeHandler interface {
 	// Mode is the identifier matched against spec.task.mode in object form.
 	// Must be unique across registered handlers. Examples: "sidecar-driven".
 	Mode() string
+
+	// Capabilities reports what this mode supports. Checked before the run
+	// exists, so an AgentRun asking for something the mode cannot honour is
+	// rejected at admission rather than accepted and silently degraded.
+	//
+	// A mode whose support varies from task to task reports the ceiling
+	// here (what the mode can do at its best) and additionally implements
+	// TaskCapabilityReporter to narrow it per task. Callers that hold a
+	// TaskSpec should use CapabilitiesFor, never this method directly.
+	Capabilities() Capabilities
 
 	// Validate runs after the handler is resolved and before any container
 	// configuration. It should check that the task object carries the

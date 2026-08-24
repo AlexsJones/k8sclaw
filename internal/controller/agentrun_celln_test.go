@@ -15,6 +15,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	sympoziumv1alpha1 "github.com/sympozium-ai/sympozium/api/v1alpha1"
+	"github.com/sympozium-ai/sympozium/internal/controller/taskmodes"
 )
 
 // newTestCellnRun builds a minimal AgentRun suitable for driving
@@ -283,5 +284,77 @@ func TestReconcilePending_CellnAndAgentSandboxBothEnabled_Rejected(t *testing.T)
 	if stored.Status.SandboxName != "" || stored.Status.SandboxClaimName != "" {
 		t.Errorf("expected no Sandbox CR to have been created, got SandboxName=%q SandboxClaimName=%q",
 			stored.Status.SandboxName, stored.Status.SandboxClaimName)
+	}
+}
+
+// ── backend: celln + a task mode that replaces the agent container ──────────
+
+// The failure this prevents is quiet rather than loud: backend: celln returns
+// before prepareRunPrerequisites, so buildContainers never runs and the
+// operator's harness image is simply never used. Same shape as the
+// agentSandbox case above, one level down.
+func TestReconcilePending_CellnAndAgentContainerOverride_Rejected(t *testing.T) {
+	// As above: a closed port, so reaching the celln dispatch path fails fast
+	// rather than hanging. The assertions confirm it is never reached.
+	t.Setenv("CELLN_ROUTER_URL", "http://127.0.0.1:1")
+
+	run := newTestRun()
+	run.Spec.Backend = "celln"
+	run.Spec.Task = &sympoziumv1alpha1.TaskSpec{
+		Mode: taskmodes.Harness,
+		Parameters: map[string]string{
+			"image":  "ghcr.io/acme/my-harness:v1",
+			"prompt": "summarise the incident",
+		},
+	}
+
+	r := newAgentRunTestReconciler(t, run, parityAgent())
+
+	result, err := r.reconcilePending(context.Background(), logr.Discard(), run)
+	if err != nil {
+		t.Fatalf("reconcilePending returned error: %v", err)
+	}
+	if result.RequeueAfter != 0 {
+		t.Errorf("expected no requeue on rejection, got RequeueAfter=%v", result.RequeueAfter)
+	}
+	var stored sympoziumv1alpha1.AgentRun
+	if err := r.Client.Get(context.Background(), client.ObjectKeyFromObject(run), &stored); err != nil {
+		t.Fatalf("get stored run: %v", err)
+	}
+	if stored.Status.Phase != sympoziumv1alpha1.AgentRunPhaseFailed {
+		t.Fatalf("expected phase Failed, got %q (error=%q)", stored.Status.Phase, stored.Status.Error)
+	}
+	if !strings.Contains(stored.Status.Error, "celln") || !strings.Contains(stored.Status.Error, taskmodes.Harness) {
+		t.Errorf("expected status.error to name both the backend and the mode, got %q", stored.Status.Error)
+	}
+	if stored.Status.CellnActionID != "" {
+		t.Errorf("expected no Celln dispatch to have occurred, got CellnActionID=%q", stored.Status.CellnActionID)
+	}
+	if stored.Status.JobName != "" {
+		t.Errorf("expected no Job to have been created, got JobName=%q", stored.Status.JobName)
+	}
+}
+
+// A mode that does not replace the agent container is none of this check's
+// business: sidecar-driven keeps agent-runner, so it dispatches to celln like
+// any other run rather than being rejected.
+func TestReconcilePending_CellnWithNonOverridingTaskMode_NotRejected(t *testing.T) {
+	t.Setenv("CELLN_ROUTER_URL", "http://127.0.0.1:1")
+
+	run := newTestRun()
+	run.Spec.Backend = "celln"
+	run.Spec.Task = &sympoziumv1alpha1.TaskSpec{Mode: taskmodes.SidecarDriven, Tool: "primary"}
+
+	r := newAgentRunTestReconciler(t, run, parityAgent())
+
+	if _, err := r.reconcilePending(context.Background(), logr.Discard(), run); err != nil {
+		t.Fatalf("reconcilePending returned error: %v", err)
+	}
+	var stored sympoziumv1alpha1.AgentRun
+	if err := r.Client.Get(context.Background(), client.ObjectKeyFromObject(run), &stored); err != nil {
+		t.Fatalf("get stored run: %v", err)
+	}
+	if strings.Contains(stored.Status.Error, taskmodes.Harness) {
+		t.Errorf("sidecar-driven was rejected by the agent-container-override guard: %q", stored.Status.Error)
 	}
 }

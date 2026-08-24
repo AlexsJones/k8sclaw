@@ -20,6 +20,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
 	sympoziumv1alpha1 "github.com/sympozium-ai/sympozium/api/v1alpha1"
+	"github.com/sympozium-ai/sympozium/internal/controller/taskmodes"
 )
 
 // systemNamespace is the namespace where built-in SkillPacks live by default.
@@ -34,6 +35,7 @@ var reservedVolumeNames = map[string]struct{}{
 	"memory":        {},
 	"mcp-config":    {},
 	"sidecar-tools": {},
+	"harness-home":  {},
 }
 
 // builtinToolNames are the tool names Sympozium may register for the agent
@@ -113,6 +115,19 @@ func (pe *PolicyEnforcer) Handle(ctx context.Context, req admission.Request) adm
 	// controller-written manifest the agent cannot forge, so admission is where
 	// they are vetted.
 	if err := pe.validateSidecarTools(ctx, run); err != nil {
+		return admission.Denied(err.Error())
+	}
+
+	// Validate the run against its task mode's capability descriptor, so a
+	// request the mode cannot honour is rejected here rather than accepted
+	// and silently ignored at runtime.
+	if err := pe.validateTaskModeCapabilities(run); err != nil {
+		return admission.Denied(err.Error())
+	}
+
+	// Also policy-independent: a task mode that replaces the agent container
+	// against an execution backend that never builds one.
+	if err := validateTaskModeBackend(run); err != nil {
 		return admission.Denied(err.Error())
 	}
 
@@ -414,6 +429,48 @@ func toolParameterSchema(raw []byte) (map[string]json.RawMessage, map[string]str
 	return schema.Properties, required, nil
 }
 
+// validateTaskModeCapabilities rejects an AgentRun whose object-form task
+// asks its mode for something the mode does not support — spec.toolPolicy on
+// a mode that cannot filter tools, spec.systemPrompt on one that ignores it.
+// Without this the run is admitted and the field is quietly dropped, which is
+// the failure mode a capability descriptor exists to remove.
+//
+// Policy-independent, so it runs before the SympoziumPolicy lookup: the
+// mismatch is between the run and its mode, not between the run and a policy.
+//
+// A mode with no registered handler passes. The webhook is a separate binary
+// from the controller, so a mode registered only in the controller's main()
+// (the documented downstream-registration path) is not visible here; denying
+// it would make that mode unschedulable. Unknown modes still fail in the
+// controller with the supported-mode list.
+func (pe *PolicyEnforcer) validateTaskModeCapabilities(run *sympoziumv1alpha1.AgentRun) error {
+	return taskmodes.ValidateCapabilities(run)
+}
+
+// validateTaskModeBackend rejects a task mode that replaces the agent
+// container on an execution backend that never creates one.
+//
+// backend: celln dispatches the task string to the celln router instead of
+// scheduling a pod, so it never reaches buildContainers — a mode: harness run
+// would be admitted, dispatched, and the operator's harness image silently
+// dropped. The controller repeats this check (the webhook is a separate,
+// optional deployment), and it mirrors the existing celln/agentSandbox
+// mutual-exclusion guard there.
+//
+// agentSandbox is deliberately not included: it builds its pod through
+// buildAgentPodTemplate, which wraps buildContainers, so task-mode dispatch
+// applies normally.
+func validateTaskModeBackend(run *sympoziumv1alpha1.AgentRun) error {
+	if run == nil || run.Spec.Backend != "celln" {
+		return nil
+	}
+	if !taskmodes.ReplacesAgentContainer(run.Spec.Task) {
+		return nil
+	}
+	return fmt.Errorf("task.mode %q replaces the agent container, which backend: celln never creates; use the default job backend (or agentSandbox) for this mode",
+		run.Spec.Task.GetMode())
+}
+
 func (pe *PolicyEnforcer) validateSubagentDepth(run *sympoziumv1alpha1.AgentRun, policy *sympoziumv1alpha1.SympoziumPolicy) error {
 	if policy.Spec.SubagentPolicy == nil || run.Spec.Parent == nil {
 		return nil
@@ -589,6 +646,14 @@ func (pe *PolicyEnforcer) validateImagePolicy(run *sympoziumv1alpha1.AgentRun, p
 	// Collect sandbox image override
 	if run.Spec.Sandbox != nil && run.Spec.Sandbox.Image != "" {
 		images = append(images, run.Spec.Sandbox.Image)
+	}
+
+	// Collect the harness image for a `mode: harness` task on the custom
+	// backend. That image becomes the pod's primary process, so the
+	// allowedRegistries list is the control an operator uses to bound which
+	// external harnesses may run in the cluster.
+	if img := taskmodes.HarnessImage(run.Spec.Task); img != "" {
+		images = append(images, img)
 	}
 
 	for _, img := range images {

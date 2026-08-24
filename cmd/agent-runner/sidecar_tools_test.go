@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/sympozium-ai/sympozium/pkg/sidecartools"
 )
 
 func TestBuildSidecarExecRequest_ArgsMode(t *testing.T) {
@@ -134,8 +136,8 @@ func TestFormatPositionalArg(t *testing.T) {
 		if err := dec.Decode(&v); err != nil {
 			t.Fatalf("decode %s: %v", c.in, err)
 		}
-		if got := formatPositionalArg(v); got != c.want {
-			t.Errorf("formatPositionalArg(%s) = %q, want %q", c.in, got, c.want)
+		if got := sidecartools.FormatPositionalArg(v); got != c.want {
+			t.Errorf("FormatPositionalArg(%s) = %q, want %q", c.in, got, c.want)
 		}
 	}
 }
