@@ -21,7 +21,7 @@ import {
   useCanaryConfig,
 } from "@/hooks/use-api";
 import { useWebSocket } from "@/hooks/use-websocket";
-import { cn, formatAge, truncate } from "@/lib/utils";
+import { cn, formatAge, taskText, truncate } from "@/lib/utils";
 import { Link } from "react-router-dom";
 import {
   Server,
@@ -807,7 +807,7 @@ export function DashboardPage() {
                     {truncate(run.metadata.name, 30)}
                   </Link>
                   <p className="text-[11px] text-muted-foreground truncate">
-                    {truncate(run.spec.task, 60)}
+                    {truncate(taskText(run.spec.task), 60)}
                   </p>
                 </div>
                 <div className="flex items-center gap-1.5 shrink-0">

@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import { toast } from "sonner";
 import type { AgentRun } from "@/lib/api";
+import { taskText } from "@/lib/utils";
 import { useRuns } from "./use-api";
 
 /**
@@ -98,6 +99,6 @@ function shortName(name: string): string {
 }
 
 function truncateTask(run: AgentRun): string {
-  const task = run.spec.task || "";
+  const task = taskText(run.spec.task);
   return task.length > 80 ? task.slice(0, 77) + "..." : task;
 }

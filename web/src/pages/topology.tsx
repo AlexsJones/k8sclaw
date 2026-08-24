@@ -76,6 +76,7 @@ import type {
   DraNodeSummary,
   DraDevice,
 } from "@/lib/api";
+import { taskText } from "@/lib/utils";
 import { Link } from "react-router-dom";
 import { useArrowKeyPan, KeyboardGuide } from "@/hooks/use-arrow-key-pan";
 import Dagre from "@dagrejs/dagre";
@@ -1053,7 +1054,7 @@ function buildTopology(
           position: P,
           data: {
             runName: run.metadata.name,
-            task: run.spec.task || "",
+            task: taskText(run.spec.task),
             phase: run.status?.phase || "Pending",
             isSubAgent,
             label: run.metadata.name,
@@ -1085,7 +1086,7 @@ function buildTopology(
         position: P,
         data: {
           runName: run.metadata.name,
-          task: run.spec.task || "",
+          task: taskText(run.spec.task),
           phase: run.status?.phase || "Pending",
           isSubAgent,
           label: run.metadata.name,

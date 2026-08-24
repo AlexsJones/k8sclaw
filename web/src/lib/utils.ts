@@ -1,6 +1,6 @@
 import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
-import type { AgentRun, CostEstimate } from "@/lib/api";
+import type { AgentRun, AgentRunTask, CostEstimate } from "@/lib/api";
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
@@ -58,6 +58,24 @@ export function sumEffectiveCosts(runs: AgentRun[]): {
     count++;
   }
   return { totalMicro, anySimulated, count };
+}
+
+/**
+ * Display text for a run's task.
+ *
+ * `spec.task` is either the prompt string or an object describing an
+ * orchestration mode (`harness`, `sidecar-driven`). The object form carries
+ * the real task text in `parameters.prompt`, so that is what a reader wants to
+ * see; a mode with no prompt falls back to naming the mode. Every consumer
+ * goes through here — rendering the object itself throws React error #31 and
+ * takes the whole app down with it.
+ */
+export function taskText(task: AgentRunTask | undefined | null): string {
+  if (!task) return "";
+  if (typeof task === "string") return task;
+  if (task.parameters?.prompt) return task.parameters.prompt;
+  const mode = task.mode || "unknown mode";
+  return task.tool ? `${mode}: ${task.tool}` : mode;
 }
 
 export function truncate(s: string, max: number): string {

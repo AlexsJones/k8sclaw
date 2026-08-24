@@ -50,6 +50,7 @@ import {
   formatAge,
   formatUsd,
   sumEffectiveCosts,
+  taskText,
   truncate,
 } from "@/lib/utils";
 import { YamlButton, instanceYamlFromResource } from "@/components/yaml-panel";
@@ -247,7 +248,7 @@ export function AgentDetailPage() {
                           {run.metadata.name}
                         </span>
                         <span className="text-xs text-muted-foreground truncate max-w-xs hidden sm:inline">
-                          {truncate(run.spec.task, 50)}
+                          {truncate(taskText(run.spec.task), 50)}
                         </span>
                       </div>
                       <div className="flex items-center gap-3 shrink-0">
