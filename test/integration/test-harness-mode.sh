@@ -244,13 +244,11 @@ fi
 
 elapsed=0
 last_phase=""
-saw_postrunning=0
 while [[ $elapsed -lt $TIMEOUT ]]; do
   phase="$(kubectl get agentrun "$RUN_NAME" -n "$NAMESPACE" -o jsonpath='{.status.phase}' 2>/dev/null || echo "")"
   if [[ -n "$phase" && "$phase" != "$last_phase" ]]; then
     info "Phase: $phase (${elapsed}s)"
     last_phase="$phase"
-    [[ "$phase" == "PostRunning" ]] && saw_postrunning=1
   fi
   [[ "$phase" == "Succeeded" || "$phase" == "Failed" ]] && break
   sleep 3
@@ -276,12 +274,11 @@ else
 fi
 
 # 5. The gate still fired on that result.
-if [[ $saw_postrunning -eq 1 ]]; then
-  pass "PostRunning phase observed — the gate hook ran on a harness run"
-else
-  fail "PostRunning phase was never observed; the gate hook did not run"
-fi
-
+#
+# The durable proof is status.gateVerdict plus the rewritten result, asserted
+# below. The transient PostRunning phase is deliberately not sampled: the
+# controller can move Running -> PostRunning -> Succeeded inside a single poll
+# interval, so watching for the intermediate phase is racy by construction.
 GATE_VERDICT="$(kubectl get agentrun "$RUN_NAME" -n "$NAMESPACE" -o jsonpath='{.status.gateVerdict}' 2>/dev/null || echo "")"
 if [[ "$GATE_VERDICT" == "rewritten" ]]; then
   pass "status.gateVerdict = rewritten"
