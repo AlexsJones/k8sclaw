@@ -33,6 +33,15 @@ type AgentSpec struct {
 	// +optional
 	PolicyRef string `json:"policyRef,omitempty"`
 
+	// RuntimeRef references an administrator-approved AgentRuntime that
+	// replaces agent-runner as the primary process for this Agent's runs. When
+	// set, a harness run that names neither an inline image nor a runtime
+	// inherits this runtime — the mechanism by which channels, schedules,
+	// ensembles, the API, and the UI select an external runtime without
+	// object-form task authoring.
+	// +optional
+	RuntimeRef string `json:"runtimeRef,omitempty"`
+
 	// AuthRefs references secrets containing AI provider credentials.
 	// +optional
 	AuthRefs []SecretRef `json:"authRefs,omitempty"`

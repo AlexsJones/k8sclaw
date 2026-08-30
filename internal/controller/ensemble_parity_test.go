@@ -46,6 +46,7 @@ var agentFieldsNotExpressibleByEnsemble = map[string]string{
 	"Agents.Default.Thinking":     "no AgentConfigSpec field; per-Agent thinking mode is not an ensemble concept",
 	"Agents.Default.Sandbox":      "no AgentConfigSpec field; ensembles configure agentSandbox instead",
 	"Agents.Default.NodeSelector": "no AgentConfigSpec field; placement is not expressible per persona",
+	"RuntimeRef":                  "runtime selection is an administrator decision, not a persona concept; bind it out of band or add an AgentConfigSpec field",
 	"WebEndpoint":                 "superseded by the web-endpoint skill, which buildDesiredSkills adds from persona.webEndpoint",
 	"ImagePullSecrets":            "no EnsembleSpec field; cluster-level registry credentials are not an ensemble concept",
 }

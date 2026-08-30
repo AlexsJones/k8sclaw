@@ -403,9 +403,24 @@ other check, so the image allowlist, digest recording, and capability gating app
 resolved values exactly as they do for an inline image. A runtime that does not exist or is
 not `Ready` is rejected at admission.
 
-Binding a runtime to an Agent — so channels, schedules, ensembles, the API and the UI inherit
-it without authoring `task.parameters.runtime` per run — is the next step on the epic and is
-**not** wired up yet.
+An Agent can bind a runtime so every run inherits it — including channel, schedule, ensemble,
+API, and UI runs — without authoring `task.parameters.runtime` per run:
+
+```yaml
+apiVersion: sympozium.ai/v1alpha1
+kind: Agent
+metadata:
+  name: my-agent
+spec:
+  runtimeRef: codex-v1
+  # ...
+```
+
+A run on that Agent still sets `task.mode: harness` but omits both `image` and `runtime`;
+the runtime comes from the Agent. An explicit `image` or `runtime` on the run overrides the
+Agent's `runtimeRef`. Agent-level runtime selection is not expressible through an Ensemble
+persona (it is an administrator decision, not a persona concept); set it out of band on the
+Agent.
 
 ## Graceful degradation
 

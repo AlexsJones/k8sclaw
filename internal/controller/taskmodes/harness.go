@@ -315,6 +315,32 @@ func HarnessImageDigest(task *sympoziumv1alpha1.TaskSpec) string {
 	return digest
 }
 
+// ApplyAgentRuntime fills in a harness task's runtime reference from the
+// Agent's spec.runtimeRef when the task names neither an inline image nor a
+// runtime. It returns the (possibly unchanged) task. This is what lets a
+// channel, schedule, ensemble, API, or UI run inherit the Agent's runtime
+// without authoring task.parameters.runtime per run.
+func ApplyAgentRuntime(task *sympoziumv1alpha1.TaskSpec, agentRuntimeRef string) *sympoziumv1alpha1.TaskSpec {
+	if task == nil || task.IsString() || task.GetMode() != Harness {
+		return task
+	}
+	if strings.TrimSpace(task.Parameters[harnessParamImage]) != "" || strings.TrimSpace(task.Parameters[harnessParamRuntime]) != "" {
+		return task
+	}
+	if strings.TrimSpace(agentRuntimeRef) == "" {
+		return task
+	}
+
+	cp := *task
+	params := make(map[string]string, len(task.Parameters)+1)
+	for k, v := range task.Parameters {
+		params[k] = v
+	}
+	params[harnessParamRuntime] = agentRuntimeRef
+	cp.Parameters = params
+	return &cp
+}
+
 // NormalizeHarnessTask resolves a harness task's runtime reference into its
 // canonical inline form, so the rest of the pipeline (Validate, image policy,
 // OverrideAgentContainer, digest recording) sees only resolved values. When the

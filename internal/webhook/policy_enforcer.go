@@ -92,9 +92,22 @@ func (pe *PolicyEnforcer) Handle(ctx context.Context, req admission.Request) adm
 		return admission.Allowed("run is being deleted; skipping policy validation")
 	}
 
+	// Look up the owning Agent
+	var instance sympoziumv1alpha1.Agent
+	if err := pe.Client.Get(ctx, types.NamespacedName{
+		Name:      run.Spec.AgentRef,
+		Namespace: run.Namespace,
+	}, &instance); err != nil {
+		return admission.Errored(http.StatusBadRequest,
+			fmt.Errorf("failed to find Agent %s: %w", run.Spec.AgentRef, err))
+	}
+
 	// Resolve a harness runtime reference into inline image/capabilities before
 	// any other check, so image policy, capability, and digest validation all
-	// see the resolved values rather than a runtime name they cannot use.
+	// see the resolved values rather than a runtime name they cannot use. When
+	// the task names neither an image nor a runtime, the Agent's runtimeRef is
+	// inherited.
+	run.Spec.Task = taskmodes.ApplyAgentRuntime(run.Spec.Task, instance.Spec.RuntimeRef)
 	normalized, err := taskmodes.NormalizeHarnessTask(run.Namespace, run.Spec.Task, func(ns, name string) (*sympoziumv1alpha1.AgentRuntime, error) {
 		var rt sympoziumv1alpha1.AgentRuntime
 		if err := pe.Client.Get(ctx, types.NamespacedName{Namespace: ns, Name: name}, &rt); err != nil {
@@ -106,16 +119,6 @@ func (pe *PolicyEnforcer) Handle(ctx context.Context, req admission.Request) adm
 		return admission.Denied(err.Error())
 	}
 	run.Spec.Task = normalized
-
-	// Look up the owning Agent
-	var instance sympoziumv1alpha1.Agent
-	if err := pe.Client.Get(ctx, types.NamespacedName{
-		Name:      run.Spec.AgentRef,
-		Namespace: run.Namespace,
-	}, &instance); err != nil {
-		return admission.Errored(http.StatusBadRequest,
-			fmt.Errorf("failed to find Agent %s: %w", run.Spec.AgentRef, err))
-	}
 
 	// Validate user-supplied volumes (AgentRun + resolved SkillPack sidecars).
 	// This catches reserved-name collisions and same-name-different-source

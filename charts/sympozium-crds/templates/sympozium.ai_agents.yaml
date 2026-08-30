@@ -2823,6 +2823,15 @@ spec:
                 description: PolicyRef references the SympoziumPolicy that applies
                   to this instance.
                 type: string
+              runtimeRef:
+                description: |-
+                  RuntimeRef references an administrator-approved AgentRuntime that
+                  replaces agent-runner as the primary process for this Agent's runs. When
+                  set, a harness run that names neither an inline image nor a runtime
+                  inherits this runtime — the mechanism by which channels, schedules,
+                  ensembles, the API, and the UI select an external runtime without
+                  object-form task authoring.
+                type: string
               skills:
                 description: Skills to mount (from SkillPack CRDs or ConfigMaps).
                 items:
