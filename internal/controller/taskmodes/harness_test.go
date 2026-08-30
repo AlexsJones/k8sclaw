@@ -1,11 +1,13 @@
 package taskmodes
 
 import (
+	"fmt"
 	"sort"
 	"strings"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	sympoziumv1alpha1 "github.com/sympozium-ai/sympozium/api/v1alpha1"
@@ -82,6 +84,39 @@ func TestHarnessHandler_Validate_RequiresPrompt(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), harnessParamPrompt) {
 		t.Errorf("error should name the missing parameter, got: %v", err)
+	}
+}
+
+// A harness task must name exactly one of an inline image or a runtime
+// reference. Naming both is ambiguous, naming neither means Sympozium has no
+// primary process to run.
+func TestHarnessHandler_Validate_RequiresExactlyOneOfImageOrRuntime(t *testing.T) {
+	h := NewHarnessHandler()
+	if err := h.Validate(&sympoziumv1alpha1.TaskSpec{
+		Mode:       Harness,
+		Parameters: map[string]string{harnessParamPrompt: "do it"},
+	}); err == nil {
+		t.Fatal("Validate(neither) returned nil; expected error")
+	}
+	if err := h.Validate(&sympoziumv1alpha1.TaskSpec{
+		Mode: Harness,
+		Parameters: map[string]string{
+			harnessParamPrompt:  "do it",
+			harnessParamImage:   harnessTestImage,
+			harnessParamRuntime: "codex-v1",
+		},
+	}); err == nil {
+		t.Fatal("Validate(both) returned nil; expected error")
+	}
+	// A runtime reference alone is acceptable: the image is resolved later.
+	if err := h.Validate(&sympoziumv1alpha1.TaskSpec{
+		Mode: Harness,
+		Parameters: map[string]string{
+			harnessParamPrompt:  "do it",
+			harnessParamRuntime: "codex-v1",
+		},
+	}); err != nil {
+		t.Errorf("Validate(runtime only) returned error: %v", err)
 	}
 }
 
@@ -499,6 +534,101 @@ func TestHarnessImageDigest(t *testing.T) {
 	unpinned := harnessTask(map[string]string{harnessParamImage: "ghcr.io/acme/my-harness:v1"})
 	if got := HarnessImageDigest(unpinned); got != "" {
 		t.Errorf("HarnessImageDigest(tag-only) = %q, want empty", got)
+	}
+}
+
+// readyRuntime returns an AgentRuntime whose Ready condition is true, so
+// NormalizeHarnessTask accepts it.
+func readyRuntime(name string, capabilities ...string) *sympoziumv1alpha1.AgentRuntime {
+	rt := &sympoziumv1alpha1.AgentRuntime{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"},
+		Spec: sympoziumv1alpha1.AgentRuntimeSpec{
+			Image:        "ghcr.io/acme/my-harness@sha256:" + strings.Repeat("a", 64),
+			Capabilities: capabilities,
+		},
+	}
+	meta.SetStatusCondition(&rt.Status.Conditions, metav1.Condition{
+		Type:    sympoziumv1alpha1.AgentRuntimeReadyCondition,
+		Status:  metav1.ConditionTrue,
+		Reason:  "Validated",
+		Message: "spec validated",
+	})
+	return rt
+}
+
+func TestNormalizeHarnessTask_ResolvesRuntimeIntoInlineForm(t *testing.T) {
+	runtimes := map[string]*sympoziumv1alpha1.AgentRuntime{"codex-v1": readyRuntime("codex-v1", "persona")}
+	task := &sympoziumv1alpha1.TaskSpec{
+		Mode:       Harness,
+		Parameters: map[string]string{harnessParamPrompt: "do it", harnessParamRuntime: "codex-v1"},
+	}
+
+	got, err := NormalizeHarnessTask("default", task, func(ns, name string) (*sympoziumv1alpha1.AgentRuntime, error) {
+		rt, ok := runtimes[name]
+		if !ok {
+			return nil, fmt.Errorf("not found")
+		}
+		return rt, nil
+	})
+	if err != nil {
+		t.Fatalf("NormalizeHarnessTask returned error: %v", err)
+	}
+	if got.Parameters[harnessParamImage] != "ghcr.io/acme/my-harness@sha256:"+strings.Repeat("a", 64) {
+		t.Errorf("normalized image = %q", got.Parameters[harnessParamImage])
+	}
+	if got.Parameters[harnessParamCapabilities] != "persona" {
+		t.Errorf("normalized capabilities = %q, want persona", got.Parameters[harnessParamCapabilities])
+	}
+	if _, present := got.Parameters[harnessParamRuntime]; present {
+		t.Error("runtime reference was not dropped from the normalized task")
+	}
+	// The original task is not mutated.
+	if _, present := task.Parameters[harnessParamImage]; present {
+		t.Error("NormalizeHarnessTask mutated the input task's parameters")
+	}
+}
+
+func TestNormalizeHarnessTask_RejectsMissingOrNotReadyRuntime(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		runtime *sympoziumv1alpha1.AgentRuntime
+		found   bool
+	}{
+		{name: "missing"},
+		{name: "not-ready", runtime: &sympoziumv1alpha1.AgentRuntime{
+			ObjectMeta: metav1.ObjectMeta{Name: "codex-v1", Namespace: "default"},
+			Spec:       sympoziumv1alpha1.AgentRuntimeSpec{Image: "ghcr.io/acme/my-harness@sha256:" + strings.Repeat("a", 64)},
+		}, found: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			task := &sympoziumv1alpha1.TaskSpec{
+				Mode:       Harness,
+				Parameters: map[string]string{harnessParamPrompt: "do it", harnessParamRuntime: "codex-v1"},
+			}
+			_, err := NormalizeHarnessTask("default", task, func(ns, name string) (*sympoziumv1alpha1.AgentRuntime, error) {
+				if !tc.found {
+					return nil, fmt.Errorf("not found")
+				}
+				return tc.runtime, nil
+			})
+			if err == nil {
+				t.Fatal("NormalizeHarnessTask accepted a missing/not-ready runtime")
+			}
+		})
+	}
+}
+
+func TestNormalizeHarnessTask_PassesThroughNonRuntimeTasks(t *testing.T) {
+	inline := harnessTask(nil)
+	if got, err := NormalizeHarnessTask("default", inline, nil); err != nil || got != inline {
+		t.Fatalf("inline harness task should pass through unchanged: %v, %v", got, err)
+	}
+	sidecar := &sympoziumv1alpha1.TaskSpec{Mode: SidecarDriven, Tool: "primary"}
+	if got, err := NormalizeHarnessTask("default", sidecar, nil); err != nil || got != sidecar {
+		t.Fatalf("non-harness task should pass through unchanged: %v, %v", got, err)
+	}
+	if got, err := NormalizeHarnessTask("default", nil, nil); err != nil || got != nil {
+		t.Fatalf("nil task should pass through unchanged: %v, %v", got, err)
 	}
 }
 

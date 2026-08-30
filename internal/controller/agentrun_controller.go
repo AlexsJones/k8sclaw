@@ -676,6 +676,21 @@ func (r *AgentRunReconciler) reconcilePending(ctx context.Context, log logr.Logg
 		agentRun.Spec.Model.AuthSecretRef = "" // cluster-internal, no auth needed
 	}
 
+	// Resolve a harness runtime reference into inline image/capabilities so the
+	// policy check, task-mode dispatch, and pod build all see resolved values
+	// instead of a runtime name.
+	if normalized, err := taskmodes.NormalizeHarnessTask(agentRun.Namespace, agentRun.Spec.Task, func(ns, name string) (*sympoziumv1alpha1.AgentRuntime, error) {
+		var rt sympoziumv1alpha1.AgentRuntime
+		if err := r.Get(ctx, client.ObjectKey{Namespace: ns, Name: name}, &rt); err != nil {
+			return nil, err
+		}
+		return &rt, nil
+	}); err != nil {
+		return ctrl.Result{}, r.failRun(ctx, agentRun, fmt.Sprintf("runtime resolution failed: %v", err))
+	} else {
+		agentRun.Spec.Task = normalized
+	}
+
 	// Validate against policy
 	if err := r.validatePolicy(ctx, agentRun); err != nil {
 		return ctrl.Result{}, r.failRun(ctx, agentRun, fmt.Sprintf("policy validation failed: %v", err))

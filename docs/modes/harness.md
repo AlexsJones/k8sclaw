@@ -90,9 +90,10 @@ spec:
 
 | Parameter | Required | Meaning |
 |---|---|---|
-| `image` | yes | The adapter image that becomes the pod's primary process. Must be **digest-pinned** (`@sha256:…`); a mutable tag is rejected. Bounded by `SympoziumPolicy.imagePolicy.allowedRegistries`. |
+| `image` | one of `image`/`runtime` | The adapter image that becomes the pod's primary process. Must be **digest-pinned** (`@sha256:…`); a mutable tag is rejected. Bounded by `SympoziumPolicy.imagePolicy.allowedRegistries`. |
+| `runtime` | one of `image`/`runtime` | The name of an admin-approved [`AgentRuntime`](#the-agentruntime-resource) in the run's namespace. The runtime supplies the digest-pinned image and capabilities. Mutually exclusive with `image`. |
 | `prompt` | yes | The task text. Object-form tasks carry no top-level prompt field, so harness mode takes it from here and sets `TASK` from it. |
-| `capabilities` | no | Comma-separated list of what the image honours. Empty means it claims nothing. |
+| `capabilities` | no | Comma-separated list of what the image honours. Empty means it claims nothing. Ignored when `runtime` is set — the runtime's own declaration wins. |
 | `args` | no | Extra argv, as a **JSON array string** (`'["--profile","headless"]'`). `parameters` is `map[string]string`, so an array has to travel encoded. |
 
 The image keeps its own `ENTRYPOINT`. Sympozium has no argv to impose on a binary it did not
@@ -387,9 +388,24 @@ condition. The same rules as inline harness mode apply: the image must be digest
 `outputSchema` / `subagents` / `resume` are rejected because no external runtime can implement
 them safely yet.
 
+A run references a runtime by name instead of repeating its image and capability claims:
+
+```yaml
+task:
+  mode: harness
+  parameters:
+    runtime: codex-v1
+    prompt: "Review the latest pull request"
+```
+
+Admission and the controller resolve the runtime into its image and capabilities before any
+other check, so the image allowlist, digest recording, and capability gating apply to the
+resolved values exactly as they do for an inline image. A runtime that does not exist or is
+not `Ready` is rejected at admission.
+
 Binding a runtime to an Agent — so channels, schedules, ensembles, the API and the UI inherit
-it without object-form task authoring — is the next step on the epic and is **not** wired up
-yet. Until then, runs still author the task inline.
+it without authoring `task.parameters.runtime` per run — is the next step on the epic and is
+**not** wired up yet.
 
 ## Graceful degradation
 
