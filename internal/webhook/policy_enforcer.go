@@ -121,6 +121,14 @@ func (pe *PolicyEnforcer) Handle(ctx context.Context, req admission.Request) adm
 	}
 	run.Spec.Task = normalized
 
+	// A harness replaces trusted agent-runner and receives the selected model
+	// credential as environment variables. Do not let a run author turn that
+	// into an arbitrary Secret read: the backing Agent is the authority that
+	// grants a provider credential to this execution identity.
+	if taskmodes.HarnessImage(run.Spec.Task) != "" && !agentAllowsModelCredential(&instance, run.Spec.Model.Provider, run.Spec.Model.AuthSecretRef) {
+		return admission.Denied(fmt.Sprintf("task.mode %q may use only model credentials declared in Agent %q spec.authRefs; secret %q is not allowed for provider %q", taskmodes.Harness, instance.Name, run.Spec.Model.AuthSecretRef, run.Spec.Model.Provider))
+	}
+
 	// Validate user-supplied volumes (AgentRun + resolved SkillPack sidecars).
 	// This catches reserved-name collisions and same-name-different-source
 	// collisions before they become silent mismounts at runtime.
@@ -237,6 +245,25 @@ func (pe *PolicyEnforcer) Handle(ctx context.Context, req admission.Request) adm
 	}
 
 	return admission.Allowed("policy validated")
+}
+
+// agentAllowsModelCredential checks the Agent-owned allowlist for a model
+// Secret. An empty reference is valid for cluster-local and unauthenticated
+// providers. Empty provider on an AuthRef means the Agent deliberately grants
+// that Secret independent of provider naming.
+func agentAllowsModelCredential(agent *sympoziumv1alpha1.Agent, provider, secret string) bool {
+	if strings.TrimSpace(secret) == "" {
+		return true
+	}
+	for _, ref := range agent.Spec.AuthRefs {
+		if ref.Secret != secret {
+			continue
+		}
+		if ref.Provider == "" || strings.EqualFold(ref.Provider, provider) {
+			return true
+		}
+	}
+	return false
 }
 
 func (pe *PolicyEnforcer) validateResources(run *sympoziumv1alpha1.AgentRun, policy *sympoziumv1alpha1.SympoziumPolicy) error {
