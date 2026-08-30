@@ -934,11 +934,57 @@ export interface DraDevice {
   healthReason?: string;
   linkLayer?: string; // nic: infiniband | ethernet (RoCE)
   rateGbps?: number;  // nic: link rate
+  /** Full-domain PCI address ("0000:c3:00.0"). Join key against DevicePower. */
+  pciAddress?: string;
 }
 
 export interface DraNodeSummary {
   nodeName: string;
   devices: DraDevice[];
+}
+
+// ── Accelerator power (GET /api/v1/power) ────────────────────────────────────
+// Sourced from an out-of-tree energy collector discovered at runtime. Every
+// field is absent-or-honest: there are no fabricated zeros. See
+// internal/collector for the contract.
+
+export interface DevicePower {
+  /** node + address (PCI, "0000:c3:00.0") is the join key against DraDevice. */
+  node: string;
+  address: string;
+  kind: string; // gpu | npu | … (open set)
+  driver?: string;
+  vendorId?: string;
+  deviceId?: string;
+  powerMilliwatts: number;
+  /** Decomposed power where the silicon exposes it. Absent keys are
+   * unmeasured, NOT zero. */
+  components?: Record<string, number>;
+  /** Runtime-PM suspended: power reads 0, but that is "asleep", not a reading. */
+  suspended: boolean;
+  /** Last-known value the collector could not refresh. */
+  stale: boolean;
+  /** False when the 0 W is synthetic (suspended, or no readable sensor).
+   * Render "—", never "0 W", when this is false. */
+  measured: boolean;
+}
+
+export interface PowerSnapshot {
+  scrapedAt: string;
+  agentsTotal: number;
+  agentsUp: number;
+  totalMilliwatts: number;
+  staleDevices: number;
+  devices: DevicePower[];
+}
+
+export interface PowerResponse {
+  /** False when no collector is installed — distinct from "collector present,
+   * zero accelerators". The UI omits the power surface entirely when false. */
+  available: boolean;
+  endpoint?: string;
+  snapshot?: PowerSnapshot;
+  devices: DevicePower[];
 }
 
 export interface DraNodesResponse {
@@ -1575,6 +1621,13 @@ export const api = {
   dra: {
     nodes: () =>
       apiFetch<DraNodesResponse>("/api/v1/dra/nodes", {
+        skipNamespace: true,
+      }),
+  },
+
+  power: {
+    fleet: () =>
+      apiFetch<PowerResponse>("/api/v1/power", {
         skipNamespace: true,
       }),
   },

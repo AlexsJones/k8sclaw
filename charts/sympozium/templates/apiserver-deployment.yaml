@@ -69,6 +69,10 @@ spec:
             - name: SYMPOZIUM_PRICING_NAMESPACE
               value: {{ include "sympozium.namespace" . | quote }}
           {{- end }}
+          {{- if .Values.energyCollector.enabled }}
+            - name: SYMPOZIUM_ENERGY_COLLECTOR_NAMESPACES
+              value: {{ join "," .Values.energyCollector.discovery.namespaces | quote }}
+          {{- end }}
           {{- if .Values.observability.enabled }}
             - name: OTEL_EXPORTER_OTLP_ENDPOINT
               value: {{ .Values.observability.endpoint | quote }}

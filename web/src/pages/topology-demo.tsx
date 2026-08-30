@@ -3,7 +3,7 @@
  * Hidden route: /topology/demo
  */
 
-import { useState, useCallback, useRef, useEffect } from "react";
+import { useState, useCallback, useRef, useEffect, useMemo } from "react";
 import {
   ReactFlow,
   Background,
@@ -28,6 +28,9 @@ import { Badge } from "@/components/ui/badge";
 import { StimulusDialogProvider } from "@/components/canvas-primitives";
 import { nodeTypes, NODE_SIZES } from "@/pages/topology";
 import { draDeviceDetail, groupAccelerators } from "@/lib/dra";
+import { SimulatedPowerContext } from "@/lib/power-context";
+import { BANDS, simulatePower, type PowerBand, type SimDevice } from "@/lib/power-sim";
+import type { PowerIndex } from "@/lib/power";
 import type { DraDevice } from "@/lib/api";
 import { useArrowKeyPan, KeyboardGuide } from "@/hooks/use-arrow-key-pan";
 import Dagre from "@dagrejs/dagre";
@@ -296,7 +299,94 @@ function WorkstationNode({ data }: NodeProps<Node<WorkstationData>>) {
 
 // ── Demo data generator ──────────────────────────────────────────────────────
 
-function buildDemoTopology(): { nodes: Node[]; edges: Edge[] } {
+// ── Simulated accelerators (demo only) ───────────────────────────────────────
+// The demo has no cluster, so it invents both the inventory and the power
+// readings. Specs are realistic (an A100 SXM really does idle near 50 W and
+// peak near 400 W) so the canvas reads as a plausible fleet.
+
+const GPU_SPECS: Record<
+  string,
+  {
+    band: PowerBand;
+    model: string;
+    memoryGi: number;
+    memoryBandwidthGBs: number;
+    computeTFLOPS: number;
+  }
+> = {
+  "NVIDIA A100 80GB": { band: BANDS.a100, model: "NVIDIA A100-SXM4-80GB", memoryGi: 80, memoryBandwidthGBs: 2039, computeTFLOPS: 312 },
+  "NVIDIA H100 80GB": { band: BANDS.h100, model: "NVIDIA H100-SXM5-80GB", memoryGi: 80, memoryBandwidthGBs: 3350, computeTFLOPS: 989 },
+  "NVIDIA H200 141GB": { band: BANDS.h200, model: "NVIDIA H200-SXM5-141GB", memoryGi: 141, memoryBandwidthGBs: 4800, computeTFLOPS: 989 },
+  "NVIDIA L40S 48GB": { band: BANDS.l40s, model: "NVIDIA L40S", memoryGi: 48, memoryBandwidthGBs: 864, computeTFLOPS: 362 },
+  "NVIDIA RTX 4090 24GB": { band: BANDS.rtx4090, model: "NVIDIA GeForce RTX 4090", memoryGi: 24, memoryBandwidthGBs: 1008, computeTFLOPS: 165 },
+};
+
+// Per-node accelerator count and how hard it is working (0 idle → 1 pegged).
+// Loads stay <= ~0.78 so that load + the 0.22 drift amplitude lands at the
+// band ceiling only occasionally: a real GPU does sit at its power cap under
+// sustained load, but a demo parked on the rail shows a frozen number.
+// The awkward cases are deliberate, not oversights: `suspendLast` parks one
+// card so the demo shows a synthetic zero rendering as "— suspended", and the
+// node whose fitness is already stale freezes its reading. Those are the
+// states the UI most has to get right.
+const DEMO_ACCEL: Record<string, { count: number; load: number; suspendLast?: boolean }> = {
+  "gpu-node-a100-01": { count: 2, load: 0.78 },
+  "gpu-node-a100-02": { count: 2, load: 0.71 },
+  "gpu-node-a100-03": { count: 1, load: 0.63 },
+  "gpu-node-a100-04": { count: 2, load: 0.24, suspendLast: true },
+  "gpu-node-h100-01": { count: 2, load: 0.79 },
+  "gpu-node-h100-02": { count: 2, load: 0.77 },
+  "gpu-node-h100-03": { count: 1, load: 0.35 },
+  "gpu-node-h200-01": { count: 2, load: 0.77 },
+  "gpu-node-h200-02": { count: 1, load: 0.46 },
+  "gpu-node-l40s-01": { count: 1, load: 0.58 },
+  "gpu-node-l40s-02": { count: 1, load: 0.4 },
+  "gpu-node-4090-01": { count: 1, load: 0.67 },
+};
+
+/** Accelerator inventory + matching simulation specs for one demo node. */
+function demoAccelerators(
+  name: string,
+  gpuName: string,
+  stale: boolean,
+): { devices: DraDevice[]; sims: SimDevice[] } {
+  const spec = GPU_SPECS[gpuName];
+  const cfg = DEMO_ACCEL[name];
+  if (!spec || !cfg) return { devices: [], sims: [] };
+
+  const devices: DraDevice[] = [];
+  const sims: SimDevice[] = [];
+  for (let i = 0; i < cfg.count; i++) {
+    // Plausible slot addressing; the exact value only has to be stable and
+    // unique per node, since node+pci is the join key.
+    const pci = `0000:${(0x1a + i * 8).toString(16).padStart(2, "0")}:00.0`;
+    const suspended = !!cfg.suspendLast && i === cfg.count - 1;
+    devices.push({
+      name: `gpu-${pci.replace(/[:.]/g, "-")}`,
+      kind: "gpu",
+      model: spec.model,
+      vendor: "nvidia",
+      memoryGi: spec.memoryGi,
+      memoryBandwidthGBs: spec.memoryBandwidthGBs,
+      computeTFLOPS: spec.computeTFLOPS,
+      healthy: true,
+      pciAddress: pci,
+    });
+    sims.push({
+      node: name,
+      address: pci,
+      kind: "gpu",
+      driver: "nvidia",
+      band: spec.band,
+      load: cfg.load,
+      suspended,
+      stale,
+    });
+  }
+  return { devices, sims };
+}
+
+function buildDemoTopology(): { nodes: Node[]; edges: Edge[]; simDevices: SimDevice[] } {
   const nodes: Node[] = [];
   const edges: Edge[] = [];
   const P = { x: 0, y: 0 };
@@ -455,12 +545,15 @@ function buildDemoTopology(): { nodes: Node[]; edges: Edge[] } {
     },
   ];
 
+  const simDevices: SimDevice[] = [];
   for (const pn of k8sNodes) {
+    const { devices, sims } = demoAccelerators(pn.name, pn.fitness.gpuName, pn.fitness.stale);
+    simDevices.push(...sims);
     nodes.push({
       id: `node-${pn.name}`,
       type: "workstation",
       position: P,
-      data: pn,
+      data: { ...pn, accelerators: devices },
     });
   }
 
@@ -1051,7 +1144,7 @@ function buildDemoTopology(): { nodes: Node[]; edges: Edge[] } {
   }
 
   applyDemoLayout(nodes, edges);
-  return { nodes, edges };
+  return { nodes, edges, simDevices };
 }
 
 // ── Hybrid layout: manual bands for infra, dagre for ensemble subtrees ───────
@@ -1490,11 +1583,25 @@ function useDemoSimulation(
   }, [setNodes, setEdges]);
 }
 
+/** Ticks the simulated power readings. 1s matches roughly what a real
+ * collector's scrape interval delivers, so the numbers move at a believable
+ * rate rather than strobing. */
+function useSimulatedPowerIndex(specs: SimDevice[]): PowerIndex {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, []);
+  return useMemo(() => simulatePower(specs, now), [specs, now]);
+}
+
 function DemoCanvas() {
   const { fitView } = useReactFlow();
   const [rfNodes, setNodes] = useState<Node[]>([]);
   const [rfEdges, setEdges] = useState<Edge[]>([]);
+  const [simDevices, setSimDevices] = useState<SimDevice[]>([]);
   const hasFitRef = useRef(false);
+  const powerIndex = useSimulatedPowerIndex(simDevices);
 
   useArrowKeyPan();
   useDemoSimulation(setNodes, setEdges);
@@ -1505,9 +1612,10 @@ function DemoCanvas() {
   setEdgesRef.current = setEdges;
 
   useEffect(() => {
-    const { nodes, edges } = buildDemoTopology();
+    const { nodes, edges, simDevices } = buildDemoTopology();
     setNodesRef.current(nodes);
     setEdgesRef.current(edges);
+    setSimDevices(simDevices);
     if (!hasFitRef.current) {
       setTimeout(() => fitView({ padding: 0.15, duration: 400 }), 150);
       hasFitRef.current = true;
@@ -1524,6 +1632,9 @@ function DemoCanvas() {
   );
 
   return (
+    // Simulated readings are scoped to this subtree: the node cards below read
+    // them instead of polling the collector, and no real view can see them.
+    <SimulatedPowerContext.Provider value={powerIndex}>
     <div className="h-[calc(100vh-4rem)]">
       <div className="flex items-center justify-between px-4 py-2 border-b border-border">
         <div>
@@ -1589,6 +1700,7 @@ function DemoCanvas() {
         </ReactFlow>
       </div>
     </div>
+    </SimulatedPowerContext.Provider>
   );
 }
 

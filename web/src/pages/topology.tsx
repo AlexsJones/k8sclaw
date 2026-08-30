@@ -43,6 +43,8 @@ import {
 import { StimulusDialogProvider, StimulusDialogCtx } from "@/components/canvas-primitives";
 import type { StimulusNodeData } from "@/components/canvas-primitives";
 import { AcceleratorLeaves } from "@/components/accelerator-leaves";
+import { formatWatts, nodeTotal } from "@/lib/power";
+import { usePowerIndex } from "@/lib/power-context";
 import { useProviderNodes } from "@/hooks/use-provider-nodes";
 import {
   Server,
@@ -85,6 +87,9 @@ import Dagre from "@dagrejs/dagre";
 
 function K8sNodeNode({ data }: NodeProps<Node<K8sNodeData>>) {
   const f = data.fitness;
+  // Live accelerator draw for this node, when an energy collector is present.
+  // Only measured, fresh readings are summed — see lib/power.nodeTotal.
+  const power = nodeTotal(usePowerIndex(), data.name);
   return (
     <div className="border border-foreground/20 bg-card px-4 py-3 min-w-[240px] shadow-md cursor-pointer hover:border-primary/50 hover:bg-primary/5 transition-colors">
       <Handle type="target" position={Position.Top} className="!bg-foreground !w-2 !h-2" />
@@ -94,6 +99,24 @@ function K8sNodeNode({ data }: NodeProps<Node<K8sNodeData>>) {
         <span className="font-semibold text-sm text-foreground">{data.name}</span>
         {f?.stale && (
           <Badge variant="destructive" className="text-[8px] px-1 py-0">stale</Badge>
+        )}
+        {power.measured > 0 && (
+          <span
+            className="ml-auto flex items-center gap-1 font-mono text-[10px] tabular-nums text-amber-600 dark:text-amber-500"
+            title={
+              power.measured === power.total
+                ? `${formatWatts(power.milliwatts)} across ${power.total} accelerator(s)`
+                : `${formatWatts(power.milliwatts)} across ${power.measured} of ${power.total} accelerators — the rest are suspended or unmeasurable`
+            }
+          >
+            <Zap className="h-3 w-3" />
+            {formatWatts(power.milliwatts)}
+            {power.measured < power.total && (
+              <span className="text-muted-foreground">
+                {power.measured}/{power.total}
+              </span>
+            )}
+          </span>
         )}
       </div>
       <p className="text-[10px] text-muted-foreground font-mono mb-1">{data.ip}</p>
@@ -126,7 +149,7 @@ function K8sNodeNode({ data }: NodeProps<Node<K8sNodeData>>) {
       )}
       {(data.accelerators?.length ?? 0) > 0 && (
         <div className="max-w-[280px]">
-          <AcceleratorLeaves devices={data.accelerators!} />
+          <AcceleratorLeaves devices={data.accelerators!} node={data.name} />
         </div>
       )}
     </div>
