@@ -499,11 +499,18 @@ func (r *AgentRunReconciler) prepareRunPrerequisites(
 	out.inputs = inputs
 	out.mcpServers = inputs.mcpServers
 
+	// Resolve skill sidecars from SkillPack CRDs. This runs before the MCP
+	// registry below because the registry's contents depend on it: a run whose
+	// agent container is replaced reaches its SkillPack tools through the skill
+	// tool server, which appears in the registry as one more MCP server.
+	out.sidecars = r.resolveSkillSidecars(ctx, log, agentRun)
+	needsSkillTools := RunNeedsSkillToolServer(agentRun, out.sidecars)
+
 	// Resolve MCPServer CRs: for any mcpServer entry without a URL, look up the
 	// MCPServer CR by name and use its status.url, then write the MCP ConfigMap.
-	if len(out.mcpServers) > 0 {
+	if len(out.mcpServers) > 0 || needsSkillTools {
 		out.mcpServers = r.resolveMCPServerURLs(ctx, agentRun.Namespace, out.mcpServers)
-		if err := r.ensureMCPConfigMap(ctx, agentRun, out.mcpServers); err != nil {
+		if err := r.ensureMCPConfigMap(ctx, agentRun, out.mcpServers, needsSkillTools); err != nil {
 			return out, fmt.Errorf("creating MCP ConfigMap: %w", err)
 		}
 	}
@@ -515,9 +522,6 @@ func (r *AgentRunReconciler) prepareRunPrerequisites(
 		}
 		agentRun.Annotations["otel.dev/traceparent"] = traceparent
 	}
-
-	// Resolve skill sidecars from SkillPack CRDs.
-	out.sidecars = r.resolveSkillSidecars(ctx, log, agentRun)
 
 	return out, nil
 }
@@ -536,13 +540,11 @@ func (r *AgentRunReconciler) prepareTaskPrerequisites(
 ) ([]resolvedSidecar, *ctrl.Result, error) {
 	// Filter out server-only sidecars (RequiresServer) — they are not meaningful
 	// in a task-mode pod and would waste resources.
-	sidecars := make([]resolvedSidecar, 0, len(resolved))
+	sidecars := taskModeSidecars(resolved)
 	for _, sc := range resolved {
 		if sc.sidecar.RequiresServer {
 			log.V(1).Info("Skipping server-only sidecar in task mode", "skillPack", sc.skillPackName)
-			continue
 		}
-		sidecars = append(sidecars, sc)
 	}
 
 	// Write the native sidecar-tools manifest as a read-only ConfigMap when any
@@ -698,6 +700,19 @@ func (r *AgentRunReconciler) reconcilePending(ctx context.Context, log logr.Logg
 			"backend: celln and agentSandbox.enabled are mutually exclusive execution backends; set only one")
 	}
 
+	// Same failure, one level down: a task mode that replaces the agent
+	// container (mode: harness) has nothing to replace under backend: celln,
+	// which dispatches the task string to the router instead of building a
+	// pod. buildContainers never runs on that path, so without this the run
+	// is admitted, dispatched, and the operator's harness image is silently
+	// ignored. agentSandbox is fine — it reaches buildContainers through
+	// buildAgentPodTemplate, so task-mode dispatch still applies there.
+	if agentRun.Spec.Backend == "celln" && taskModeReplacesAgentContainer(agentRun.Spec.Task) {
+		return ctrl.Result{}, r.failRun(ctx, agentRun, fmt.Sprintf(
+			"task.mode %q replaces the agent container, which backend: celln never creates; use the default job backend (or agentSandbox) for this mode",
+			agentRun.Spec.Task.GetMode()))
+	}
+
 	// Agent Sandbox mode — create Sandbox CR instead of Job.
 	if agentRun.Spec.AgentSandbox != nil && agentRun.Spec.AgentSandbox.Enabled {
 		return r.reconcilePendingAgentSandbox(ctx, log, agentRun)
@@ -771,6 +786,13 @@ func (r *AgentRunReconciler) reconcilePending(ctx context.Context, log logr.Logg
 		ar.Status.Phase = sympoziumv1alpha1.AgentRunPhaseRunning
 		ar.Status.JobName = job.Name
 		ar.Status.StartedAt = &now
+
+		// Record the exact harness artifact that is about to execute, so run
+		// detail and audit can show which digest ran rather than which tag was
+		// requested.
+		if d := taskmodes.HarnessImageDigest(agentRun.Spec.Task); d != "" {
+			ar.Status.HarnessImageDigest = d
+		}
 
 		// Set the trace ID so operators can look up the full distributed trace.
 		if sc := span.SpanContext(); sc.HasTraceID() {
@@ -2293,6 +2315,9 @@ func (r *AgentRunReconciler) validatePolicy(ctx context.Context, agentRun *sympo
 	}
 
 	if instance.Spec.PolicyRef == "" {
+		if taskmodes.HarnessImage(agentRun.Spec.Task) != "" {
+			return fmt.Errorf("task.mode %q requires an Agent with a SympoziumPolicy whose spec.harnessPolicy.enabled is true", taskmodes.Harness)
+		}
 		return nil // No policy, allow
 	}
 
@@ -2302,6 +2327,27 @@ func (r *AgentRunReconciler) validatePolicy(ctx context.Context, agentRun *sympo
 		Name:      instance.Spec.PolicyRef,
 	}, policy); err != nil {
 		return fmt.Errorf("policy %q not found: %w", instance.Spec.PolicyRef, err)
+	}
+
+	if taskmodes.HarnessImage(agentRun.Spec.Task) != "" &&
+		(policy.Spec.HarnessPolicy == nil || !policy.Spec.HarnessPolicy.Enabled) {
+		return fmt.Errorf("task.mode %q is disabled by policy; set spec.harnessPolicy.enabled: true to opt in", taskmodes.Harness)
+	}
+
+	// Validate the harness image against the registry allowlist.
+	//
+	// The admission webhook checks this too, and with a better error. It is a
+	// separate, optional deployment though, and for harness mode the image is
+	// not an accessory to the run — it *is* the agent process. A cluster
+	// running without the webhook would otherwise have no bound at all on
+	// which external harness executes, which is exactly what
+	// imagePolicy.allowedRegistries exists to provide. Same
+	// belt-and-braces as the task-mode capability check.
+	if img := taskmodes.HarnessImage(agentRun.Spec.Task); img != "" {
+		if !policy.Spec.ImagePolicy.Allows(img) {
+			return fmt.Errorf("harness image %q is not from an allowed registry (allowed: %v)",
+				img, policy.Spec.ImagePolicy.AllowedRegistries)
+		}
 	}
 
 	// Validate sub-agent depth
@@ -2842,6 +2888,12 @@ func (r *AgentRunReconciler) buildContainers(
 		})
 	}
 
+	// Reserved-name check before anything is built from these: a server called
+	// sympozium-* would shadow one Sympozium injects itself.
+	if err := validateMCPServerNames(mcpServers); err != nil {
+		return nil, nil, err
+	}
+
 	// Add MCP bridge sidecar if MCP servers are configured.
 	if len(mcpServers) > 0 {
 		mcpEnv := []corev1.EnvVar{
@@ -2856,7 +2908,10 @@ func (r *AgentRunReconciler) buildContainers(
 		if observability != nil && observability.Enabled {
 			mcpEnv = append(mcpEnv, buildObservabilityEnv(agentRun, observability)...)
 		}
-		// Inject auth secrets as env vars for each MCP server.
+		// Inject auth secrets as env vars for each MCP server. Built once:
+		// the mcp-bridge sidecar reads them, and so does an agent container
+		// a task mode replaced, which talks to the servers itself.
+		var mcpAuthEnv []corev1.EnvVar
 		for _, srv := range mcpServers {
 			if srv.AuthSecret == "" {
 				continue
@@ -2866,7 +2921,7 @@ func (r *AgentRunReconciler) buildContainers(
 			if key == "" {
 				key = "token"
 			}
-			mcpEnv = append(mcpEnv, corev1.EnvVar{
+			mcpAuthEnv = append(mcpAuthEnv, corev1.EnvVar{
 				Name: envName,
 				ValueFrom: &corev1.EnvVarSource{
 					SecretKeyRef: &corev1.SecretKeySelector{
@@ -2876,6 +2931,23 @@ func (r *AgentRunReconciler) buildContainers(
 					},
 				},
 			})
+		}
+		mcpEnv = append(mcpEnv, mcpAuthEnv...)
+
+		// A task mode that replaces the agent container brings its own MCP
+		// client (that depth is why an external harness is being used at
+		// all), so it reads the server registry the controller already
+		// generates rather than the mcp-bridge's discovered tool manifest.
+		//
+		// It gets the JSON rendering of that registry, not the YAML one the
+		// bridge reads: the adapter is a shell script, and asking it to parse
+		// YAML would mean either a YAML binary in every harness image or
+		// hand-rolled parsing of a file that carries auth material. The
+		// per-server tokens come with it — without them a registry entry
+		// naming an authSecret would connect unauthenticated and fail at the
+		// first tool call.
+		if taskModeReplacesAgentContainer(agentRun.Spec.Task) {
+			mountHarnessMCPRegistry(&containers[0], mcpAuthEnv)
 		}
 
 		// Init container for MCP tool discovery (runs before agent starts)
@@ -2936,6 +3008,22 @@ func (r *AgentRunReconciler) buildContainers(
 		})
 	}
 
+	// The skill tool server: a replaced agent container cannot write exec
+	// requests (its /ipc mount is narrowed to input and output), so this is how
+	// its SkillPack tools come back — Sympozium-owned code that holds
+	// spec.toolPolicy and is the only thing in the pod turning a harness
+	// request into an exec request. See internal/controller/agentrun_skilltools.go.
+	if RunNeedsSkillToolServer(agentRun, sidecars) {
+		// A native sidecar, so it lives in initContainers — see
+		// buildSkillToolsContainer for why the ordering matters.
+		initContainers = append(initContainers, r.buildSkillToolsContainer(agentRun))
+		// A run with no operator-configured MCP servers still needs the
+		// registry, because the skill tool server is in it.
+		if len(mcpServers) == 0 {
+			mountHarnessMCPRegistry(&containers[0], nil)
+		}
+	}
+
 	// Always enable tools — the IPC bridge is always present so
 	// send_channel_message, read_file, and list_directory work without
 	// sidecars.  execute_command gracefully times out if no skill sidecar
@@ -2960,7 +3048,12 @@ func (r *AgentRunReconciler) buildContainers(
 	// Expose the list of attached skill-sidecar targets to the agent runner
 	// so it can advise the LLM (and validate) on the optional `target` arg
 	// of the execute_command tool. Comma-separated, in spec order.
-	if len(sidecars) > 0 {
+	//
+	// Not for a replaced agent container: it advises agent-runner's
+	// execute_command, which a harness does not have. A harness reaches skill
+	// tools through the skill tool server, which routes each call to the target
+	// recorded in the manifest entry — it never picks one.
+	if len(sidecars) > 0 && !taskModeReplacesAgentContainer(agentRun.Spec.Task) {
 		names := make([]string, 0, len(sidecars))
 		for _, sc := range sidecars {
 			names = append(names, sc.skillPackName)
@@ -2974,7 +3067,14 @@ func (r *AgentRunReconciler) buildContainers(
 	// point the agent runner at it. The manifest is derived from the SkillPack
 	// CRD, so the agent consumes tool definitions it cannot modify. Dispatch
 	// still flows through the gated exec IPC targeting the owning sidecar.
-	if sidecarsHaveTools(sidecars) {
+	//
+	// A replaced agent container is deliberately excluded. It has no dispatch
+	// path for these tools — it cannot write exec requests — so the manifest
+	// would only disclose the full tool list, policy-denied names included, and
+	// invite an adapter to consume a manifest it must not act on. The skill
+	// tool server reads it instead, and applies spec.toolPolicy before anything
+	// reaches the harness.
+	if sidecarsHaveTools(sidecars) && !taskModeReplacesAgentContainer(agentRun.Spec.Task) {
 		containers[0].VolumeMounts = append(containers[0].VolumeMounts, corev1.VolumeMount{
 			Name:      "sidecar-tools",
 			MountPath: "/config/sidecar-tools",
@@ -3240,6 +3340,13 @@ func (r *AgentRunReconciler) buildContainers(
 			}
 			initContainers = append(initContainers, hookContainer)
 		}
+	}
+
+	// Let an object-form task mode replace the agent container outright
+	// (mode: harness runs an external harness image as the pod's primary
+	// process). Last, so the override wins over every central assignment.
+	if err := r.applyAgentContainerOverride(agentRun.Spec.Task, &containers[0]); err != nil {
+		return nil, nil, err
 	}
 
 	return containers, initContainers, nil
@@ -3665,6 +3772,12 @@ func (r *AgentRunReconciler) buildVolumes(agentRun *sympoziumv1alpha1.AgentRun, 
 		})
 	}
 
+	// Add any volume an object-form task mode's agent container override
+	// needs — e.g. harness mode's writable HOME emptyDir, which is how a
+	// harness that assumes it can write to $HOME is accommodated without
+	// relaxing readOnlyRootFilesystem.
+	volumes = append(volumes, taskModeAgentVolumes(agentRun.Spec.Task)...)
+
 	// Add memory ConfigMap volume if legacy memory is enabled.
 	if memoryEnabled {
 		cmName := fmt.Sprintf("%s-memory", agentRun.Spec.AgentRef)
@@ -3683,8 +3796,10 @@ func (r *AgentRunReconciler) buildVolumes(agentRun *sympoziumv1alpha1.AgentRun, 
 
 	// Note: memory PVC is mounted on the standalone memory Deployment, not agent pods.
 
-	// Add MCP config volume if MCP servers are configured.
-	if len(mcpServers) > 0 {
+	// Add MCP config volume if MCP servers are configured, or if the run needs
+	// the skill tool server — that server appears in the same registry, so the
+	// ConfigMap exists even with no operator-configured MCP servers.
+	if len(mcpServers) > 0 || RunNeedsSkillToolServer(agentRun, sidecars) {
 		cmName := fmt.Sprintf("%s-mcp-servers", agentRun.Name)
 		volumes = append(volumes, corev1.Volume{
 			Name: "mcp-config",
@@ -3833,6 +3948,7 @@ var reservedVolumeNames = map[string]struct{}{
 	"memory":        {},
 	"mcp-config":    {},
 	"sidecar-tools": {},
+	"harness-home":  {},
 }
 
 func isReservedVolumeName(name string) bool {
@@ -4756,7 +4872,7 @@ func (r *AgentRunReconciler) cleanupSkillRBAC(ctx context.Context, log logr.Logg
 
 // ensureMCPConfigMap creates or updates the ConfigMap with MCP server
 // configuration for the mcp-bridge sidecar.
-func (r *AgentRunReconciler) ensureMCPConfigMap(ctx context.Context, agentRun *sympoziumv1alpha1.AgentRun, mcpServers []sympoziumv1alpha1.MCPServerRef) error {
+func (r *AgentRunReconciler) ensureMCPConfigMap(ctx context.Context, agentRun *sympoziumv1alpha1.AgentRun, mcpServers []sympoziumv1alpha1.MCPServerRef, includeSkillTools bool) error {
 	// Scope ConfigMap to the AgentRun so each run gets its own config
 	// and cleanup is handled by garbage collection.
 	cmName := fmt.Sprintf("%s-mcp-servers", agentRun.Name)
@@ -4764,6 +4880,14 @@ func (r *AgentRunReconciler) ensureMCPConfigMap(ctx context.Context, agentRun *s
 	yamlContent, err := buildMCPServersYAML(mcpServers)
 	if err != nil {
 		return fmt.Errorf("building MCP servers YAML: %w", err)
+	}
+
+	// The same registry in JSON, for a harness-mode agent container: see
+	// buildMCPServersJSON. Both keys always exist, so the ConfigMap does not
+	// depend on which task mode the run happens to use.
+	jsonContent, err := buildMCPServersJSON(mcpServers, includeSkillTools)
+	if err != nil {
+		return fmt.Errorf("building MCP servers JSON: %w", err)
 	}
 
 	cm := &corev1.ConfigMap{
@@ -4778,6 +4902,7 @@ func (r *AgentRunReconciler) ensureMCPConfigMap(ctx context.Context, agentRun *s
 		},
 		Data: map[string]string{
 			"mcp-servers.yaml": yamlContent,
+			"mcp-servers.json": jsonContent,
 		},
 	}
 
@@ -4795,29 +4920,62 @@ func (r *AgentRunReconciler) ensureMCPConfigMap(ctx context.Context, agentRun *s
 }
 
 // mcpServerYAML is the YAML-safe representation of an MCP server config.
+// The json tags matter as much as the yaml ones: the same registry is
+// rendered both ways into the ConfigMap — YAML for the mcp-bridge sidecar,
+// JSON for an agent container a task mode replaced, whose shell adapter has
+// jq and no YAML parser. Keep the two tag sets in step or the harness sees
+// different field names than the bridge.
 type mcpServerYAML struct {
-	Name        string            `yaml:"name"`
-	URL         string            `yaml:"url"`
-	ToolsPrefix string            `yaml:"toolsPrefix"`
-	Timeout     int               `yaml:"timeout"`
-	Auth        *mcpAuthYAML      `yaml:"auth,omitempty"`
-	Headers     map[string]string `yaml:"headers,omitempty"`
-	ToolsAllow  []string          `yaml:"toolsAllow,omitempty"`
-	ToolsDeny   []string          `yaml:"toolsDeny,omitempty"`
+	Name        string            `yaml:"name" json:"name"`
+	URL         string            `yaml:"url" json:"url"`
+	ToolsPrefix string            `yaml:"toolsPrefix" json:"toolsPrefix"`
+	Timeout     int               `yaml:"timeout" json:"timeout"`
+	Auth        *mcpAuthYAML      `yaml:"auth,omitempty" json:"auth,omitempty"`
+	Headers     map[string]string `yaml:"headers,omitempty" json:"headers,omitempty"`
+	ToolsAllow  []string          `yaml:"toolsAllow,omitempty" json:"toolsAllow,omitempty"`
+	ToolsDeny   []string          `yaml:"toolsDeny,omitempty" json:"toolsDeny,omitempty"`
 }
 
 type mcpAuthYAML struct {
-	Type      string `yaml:"type"`
-	SecretKey string `yaml:"secretKey"`
+	Type      string `yaml:"type" json:"type"`
+	SecretKey string `yaml:"secretKey" json:"secretKey"`
 }
 
 type mcpServersConfigYAML struct {
-	Servers []mcpServerYAML `yaml:"servers"`
+	Servers []mcpServerYAML `yaml:"servers" json:"servers"`
 }
 
 // buildMCPServersYAML generates the YAML config for the mcp-bridge sidecar
 // using a proper YAML serializer to avoid injection attacks.
 func buildMCPServersYAML(mcpServers []sympoziumv1alpha1.MCPServerRef) (string, error) {
+	data, err := yaml.Marshal(buildMCPServersConfig(mcpServers))
+	if err != nil {
+		return "", fmt.Errorf("marshalling MCP servers config: %w", err)
+	}
+	return string(data), nil
+}
+
+// buildMCPServersJSON renders the same registry as JSON, for an agent
+// container a task mode replaced. Its adapter is a shell script with jq, so
+// JSON is the form it can read without a YAML parser in the image.
+func buildMCPServersJSON(mcpServers []sympoziumv1alpha1.MCPServerRef, includeSkillTools bool) (string, error) {
+	cfg := buildMCPServersConfig(mcpServers)
+	if includeSkillTools {
+		// The skill tool server, so a harness finds its SkillPack tools in the
+		// registry it already reads. JSON only — the mcp-bridge sidecar reads
+		// the YAML rendering and must not connect to a peer in its own pod.
+		cfg.Servers = append(cfg.Servers, skillToolsRegistryEntry())
+	}
+	data, err := json.Marshal(cfg)
+	if err != nil {
+		return "", fmt.Errorf("marshalling MCP servers config as JSON: %w", err)
+	}
+	return string(data), nil
+}
+
+// buildMCPServersConfig is the one place the registry is derived from the
+// resolved server refs, so the YAML and JSON renderings cannot drift.
+func buildMCPServersConfig(mcpServers []sympoziumv1alpha1.MCPServerRef) mcpServersConfigYAML {
 	cfg := mcpServersConfigYAML{
 		Servers: make([]mcpServerYAML, 0, len(mcpServers)),
 	}
@@ -4848,12 +5006,7 @@ func buildMCPServersYAML(mcpServers []sympoziumv1alpha1.MCPServerRef) (string, e
 
 		cfg.Servers = append(cfg.Servers, entry)
 	}
-
-	data, err := yaml.Marshal(cfg)
-	if err != nil {
-		return "", fmt.Errorf("marshalling MCP servers config: %w", err)
-	}
-	return string(data), nil
+	return cfg
 }
 
 // sidecarToolJSON is the wire representation of a native sidecar tool written

@@ -2,6 +2,7 @@ package ipc
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"sync"
 
@@ -58,6 +59,24 @@ func (w *Watcher) Watch(ctx context.Context, dirPath string) (<-chan FileEvent, 
 	w.mu.Lock()
 	w.channels[absPath] = ch
 	w.mu.Unlock()
+
+	// Reconcile files that already exist at registration time. inotify emits
+	// no event for a file present before Add(), so a fast-completing agent —
+	// a harness adapter can return in milliseconds — would otherwise have its
+	// result.json silently dropped and the run wedged. Send a synthetic create
+	// event for every file already on disk; the per-bridge dedup map absorbs
+	// the rare overlap with a real fsnotify event for the same path.
+	entries, err := os.ReadDir(absPath)
+	if err != nil {
+		w.log.Error(err, "failed to reconcile pre-existing IPC files", "path", absPath)
+	} else {
+		for _, entry := range entries {
+			if entry.IsDir() {
+				continue
+			}
+			ch <- FileEvent{Path: filepath.Join(absPath, entry.Name()), Op: "create"}
+		}
+	}
 
 	// Clean up when context is done
 	go func() {

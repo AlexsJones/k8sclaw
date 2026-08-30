@@ -394,6 +394,13 @@ type AgentRunStatus struct {
 	// +optional
 	TraceID string `json:"traceID,omitempty"`
 
+	// HarnessImageDigest records the digest of the external harness adapter image
+	// that executed this run. Populated only for `task.mode: harness` runs, and
+	// only once the run has been admitted and dispatched. Empty for all other
+	// modes and backends.
+	// +optional
+	HarnessImageDigest string `json:"harnessImageDigest,omitempty"`
+
 	// PostRunJobName is the name of the Job created for postRun lifecycle hooks.
 	// +optional
 	PostRunJobName string `json:"postRunJobName,omitempty"`

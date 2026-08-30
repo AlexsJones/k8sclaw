@@ -26,7 +26,7 @@ import {
   Radio,
   ShieldAlert,
 } from "lucide-react";
-import { cn } from "@/lib/utils";
+import { cn, taskText } from "@/lib/utils";
 
 // ── Feed pane (right slide-out) ──────────────────────────────────────────────
 
@@ -112,7 +112,7 @@ export function FeedPane({
       items.push({
         id: `run-task-${run.metadata.name}`,
         type: "user",
-        text: run.spec.task,
+        text: taskText(run.spec.task),
         timestamp: run.metadata.creationTimestamp || "",
         meta: run.metadata.name,
       });

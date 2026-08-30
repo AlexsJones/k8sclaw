@@ -173,11 +173,23 @@ export interface ParentRunRef {
   spawnDepth: number;
 }
 
+// A run's task is polymorphic, matching api/v1alpha1/taskspec.go: either the
+// prompt string (Path A) or an object naming an orchestration mode. Typing it
+// as `string` is what let an object reach a JSX child and unmount the app with
+// React error #31 — read it through taskText() in @/lib/utils.
+export interface TaskModeSpec {
+  mode?: string;
+  tool?: string;
+  parameters?: Record<string, string>;
+}
+
+export type AgentRunTask = string | TaskModeSpec;
+
 export interface AgentRunSpec {
   agentRef: string;
   agentId: string;
   sessionKey: string;
-  task: string;
+  task: AgentRunTask;
   systemPrompt?: string;
   model?: ModelSpec;
   toolPolicy?: ToolPolicySpec;

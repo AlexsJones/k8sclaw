@@ -87,6 +87,8 @@ nav:
     - Lifecycle Hooks: concepts/lifecycle-hooks.md
     - Task Modes:
       - Sidecar-Driven Mode: modes/sidecar-driven.md
+      - Harness Mode: modes/harness.md
+      - Writing a Harness Adapter: modes/harness-adapters.md
       - Adding a Task Mode: modes/extension-guide.md
     - Channels: concepts/channels.md
     - Agent Sandboxing: concepts/agent-sandbox.md

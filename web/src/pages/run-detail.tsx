@@ -25,7 +25,7 @@ import {
 } from "lucide-react";
 import { Breadcrumbs } from "@/components/breadcrumbs";
 import { useRunsSeen } from "@/hooks/use-runs-seen";
-import { costTooltip, effectiveCost, formatAge, formatUsd } from "@/lib/utils";
+import { costTooltip, effectiveCost, formatAge, formatUsd, taskText } from "@/lib/utils";
 
 export function RunDetailPage() {
   const { name } = useParams<{ name: string }>();
@@ -289,7 +289,7 @@ export function RunDetailPage() {
         <TabsContent value="task">
           <Card>
             <CardContent className="pt-6">
-              <pre className="whitespace-pre-wrap text-sm">{run.spec.task}</pre>
+              <pre className="whitespace-pre-wrap text-sm">{taskText(run.spec.task)}</pre>
             </CardContent>
           </Card>
         </TabsContent>

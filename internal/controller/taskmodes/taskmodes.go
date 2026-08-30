@@ -8,8 +8,8 @@
 // configuration.
 //
 // Adding a new mode is a self-contained change:
-//  1. Implement TaskModeHandler (Mode, Validate, ConfigureAgentContainer,
-//     AdjustSidecars).
+//  1. Implement TaskModeHandler (Mode, Capabilities, Validate,
+//     ConfigureAgentContainer, AdjustSidecars).
 //  2. Register it in the package init() below (or from the controller's
 //     main.go if it lives in a downstream repo).
 //  3. Document it under docs/modes/<mode-name>.md.
@@ -71,6 +71,16 @@ type TaskModeHandler interface {
 	// Must be unique across registered handlers. Examples: "sidecar-driven".
 	Mode() string
 
+	// Capabilities reports what this mode supports. Checked before the run
+	// exists, so an AgentRun asking for something the mode cannot honour is
+	// rejected at admission rather than accepted and silently degraded.
+	//
+	// A mode whose support varies from task to task reports the ceiling
+	// here (what the mode can do at its best) and additionally implements
+	// TaskCapabilityReporter to narrow it per task. Callers that hold a
+	// TaskSpec should use CapabilitiesFor, never this method directly.
+	Capabilities() Capabilities
+
 	// Validate runs after the handler is resolved and before any container
 	// configuration. It should check that the task object carries the
 	// required fields for this mode (e.g. sidecar-driven requires Tool).
@@ -128,6 +138,24 @@ func Get(mode string) (TaskModeHandler, bool) {
 	defer registryMu.RUnlock()
 	h, ok := registry[mode]
 	return h, ok
+}
+
+// ValidateTask runs the registered handler's validation for an object-form
+// task. It intentionally allows unregistered modes: downstream controller
+// binaries may register modes that the separately deployed webhook does not
+// know about.
+func ValidateTask(task *sympoziumv1alpha1.TaskSpec) error {
+	if task == nil || task.IsString() {
+		return nil
+	}
+	handler, ok := Get(task.GetMode())
+	if !ok {
+		return nil
+	}
+	if err := handler.Validate(task); err != nil {
+		return fmt.Errorf("task.mode %q validation failed: %w", task.GetMode(), err)
+	}
+	return nil
 }
 
 // SupportedModes returns the registered mode names sorted alphabetically.

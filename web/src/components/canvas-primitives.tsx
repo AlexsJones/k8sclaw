@@ -957,6 +957,7 @@ export function buildProviderNodesAndEdges(
 // ══════════════════════════════════════════════════════════════════════════════
 
 import type { AgentRun } from "@/lib/api";
+import { taskText } from "@/lib/utils";
 
 /** Build a run-phase map from runs: persona name → { phase, task } */
 export function buildRunPhaseMap(
@@ -976,7 +977,7 @@ export function buildRunPhaseMap(
 		if (instanceRuns.length > 0 && instanceRuns[0].status?.phase) {
 			map.set(ip.name, {
 				phase: instanceRuns[0].status.phase,
-				task: instanceRuns[0].spec.task,
+				task: taskText(instanceRuns[0].spec.task),
 			});
 		}
 	}

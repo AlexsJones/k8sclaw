@@ -133,6 +133,7 @@ Sympozium is a **Kubernetes-native coordination layer** for multi-agent AI syste
 | Ensembles | [deploy.sympozium.ai/docs/concepts/ensembles](https://deploy.sympozium.ai/docs/concepts/ensembles/) |
 | Skills & Sidecars | [deploy.sympozium.ai/docs/concepts/skills](https://deploy.sympozium.ai/docs/concepts/skills/) |
 | Sidecar-Driven Mode | [deploy.sympozium.ai/docs/modes/sidecar-driven](https://deploy.sympozium.ai/docs/modes/sidecar-driven/) |
+| Harness Mode (external agent harnesses) | [deploy.sympozium.ai/docs/modes/harness](https://deploy.sympozium.ai/docs/modes/harness/) |
 | Persistent Memory | [deploy.sympozium.ai/docs/concepts/persistent-memory](https://deploy.sympozium.ai/docs/concepts/persistent-memory/) |
 | Channels | [deploy.sympozium.ai/docs/concepts/channels](https://deploy.sympozium.ai/docs/concepts/channels/) |
 | Agent Sandboxing | [deploy.sympozium.ai/docs/concepts/agent-sandbox](https://deploy.sympozium.ai/docs/concepts/agent-sandbox/) |

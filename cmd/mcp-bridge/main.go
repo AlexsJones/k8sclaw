@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/sympozium-ai/sympozium/internal/mcpbridge"
+	"github.com/sympozium-ai/sympozium/internal/skilltools"
 	"github.com/sympozium-ai/sympozium/pkg/telemetry"
 )
 
@@ -50,13 +51,22 @@ func main() {
 
 	// Check for stdio-adapter mode
 	stdioAdapter := flag.Bool("stdio-adapter", false, "Run as stdio-to-HTTP adapter")
+	skillTools := flag.Bool("serve-skill-tools", false, "Serve the run's SkillPack tools as an MCP server on loopback")
 	flag.Parse()
 	if !*stdioAdapter && os.Getenv("MCP_STDIO_ADAPTER") == "true" {
 		*stdioAdapter = true
 	}
+	if !*skillTools && os.Getenv("MCP_SERVE_SKILL_TOOLS") == "true" {
+		*skillTools = true
+	}
 
 	if *stdioAdapter {
 		runStdioAdapter(ctx, cancel)
+		return
+	}
+
+	if *skillTools {
+		runSkillToolServer(ctx)
 		return
 	}
 
@@ -98,6 +108,32 @@ func main() {
 	}
 
 	log.Printf("MCP bridge exiting")
+}
+
+// runSkillToolServer serves the run's permitted SkillPack tools to a harness
+// over MCP on loopback. See internal/skilltools for why this exists.
+//
+// It runs in the same image as the bridge because it is the same concern —
+// MCP inside an agent pod — and shipping a second image for it would be a new
+// build, a new tag and a new thing to keep in step for no gain.
+func runSkillToolServer(ctx context.Context) {
+	cfg := skilltools.Config{
+		ManifestPath:    envOrDefault("SIDECAR_TOOLS_MANIFEST_PATH", "/config/sidecar-tools/sidecar-tools.json"),
+		ToolPolicyAllow: os.Getenv("TOOL_POLICY_ALLOW"),
+		ToolPolicyDeny:  os.Getenv("TOOL_POLICY_DENY"),
+		IPCToolsDir:     envOrDefault("MCP_IPC_PATH", "/ipc/tools"),
+		// Loopback only. Pod containers share a network namespace, so the
+		// harness reaches this while nothing outside the pod can.
+		Addr: envOrDefault("SKILL_TOOLS_ADDR", "127.0.0.1:8771"),
+	}
+
+	srv, err := skilltools.NewServer(cfg)
+	if err != nil {
+		log.Fatalf("skill-tools: %v", err)
+	}
+	if err := srv.Run(ctx); err != nil {
+		log.Fatalf("skill-tools: %v", err)
+	}
 }
 
 func envOrDefault(key, def string) string {

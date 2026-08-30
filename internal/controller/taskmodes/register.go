@@ -9,4 +9,5 @@ package taskmodes
 
 func init() {
 	Register(NewSidecarDrivenHandler())
+	Register(NewHarnessHandler())
 }
