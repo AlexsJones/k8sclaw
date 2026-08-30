@@ -29,10 +29,28 @@ spec:
           image: "{{ .Values.nats.image.repository }}:{{ .Values.nats.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           args:
+            {{- if .Values.nats.auth.enabled }}
+            - -c
+            - /etc/nats/nats.conf
+            {{- else }}
             - --jetstream
             - --store_dir=/data
             - -m
             - "8222"
+            {{- end }}
+          {{- if .Values.nats.auth.enabled }}
+          env:
+            - name: NATS_CONTROL_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "sympozium.natsAuthSecret" . }}
+                  key: control-password
+            - name: NATS_BRIDGE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "sympozium.natsAuthSecret" . }}
+                  key: bridge-password
+          {{- end }}
           ports:
             - containerPort: 4222
               name: client
@@ -62,6 +80,11 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /data
+            {{- if .Values.nats.auth.enabled }}
+            - name: config
+              mountPath: /etc/nats
+              readOnly: true
+            {{- end }}
       volumes:
         - name: data
           {{- if .Values.nats.persistence.enabled }}
@@ -70,6 +93,20 @@ spec:
           {{- else }}
           emptyDir: {}
           {{- end }}
+        {{- if .Values.nats.auth.enabled }}
+        - name: config
+          projected:
+            sources:
+              - configMap:
+                  name: nats-config
+              - secret:
+                  name: {{ include "sympozium.natsAuthSecret" . }}
+                  items:
+                    - key: control-password
+                      path: control-password
+                    - key: bridge-password
+                      path: bridge-password
+        {{- end }}
       {{- with .Values.nats.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

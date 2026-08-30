@@ -32,6 +32,15 @@ spec:
             - --serve-ui
           {{- end }}
           env:
+          {{- if and .Values.nats.enabled .Values.nats.auth.enabled }}
+            - name: NATS_USERNAME
+              value: sympozium-control
+            - name: NATS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "sympozium.natsAuthSecret" . }}
+                  key: control-password
+          {{- end }}
           {{- if .Values.apiserver.webUI.token }}
             - name: SYMPOZIUM_UI_TOKEN
               value: {{ .Values.apiserver.webUI.token | quote }}

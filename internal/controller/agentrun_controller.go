@@ -97,6 +97,7 @@ const (
 	legacyAgentServiceAccountName = "sympozium-agent"
 	runAPIAccessVolumeName        = "sympozium-run-api-access"
 	runAPIAccessMountPath         = "/var/run/secrets/kubernetes.io/serviceaccount"
+	runNATSBridgeSecretPrefix     = "sympozium-run-nats-"
 )
 
 // tokenBudgetCountedAnnotation marks an AgentRun whose token usage has already
@@ -493,6 +494,9 @@ func (r *AgentRunReconciler) prepareRunPrerequisites(
 	// workload-identity integrations; no run pod executes as that shared account.
 	if err := r.ensureAgentServiceAccount(ctx, agentRun); err != nil {
 		return out, fmt.Errorf("ensuring agent service account: %w", err)
+	}
+	if err := r.ensureNATSBridgeCredentials(ctx, agentRun); err != nil {
+		return out, fmt.Errorf("ensuring IPC bridge NATS credentials: %w", err)
 	}
 
 	// Create the input ConfigMap with the task.
@@ -2438,6 +2442,56 @@ func agentRunServiceAccountName(agentRun *sympoziumv1alpha1.AgentRun) string {
 	return strings.TrimRight(name[:maxDNSSubdomainLength-len(suffix)], "-") + suffix
 }
 
+func agentRunNATSBridgeSecretName(agentRun *sympoziumv1alpha1.AgentRun) string {
+	return runNATSBridgeSecretPrefix + agentRun.Name
+}
+
+func natsBridgeCredentialEnv(agentRun *sympoziumv1alpha1.AgentRun) []corev1.EnvVar {
+	secret := agentRunNATSBridgeSecretName(agentRun)
+	return []corev1.EnvVar{
+		{Name: "NATS_USERNAME", ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{
+			LocalObjectReference: corev1.LocalObjectReference{Name: secret}, Key: "username",
+		}}},
+		{Name: "NATS_PASSWORD", ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{
+			LocalObjectReference: corev1.LocalObjectReference{Name: secret}, Key: "password",
+		}}},
+	}
+}
+
+// ensureNATSBridgeCredentials copies the restricted bridge credential into a
+// run-owned Secret. The credential is mounted only by ipc-bridge, never by the
+// adapter/harness container. Empty controller environment keeps external,
+// unauthenticated NATS installations backward compatible.
+func (r *AgentRunReconciler) ensureNATSBridgeCredentials(ctx context.Context, agentRun *sympoziumv1alpha1.AgentRun) error {
+	username, password := os.Getenv("NATS_BRIDGE_USERNAME"), os.Getenv("NATS_BRIDGE_PASSWORD")
+	if username == "" || password == "" {
+		return nil
+	}
+	name := agentRunNATSBridgeSecretName(agentRun)
+	existing := &corev1.Secret{}
+	err := r.Get(ctx, client.ObjectKey{Name: name, Namespace: agentRun.Namespace}, existing)
+	if err == nil {
+		return nil
+	}
+	if !errors.IsNotFound(err) {
+		return fmt.Errorf("checking bridge credential secret: %w", err)
+	}
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: agentRun.Namespace, Labels: map[string]string{
+			"sympozium.ai/agent-run": agentRun.Name,
+		}},
+		Type: corev1.SecretTypeOpaque,
+		Data: map[string][]byte{"username": []byte(username), "password": []byte(password)},
+	}
+	if err := controllerutil.SetControllerReference(agentRun, secret, r.Scheme); err != nil {
+		return fmt.Errorf("setting bridge credential owner: %w", err)
+	}
+	if err := r.Create(ctx, secret); err != nil && !errors.IsAlreadyExists(err) {
+		return fmt.Errorf("creating bridge credential secret: %w", err)
+	}
+	return nil
+}
+
 // ensureAgentServiceAccount creates a unique ServiceAccount owned by the run.
 // If the legacy namespace-level account exists, its annotations are copied so
 // existing cloud workload-identity configuration continues to apply. The
@@ -2784,6 +2838,9 @@ func (r *AgentRunReconciler) buildContainers(
 					{Name: "INSTANCE_NAME", Value: agentRun.Spec.AgentRef},
 					{Name: "AGENT_NAMESPACE", Value: agentRun.Namespace},
 					{Name: "EVENT_BUS_URL", Value: "nats://nats.sympozium-system.svc:4222"},
+				}
+				if os.Getenv("NATS_BRIDGE_USERNAME") != "" && os.Getenv("NATS_BRIDGE_PASSWORD") != "" {
+					env = append(env, natsBridgeCredentialEnv(agentRun)...)
 				}
 				// The bridge validates agent-written channel-message attribution
 				// against this identity (see sanitizeOutboundMessage). Stamped at

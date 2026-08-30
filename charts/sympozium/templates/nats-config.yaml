@@ -1,0 +1,23 @@
+{{- if and .Values.nats.enabled .Values.nats.auth.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nats-config
+  namespace: {{ include "sympozium.namespace" . }}
+  labels:
+    {{- include "sympozium.labels" . | nindent 4 }}
+    app.kubernetes.io/component: nats
+data:
+  nats.conf: |
+    jetstream { store_dir: "/data" }
+    http_port: 8222
+    authorization {
+      users = [
+        {user: "sympozium-control", password: $NATS_CONTROL_PASSWORD, permissions: {publish: ">", subscribe: ">"}},
+        {user: "sympozium-bridge", password: $NATS_BRIDGE_PASSWORD, permissions: {
+          publish: ["sympozium.agent.run.completed", "sympozium.agent.run.failed", "sympozium.agent.status.update", "sympozium.agent.stream.chunk", "sympozium.agent.spawn.request", "sympozium.agent.subagent.request", "sympozium.tool.exec.request", "sympozium.channel.message.send", "sympozium.schedule.upsert", "sympozium.agent.prompt.request.*", "sympozium.agent.prompt.result.*", "sympozium.agent.context.clear.*"],
+          subscribe: ["sympozium.agent.followup.*", "sympozium.tool.exec.result.*", "sympozium.agent.delegate.result.*", "sympozium.agent.subagent.result.*"]
+        }}
+      ]
+    }
+{{- end }}

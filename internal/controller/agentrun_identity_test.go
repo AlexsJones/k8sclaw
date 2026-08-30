@@ -13,6 +13,54 @@ import (
 	sympoziumv1alpha1 "github.com/sympozium-ai/sympozium/api/v1alpha1"
 )
 
+func TestNATSBridgeCredentialsAreRunOwnedAndBridgeOnly(t *testing.T) {
+	t.Setenv("NATS_BRIDGE_USERNAME", "sympozium-bridge")
+	t.Setenv("NATS_BRIDGE_PASSWORD", "not-a-real-password")
+	run := newTestRun()
+	run.Name = "bridge-creds"
+	r := newAgentRunTestReconciler(t, run)
+	if err := r.ensureNATSBridgeCredentials(context.Background(), run); err != nil {
+		t.Fatalf("ensure NATS bridge credentials: %v", err)
+	}
+	var secret corev1.Secret
+	if err := r.Get(context.Background(), types.NamespacedName{Name: agentRunNATSBridgeSecretName(run), Namespace: run.Namespace}, &secret); err != nil {
+		t.Fatalf("get bridge credential secret: %v", err)
+	}
+	if string(secret.Data["username"]) != "sympozium-bridge" || string(secret.Data["password"]) != "not-a-real-password" {
+		t.Fatalf("bridge secret data = %#v", secret.Data)
+	}
+	if len(secret.OwnerReferences) != 1 || secret.OwnerReferences[0].UID != run.UID {
+		t.Fatalf("bridge secret owner = %#v, want AgentRun", secret.OwnerReferences)
+	}
+
+	job, err := r.buildJob(context.Background(), run, false, nil, nil, nil, nil)
+	if err != nil {
+		t.Fatalf("build job: %v", err)
+	}
+	bridge := containerByName(job.Spec.Template.Spec.Containers, "ipc-bridge")
+	agent := containerByName(job.Spec.Template.Spec.Containers, "agent")
+	if bridge == nil || agent == nil {
+		t.Fatal("job lacks agent or IPC bridge")
+	}
+	for _, name := range []string{"NATS_USERNAME", "NATS_PASSWORD"} {
+		if !hasEnv(bridge.Env, name) {
+			t.Errorf("bridge lacks %s", name)
+		}
+		if hasEnv(agent.Env, name) {
+			t.Errorf("harness/agent unexpectedly receives %s", name)
+		}
+	}
+}
+
+func hasEnv(env []corev1.EnvVar, name string) bool {
+	for _, item := range env {
+		if item.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
 func TestHarnessReceivesNoKubernetesToken(t *testing.T) {
 	r := &AgentRunReconciler{}
 	job, err := r.buildJob(context.Background(), harnessModeRun(nil), false, nil, nil, nil, nil)

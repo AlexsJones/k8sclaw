@@ -40,7 +40,10 @@ func main() {
 	log := zap.New(zap.UseDevMode(false)).WithName("ipc-bridge")
 
 	// Connect to event bus
-	bus, err := eventbus.NewNATSEventBus(eventBusURL)
+	// The bridge deliberately uses only core NATS. Its credential is allowed to
+	// relay the small, explicit IPC subject set but cannot manage JetStream or
+	// publish directly to arbitrary control-plane subjects.
+	bus, err := eventbus.NewCoreNATSEventBus(eventBusURL)
 	if err != nil {
 		log.Error(err, "failed to connect to event bus")
 		os.Exit(1)

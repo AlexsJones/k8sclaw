@@ -34,6 +34,22 @@ spec:
           env:
             - name: NATS_URL
               value: {{ include "sympozium.natsUrl" . }}
+            {{- if and .Values.nats.enabled .Values.nats.auth.enabled }}
+            - name: NATS_USERNAME
+              value: sympozium-control
+            - name: NATS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "sympozium.natsAuthSecret" . }}
+                  key: control-password
+            - name: NATS_BRIDGE_USERNAME
+              value: sympozium-bridge
+            - name: NATS_BRIDGE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "sympozium.natsAuthSecret" . }}
+                  key: bridge-password
+            {{- end }}
             - name: POD_NAME
               valueFrom:
                 fieldRef:
