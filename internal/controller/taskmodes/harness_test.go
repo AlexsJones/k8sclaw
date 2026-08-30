@@ -23,6 +23,11 @@ func TestRegistry_HarnessRegistered(t *testing.T) {
 	}
 }
 
+// harnessTestImage is a digest-pinned harness reference for fixtures. Harness
+// images must be digest-pinned — see HarnessHandler.Validate — so the default
+// here carries a well-formed sha256 digest.
+const harnessTestImage = "ghcr.io/acme/my-harness@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+
 // harnessTask builds an object-form harness task. Every harness task names an
 // image — Sympozium builds none — so the helper defaults one.
 func harnessTask(params map[string]string) *sympoziumv1alpha1.TaskSpec {
@@ -33,7 +38,7 @@ func harnessTask(params map[string]string) *sympoziumv1alpha1.TaskSpec {
 		params[harnessParamPrompt] = "summarise the incident"
 	}
 	if _, ok := params[harnessParamImage]; !ok {
-		params[harnessParamImage] = "ghcr.io/acme/my-harness:v1"
+		params[harnessParamImage] = harnessTestImage
 	}
 	return &sympoziumv1alpha1.TaskSpec{
 		Mode:       Harness,
@@ -70,13 +75,56 @@ func TestHarnessHandler_Validate_RequiresPrompt(t *testing.T) {
 	h := NewHarnessHandler()
 	err := h.Validate(&sympoziumv1alpha1.TaskSpec{
 		Mode:       Harness,
-		Parameters: map[string]string{harnessParamImage: "ghcr.io/acme/my-harness:v1"},
+		Parameters: map[string]string{harnessParamImage: harnessTestImage},
 	})
 	if err == nil {
 		t.Fatal("Validate(no prompt) returned nil; expected error")
 	}
 	if !strings.Contains(err.Error(), harnessParamPrompt) {
 		t.Errorf("error should name the missing parameter, got: %v", err)
+	}
+}
+
+// The image becomes the pod's primary process and receives the run's model and
+// MCP credentials, so a mutable tag is not an acceptable trust anchor. Every
+// tag-only or otherwise unpinned reference must be rejected, not silently
+// pinned to whatever the tag resolves to today.
+func TestHarnessHandler_Validate_RejectsUnpinnedImage(t *testing.T) {
+	h := NewHarnessHandler()
+	for _, tc := range []struct {
+		name  string
+		image string
+	}{
+		{name: "tag-only", image: "ghcr.io/acme/my-harness:v1"},
+		{name: "bare-name", image: "ghcr.io/acme/my-harness"},
+		{name: "truncated-digest", image: "ghcr.io/acme/my-harness@sha256:deadbeef"},
+		{name: "uppercase-hex", image: "ghcr.io/acme/my-harness@sha256:" + strings.Repeat("A", 64)},
+		{name: "unknown-algorithm", image: "ghcr.io/acme/my-harness@md5:" + strings.Repeat("0", 32)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := h.Validate(harnessTask(map[string]string{harnessParamImage: tc.image}))
+			if err == nil {
+				t.Fatalf("Validate(%q) returned nil; expected digest-pinning rejection", tc.image)
+			}
+			if !strings.Contains(err.Error(), "digest-pinned") {
+				t.Errorf("error should mention the digest-pinning requirement, got: %v", err)
+			}
+		})
+	}
+}
+
+// A well-formed digest-pinned reference is accepted, including the legitimate
+// name:tag@digest form where the digest remains authoritative.
+func TestHarnessHandler_Validate_AcceptsDigestPinnedImage(t *testing.T) {
+	h := NewHarnessHandler()
+	for _, image := range []string{
+		harnessTestImage,
+		"ghcr.io/acme/my-harness:v1@sha256:" + strings.Repeat("b", 64),
+		"registry.local/adapter@sha512:" + strings.Repeat("c", 128),
+	} {
+		if err := h.Validate(harnessTask(map[string]string{harnessParamImage: image})); err != nil {
+			t.Errorf("Validate(%q) returned error: %v", image, err)
+		}
 	}
 }
 
@@ -223,7 +271,7 @@ func TestHarnessHandler_Override_UsesSuppliedImageAndItsOwnEntrypoint(t *testing
 	if err != nil {
 		t.Fatalf("OverrideAgentContainer returned error: %v", err)
 	}
-	if override.Image != "ghcr.io/acme/my-harness:v1" {
+	if override.Image != harnessTestImage {
 		t.Errorf("Image = %q, want the operator's reference", override.Image)
 	}
 	// Sympozium has no argv to impose on a binary it did not build.
@@ -420,7 +468,7 @@ func TestReplacesAgentContainer(t *testing.T) {
 // ── HarnessImage (admission's image-policy hook) ────────────────────────────
 
 func TestHarnessImage(t *testing.T) {
-	if got := HarnessImage(harnessTask(nil)); got != "ghcr.io/acme/my-harness:v1" {
+	if got := HarnessImage(harnessTask(nil)); got != harnessTestImage {
 		t.Errorf("HarnessImage = %q, want the operator's reference for imagePolicy to check", got)
 	}
 	if got := HarnessImage(&sympoziumv1alpha1.TaskSpec{Mode: SidecarDriven, Tool: "primary"}); got != "" {
@@ -431,6 +479,26 @@ func TestHarnessImage(t *testing.T) {
 	}
 	if got := HarnessImage(nil); got != "" {
 		t.Errorf("HarnessImage(nil) = %q, want empty", got)
+	}
+}
+
+func TestHarnessImageDigest(t *testing.T) {
+	if got := HarnessImageDigest(harnessTask(nil)); got != "sha256:"+strings.Repeat("a", 64) {
+		t.Errorf("HarnessImageDigest = %q, want the pinned sha256 digest", got)
+	}
+	if got := HarnessImageDigest(&sympoziumv1alpha1.TaskSpec{Mode: SidecarDriven, Tool: "primary"}); got != "" {
+		t.Errorf("HarnessImageDigest(other mode) = %q, want empty", got)
+	}
+	if got := HarnessImageDigest(sympoziumv1alpha1.NewStringTask("do it")); got != "" {
+		t.Errorf("HarnessImageDigest(string form) = %q, want empty", got)
+	}
+	if got := HarnessImageDigest(nil); got != "" {
+		t.Errorf("HarnessImageDigest(nil) = %q, want empty", got)
+	}
+	// A tag-only reference has no digest to record.
+	unpinned := harnessTask(map[string]string{harnessParamImage: "ghcr.io/acme/my-harness:v1"})
+	if got := HarnessImageDigest(unpinned); got != "" {
+		t.Errorf("HarnessImageDigest(tag-only) = %q, want empty", got)
 	}
 }
 

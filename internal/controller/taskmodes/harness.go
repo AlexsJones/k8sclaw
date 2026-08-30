@@ -75,6 +75,46 @@ const (
 	harnessIPCOutPath   = "/ipc/output"
 )
 
+// digestAlgorithms maps the digest algorithms Sympozium accepts on an external
+// harness image reference to the expected lowercase-hex length of that digest.
+// Only well-known OCI algorithms are accepted; anything else is treated as
+// unpinned and rejected rather than guessed at.
+var digestAlgorithms = map[string]int{
+	"sha256": 64,
+	"sha384": 96,
+	"sha512": 128,
+}
+
+// parseImageDigest returns the digest (algorithm:hex) of a digest-pinned OCI
+// image reference, or ("", false) when the reference carries no valid digest.
+//
+// A reference may name a tag as well as a digest ("name:tag@sha256:…"); the
+// digest is the part after the last "@", and is the authoritative identifier
+// for a pull. The strict form check matters: an external harness image becomes
+// the pod's primary process, so a typo'd or truncated digest must not be read
+// as "pinned".
+func parseImageDigest(image string) (string, bool) {
+	at := strings.LastIndex(image, "@")
+	if at < 0 || at == len(image)-1 {
+		return "", false
+	}
+	digest := image[at+1:]
+	algo, hex, ok := strings.Cut(digest, ":")
+	if !ok {
+		return "", false
+	}
+	want, known := digestAlgorithms[algo]
+	if !known || len(hex) != want {
+		return "", false
+	}
+	for _, c := range hex {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return "", false
+		}
+	}
+	return digest, true
+}
+
 // Task parameter keys recognised by harness mode.
 const (
 	// harnessParamPrompt carries the task text. Object-form tasks have no
@@ -146,6 +186,14 @@ func (h *HarnessHandler) Validate(task *sympoziumv1alpha1.TaskSpec) error {
 	if strings.TrimSpace(task.Parameters[harnessParamImage]) == "" {
 		return fmt.Errorf("harness: task.parameters.%s is required (the adapter image that becomes the pod's primary process; Sympozium ships none)",
 			harnessParamImage)
+	}
+
+	// The image becomes the pod's primary process and receives the run's model
+	// and MCP credentials, so a mutable tag is not an acceptable trust anchor:
+	// "v1" can be retagged under the operator. Require a digest-pinned reference
+	// so the exact artifact is fixed and can be recorded on the run.
+	if _, ok := parseImageDigest(strings.TrimSpace(task.Parameters[harnessParamImage])); !ok {
+		return fmt.Errorf("harness: task.parameters.%s must be a digest-pinned OCI reference (e.g. \"ghcr.io/acme/my-harness@sha256:<64-hex>\"); tag-only or unpinned references are rejected", harnessParamImage)
 	}
 
 	if strings.TrimSpace(task.Parameters[harnessParamPrompt]) == "" {
@@ -277,6 +325,18 @@ func HarnessImage(task *sympoziumv1alpha1.TaskSpec) string {
 		return ""
 	}
 	return strings.TrimSpace(task.Parameters[harnessParamImage])
+}
+
+// HarnessImageDigest returns the digest of a digest-pinned harness image, or ""
+// when the task is not harness mode or the image carries no digest. The
+// controller records this on AgentRun.status.harnessImageDigest so operators can
+// see exactly which artifact executed.
+func HarnessImageDigest(task *sympoziumv1alpha1.TaskSpec) string {
+	if task == nil || task.IsString() || task.GetMode() != Harness {
+		return ""
+	}
+	digest, _ := parseImageDigest(strings.TrimSpace(task.Parameters[harnessParamImage]))
+	return digest
 }
 
 // harnessArgs parses task.parameters.args, a JSON array of strings appended

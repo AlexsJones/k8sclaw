@@ -40,8 +40,10 @@ func harnessModeRun(params map[string]string) *sympoziumv1alpha1.AgentRun {
 	return r
 }
 
-// harnessTestImage stands in for any operator-supplied adapter image.
-const harnessTestImage = "ghcr.io/acme/my-harness:v1"
+// harnessTestImage stands in for any operator-supplied adapter image. It is
+// digest-pinned because harness images must be: the digest is the trust anchor
+// that admission and the controller record.
+const harnessTestImage = "ghcr.io/acme/my-harness@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 
 func containerByName(cs []corev1.Container, name string) *corev1.Container {
 	for i := range cs {

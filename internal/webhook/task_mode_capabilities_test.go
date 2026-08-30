@@ -61,7 +61,7 @@ func harnessTaskSpec(params map[string]string) *sympoziumv1alpha1.TaskSpec {
 		params["prompt"] = "summarise the incident"
 	}
 	if _, ok := params["image"]; !ok {
-		params["image"] = "ghcr.io/acme/my-harness:v1"
+		params["image"] = "ghcr.io/acme/my-harness@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	}
 	return &sympoziumv1alpha1.TaskSpec{
 		Mode:       taskmodes.Harness,
@@ -113,6 +113,21 @@ func TestPolicyEnforcer_RejectsUnmediatedHarnessCapabilityClaim(t *testing.T) {
 	resp := pe.Handle(context.Background(), admissionRequestFor(t, run))
 	if resp.Allowed || !strings.Contains(resp.Result.Message, taskmodes.CapabilityResume) {
 		t.Fatalf("response allowed=%v message=%q, want unsupported claim denial", resp.Allowed, resp.Result.Message)
+	}
+}
+
+// A harness image must be digest-pinned: a tag can be retagged under the
+// operator, so it is not an acceptable trust anchor for the pod's primary
+// process. The denial must happen at admission, before any pod exists.
+func TestPolicyEnforcer_RejectsUnpinnedHarnessImage(t *testing.T) {
+	pe := capabilityEnforcer(t)
+	run := capabilityRun(harnessTaskSpec(map[string]string{
+		"image": "ghcr.io/acme/my-harness:v1",
+	}))
+
+	resp := pe.Handle(context.Background(), admissionRequestFor(t, run))
+	if resp.Allowed || !strings.Contains(resp.Result.Message, "digest-pinned") {
+		t.Fatalf("response allowed=%v message=%q, want digest-pinning denial", resp.Allowed, resp.Result.Message)
 	}
 }
 
@@ -305,7 +320,7 @@ func TestPolicyEnforcer_DeniesHarnessImageOutsideAllowedRegistries(t *testing.T)
 	pe := &PolicyEnforcer{Client: cl, Log: logr.Discard(), Decoder: decoderFor(t, scheme)}
 
 	run := capabilityRun(harnessTaskSpec(map[string]string{
-		"image": "docker.io/someone/unvetted-harness:latest",
+		"image": "docker.io/someone/unvetted-harness@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 	}))
 
 	resp := pe.Handle(context.Background(), admissionRequestFor(t, run))
@@ -340,7 +355,7 @@ func TestPolicyEnforcer_AllowsHarnessImageInsideAllowedRegistries(t *testing.T) 
 	pe := &PolicyEnforcer{Client: cl, Log: logr.Discard(), Decoder: decoderFor(t, scheme)}
 
 	run := capabilityRun(harnessTaskSpec(map[string]string{
-		"image": "ghcr.io/acme/my-harness:v1",
+		"image": "ghcr.io/acme/my-harness@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 	}))
 
 	resp := pe.Handle(context.Background(), admissionRequestFor(t, run))

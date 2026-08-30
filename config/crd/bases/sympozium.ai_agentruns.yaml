@@ -2803,6 +2803,13 @@ spec:
                   One of: approved, rejected, rewritten, timeout, error, allowed-by-default.
                   Empty when no gate hook is configured.
                 type: string
+              harnessImageDigest:
+                description: |-
+                  HarnessImageDigest records the digest of the external harness adapter image
+                  that executed this run. Populated only for `task.mode: harness` runs, and
+                  only once the run has been admitted and dispatched. Empty for all other
+                  modes and backends.
+                type: string
               jobName:
                 description: JobName is the name of the Job created for this run.
                 type: string

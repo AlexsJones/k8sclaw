@@ -50,7 +50,7 @@ spec:
     enabled: true
   imagePolicy:
     allowedRegistries:
-      - ghcr.io/acme/my-harness:v1
+      - ghcr.io/acme/my-harness@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 ---
 apiVersion: sympozium.ai/v1alpha1
 kind: Agent
@@ -75,7 +75,7 @@ spec:
   task:
     mode: harness
     parameters:
-      image: ghcr.io/acme/my-harness:v1
+      image: ghcr.io/acme/my-harness@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
       prompt: "Review the latest pull request and comment on code quality"
       capabilities: "persona"
   systemPrompt: "You are a careful reviewer."
@@ -90,7 +90,7 @@ spec:
 
 | Parameter | Required | Meaning |
 |---|---|---|
-| `image` | yes | The adapter image that becomes the pod's primary process. Bounded by `SympoziumPolicy.imagePolicy.allowedRegistries`. |
+| `image` | yes | The adapter image that becomes the pod's primary process. Must be **digest-pinned** (`@sha256:…`); a mutable tag is rejected. Bounded by `SympoziumPolicy.imagePolicy.allowedRegistries`. |
 | `prompt` | yes | The task text. Object-form tasks carry no top-level prompt field, so harness mode takes it from here and sets `TASK` from it. |
 | `capabilities` | no | Comma-separated list of what the image honours. Empty means it claims nothing. |
 | `args` | no | Extra argv, as a **JSON array string** (`'["--profile","headless"]'`). `parameters` is `map[string]string`, so an array has to travel encoded. |
@@ -347,6 +347,12 @@ The harness gate and the image allowlist are separate controls:
 | `harnessPolicy.enabled: true`, but no `imagePolicy` | Harness execution is enabled with no image restriction. This is experimental-only and not recommended for shared clusters. |
 | `harnessPolicy.enabled: true` and `allowedRegistries` is empty | Harness execution is enabled with no image restriction. |
 
+A third, independent control always applies to the image itself: **it must be digest-pinned.**
+A tag-only or otherwise unpinned reference is rejected regardless of the allowlist, because
+`v1` can be retagged under the operator and the harness image is the pod's primary process.
+The digest Sympozium admitted is recorded on `status.harnessImageDigest`, so run detail and
+audit can show exactly which artifact executed rather than which tag was requested.
+
 The check runs in **both** the admission webhook and the controller. The webhook gives the
 better error, at `kubectl apply` time; the controller repeats it because the webhook is a
 separate, optional deployment, and a cluster without it would otherwise have no bound at all
@@ -359,6 +365,7 @@ on which external harness executes. A rejection there fails the run with the ima
 |---|---|
 | `parameters.image` missing | Run fails validation in the controller with the missing-parameter name; no pod is created. |
 | Image outside `allowedRegistries` | **Denied at admission**, naming the image; and again in the controller, which fails the run without creating a Job. |
+| Image not digest-pinned (`:tag`, bare name, truncated digest) | **Denied at admission and by the controller**, naming the digest-pinning requirement; no pod is created. |
 | No explicit `harnessPolicy.enabled: true` | **Denied at admission and by the controller**; no pod is created. |
 | Explicit opt-in but no image allowlist | Admitted with no image restriction; use only for controlled experimentation. |
 | A capability is requested but not declared | **Denied at admission**, naming the mode and the capability. |

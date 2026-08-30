@@ -33,8 +33,10 @@ POLICY_NAME="${INSTANCE_NAME}-policy"
 HARNESS_AUTH_SECRET="${HARNESS_AUTH_SECRET:-}"
 
 # Sympozium builds no harness images, so the test supplies its own. The
-# stand-in below is the smallest thing that honours the adapter contract.
-STANDIN_IMAGE="${HARNESS_STANDIN_IMAGE:-alpine:3.20}"
+# stand-in below is the smallest thing that honours the adapter contract, and
+# it is digest-pinned because harness images must be (a mutable tag is
+# rejected). Override with HARNESS_STANDIN_IMAGE to point at a real adapter.
+STANDIN_IMAGE="${HARNESS_STANDIN_IMAGE:-alpine@sha256:c64c687cbea9300178b30c95835354e34c4e4febc4badfe27102879de0483b5e}"
 
 # LM Studio via node-probe proxy — only used for the Agent's model config; the
 # harness itself is what answers.
@@ -300,6 +302,15 @@ else
   fail "status.tokenUsage is present (${TOKEN_USAGE}); the adapter should omit metrics it cannot source"
 fi
 
+# 6b. The exact artifact that ran is recorded, not the mutable tag.
+EXPECTED_DIGEST="${STANDIN_IMAGE##*@}"
+ACTUAL_DIGEST="$(kubectl get agentrun "$RUN_NAME" -n "$NAMESPACE" -o jsonpath='{.status.harnessImageDigest}' 2>/dev/null || echo "")"
+if [[ "$ACTUAL_DIGEST" == "$EXPECTED_DIGEST" ]]; then
+  pass "status.harnessImageDigest records the exact artifact (${ACTUAL_DIGEST})"
+else
+  fail "status.harnessImageDigest = '${ACTUAL_DIGEST}' (expected '${EXPECTED_DIGEST}')"
+fi
+
 # ── 7. An undeclared capability is rejected at admission ─────────────────────
 #
 # The image below declares only `persona`, so a run that also sets
@@ -382,6 +393,45 @@ else
   fail "admission ACCEPTED mode: harness on backend: celln; the harness image would be silently ignored"
 fi
 rm -f "$CELLNCHECK_STDERR"
+
+# ── 9. A tag-only harness image is rejected at admission ──────────────────────
+#
+# The image becomes the pod's primary process, so a mutable tag is not an
+# acceptable trust anchor. A tag-only reference must be denied before any pod
+# exists, not silently pinned to whatever the tag resolves to today.
+
+info "Checking that a tag-only harness image is rejected at admission"
+TAGCHECK_STDERR="$(mktemp)"
+cat <<EOF | kubectl create --dry-run=server -n "$NAMESPACE" -f - >/dev/null 2>"$TAGCHECK_STDERR" || true
+apiVersion: sympozium.ai/v1alpha1
+kind: AgentRun
+metadata:
+  name: ${RUN_NAME}-tagcheck
+spec:
+  agentRef: ${INSTANCE_NAME}
+  agentId: primary
+  sessionKey: harness-tagcheck
+  task:
+    mode: harness
+    parameters:
+      prompt: "anything"
+      image: alpine:3.20
+  model:
+    provider: openai-compatible
+    model: ${LM_STUDIO_MODEL}
+    baseURL: ${LM_STUDIO_BASE_URL}
+    authSecretRef: ""
+  timeout: "1m"
+EOF
+
+if grep -q "digest-pinned" "$TAGCHECK_STDERR"; then
+  pass "admission denied the tag-only image, naming the digest-pinning requirement"
+elif [[ -s "$TAGCHECK_STDERR" ]]; then
+  fail "run was rejected, but not for the digest-pinning requirement: $(head -c 300 "$TAGCHECK_STDERR")"
+else
+  fail "admission ACCEPTED a tag-only harness image; it must be rejected"
+fi
+rm -f "$TAGCHECK_STDERR"
 
 # ── Summary ──────────────────────────────────────────────────────────────────
 

@@ -170,12 +170,14 @@ concatenation is an injection hole.
 ## Publishing one
 
 Adapters are ordinary container images. Publish yours wherever you like and tell operators to
-add it to `SympoziumPolicy.imagePolicy.allowedRegistries`.
+add it to `SympoziumPolicy.imagePolicy.allowedRegistries` **by digest**. Harness images must be
+digest-pinned (`@sha256:…`) — a mutable tag is rejected at admission and by the controller —
+so publish a stable digest and give operators that, not `:latest`.
 
 Give them a **specific** prefix to add, not just the registry host. That list is matched by
-string prefix, so `docker.io/` admits all of Docker Hub while `ghcr.io/you/my-harness:` admits
-only your releases. Ending the entry at a `/`, a full tag or a digest is what makes it mean
-what it looks like.
+string prefix, so `docker.io/` admits all of Docker Hub while `ghcr.io/you/my-harness@sha256:`
+admits only your releases. Ending the entry at a `/`, a full tag or a digest is what makes it
+mean what it looks like.
 
 Two things worth putting in the README, because operators cannot discover them from the image:
 

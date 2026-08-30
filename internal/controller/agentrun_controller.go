@@ -787,6 +787,13 @@ func (r *AgentRunReconciler) reconcilePending(ctx context.Context, log logr.Logg
 		ar.Status.JobName = job.Name
 		ar.Status.StartedAt = &now
 
+		// Record the exact harness artifact that is about to execute, so run
+		// detail and audit can show which digest ran rather than which tag was
+		// requested.
+		if d := taskmodes.HarnessImageDigest(agentRun.Spec.Task); d != "" {
+			ar.Status.HarnessImageDigest = d
+		}
+
 		// Set the trace ID so operators can look up the full distributed trace.
 		if sc := span.SpanContext(); sc.HasTraceID() {
 			ar.Status.TraceID = sc.TraceID().String()
