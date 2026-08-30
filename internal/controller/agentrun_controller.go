@@ -361,6 +361,25 @@ type agentRunInputs struct {
 	allowedOutboundChannels []string
 }
 
+// agentAllowsModelCredential checks the Agent-owned allowlist for a model
+// Secret. An empty reference is valid for cluster-local and unauthenticated
+// providers. Empty provider on an AuthRef is an explicit provider-agnostic
+// grant by the Agent owner.
+func agentAllowsModelCredential(agent *sympoziumv1alpha1.Agent, provider, secret string) bool {
+	if strings.TrimSpace(secret) == "" {
+		return true
+	}
+	for _, ref := range agent.Spec.AuthRefs {
+		if ref.Secret != secret {
+			continue
+		}
+		if ref.Provider == "" || strings.EqualFold(ref.Provider, provider) {
+			return true
+		}
+	}
+	return false
+}
+
 // resolveAgentRunInputs looks up the backing Agent, folds its configuration into
 // the AgentRun in place (skills, ensemble label, run timeout), and returns the
 // derived values buildAgentPodTemplate needs.
@@ -719,7 +738,6 @@ func (r *AgentRunReconciler) reconcilePending(ctx context.Context, log logr.Logg
 	} else {
 		agentRun.Spec.Task = normalized
 	}
-
 	// Validate against policy
 	if err := r.validatePolicy(ctx, agentRun); err != nil {
 		return ctrl.Result{}, r.failRun(ctx, agentRun, fmt.Sprintf("policy validation failed: %v", err))
@@ -755,6 +773,9 @@ func (r *AgentRunReconciler) reconcilePending(ctx context.Context, log logr.Logg
 		return ctrl.Result{}, r.failRun(ctx, agentRun, fmt.Sprintf(
 			"task.mode %q replaces the agent container, which backend: celln never creates; use the default job backend (or agentSandbox) for this mode",
 			agentRun.Spec.Task.GetMode()))
+	}
+	if taskmodes.HarnessImage(agentRun.Spec.Task) != "" && !agentAllowsModelCredential(&runtimeInstance, agentRun.Spec.Model.Provider, agentRun.Spec.Model.AuthSecretRef) {
+		return ctrl.Result{}, r.failRun(ctx, agentRun, fmt.Sprintf("harness model credential %q is not declared in Agent %q spec.authRefs for provider %q", agentRun.Spec.Model.AuthSecretRef, runtimeInstance.Name, agentRun.Spec.Model.Provider))
 	}
 
 	// Agent Sandbox mode — create Sandbox CR instead of Job.
