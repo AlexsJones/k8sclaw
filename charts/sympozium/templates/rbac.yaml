@@ -28,6 +28,7 @@ rules:
   - apiGroups: ["sympozium.ai"]
     resources:
       - agents
+      - agentruntimes
       - agentruns
       - sympoziumpolicies
       - skillpacks
@@ -40,6 +41,7 @@ rules:
   - apiGroups: ["sympozium.ai"]
     resources:
       - agents/status
+      - agentruntimes/status
       - agentruns/status
       - sympoziumpolicies/status
       - skillpacks/status
@@ -193,6 +195,7 @@ rules:
   - apiGroups: ["sympozium.ai"]
     resources:
       - agents
+      - agentruntimes
       - agentruns
       - sympoziumpolicies
       - skillpacks
@@ -206,6 +209,7 @@ rules:
   - apiGroups: ["sympozium.ai"]
     resources:
       - agents/status
+      - agentruntimes/status
       - agentruns/status
       - sympoziumpolicies/status
       - ensembles/status

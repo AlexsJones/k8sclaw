@@ -359,6 +359,38 @@ separate, optional deployment, and a cluster without it would otherwise have no 
 on which external harness executes. A rejection there fails the run with the image named on
 `status.error`, and no Job is created.
 
+## The `AgentRuntime` resource
+
+Inline `parameters.image` + `parameters.capabilities` on every run is the experimental path.
+The administrator-owned form is an **`AgentRuntime`**: the platform team writes one resource
+that pins the digest, declares the contract version and capabilities, records a support owner
+and conformance status, and a run references it by name instead of repeating those claims.
+
+```yaml
+apiVersion: sympozium.ai/v1alpha1
+kind: AgentRuntime
+metadata:
+  name: codex-v1
+spec:
+  image: ghcr.io/acme/codex-adapter@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  contractVersion: v1alpha1
+  capabilities: [persona]
+  model:
+    provider: anthropic
+    model: claude-sonnet-4-6
+    authSecretRef: acme-codex-key
+  supportOwner: platform-ai@acme.example
+```
+
+The controller validates the runtime and records `status.resolvedImageDigest` plus a `Ready`
+condition. The same rules as inline harness mode apply: the image must be digest-pinned, and
+`outputSchema` / `subagents` / `resume` are rejected because no external runtime can implement
+them safely yet.
+
+Binding a runtime to an Agent — so channels, schedules, ensembles, the API and the UI inherit
+it without object-form task authoring — is the next step on the epic and is **not** wired up
+yet. Until then, runs still author the task inline.
+
 ## Graceful degradation
 
 | Scenario | Behavior |

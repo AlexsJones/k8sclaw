@@ -1,0 +1,37 @@
+# AgentRuntime — an administrator-approved external runtime for agent runs.
+#
+# This is the object-form, admin-owned counterpart to inline `task.mode:
+# harness` parameters. A run references a runtime here instead of naming an
+# image and capability claims itself; the platform then supplies the digest,
+# capabilities, and support owner. See docs/modes/harness.md.
+#
+# The image must be digest-pinned: a mutable tag is rejected, and the digest is
+# recorded on status.resolvedImageDigest for audit.
+apiVersion: sympozium.ai/v1alpha1
+kind: AgentRuntime
+metadata:
+  name: codex-v1
+  namespace: default
+spec:
+  image: ghcr.io/acme/codex-adapter@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  contractVersion: v1alpha1
+  # What this adapter honours. Currently: persona, toolFilter.
+  capabilities:
+    - persona
+  # Default model routing for this runtime. Per-Agent config can still override.
+  model:
+    provider: anthropic
+    model: claude-sonnet-4-6
+    authSecretRef: acme-codex-key
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+  supportOwner: platform-ai@acme.example
+  conformance:
+    status: conformant
+    owner: platform-ai
+    reference: https://acme.example/conformance/codex-v1
