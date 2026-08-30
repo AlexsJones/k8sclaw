@@ -1,5 +1,40 @@
 # Changelog
 
+## [0.10.49](https://github.com/sympozium-ai/sympozium/compare/v0.10.48...v0.10.49) (2026-08-30)
+
+
+### Features
+
+* accelerator power draw from a discovered energy collector ([e5aa1e4](https://github.com/sympozium-ai/sympozium/commit/e5aa1e43369ef987839042d38b7c3b3e6cf87906))
+* **collector+apiserver:** discover energy collectors, expose accelerator power ([a1bcbc2](https://github.com/sympozium-ai/sympozium/commit/a1bcbc2949f631f527e9ce601b991d7ff9e70789))
+* **harness:** add the admin-owned AgentRuntime resource ([155c36f](https://github.com/sympozium-ai/sympozium/commit/155c36f7b4b0fa5d0943defce4ef30f307ecc161))
+* **harness:** add the admin-owned AgentRuntime resource ([c05fd7e](https://github.com/sympozium-ai/sympozium/commit/c05fd7ec94a916a8a4132069c696bb77f71820ed))
+* **harness:** inherit an Agent runtime across all run entrypoints ([480c719](https://github.com/sympozium-ai/sympozium/commit/480c71976190aaaec0b86a4992c538b8d70ec1fa))
+* **harness:** reference an approved AgentRuntime from a run ([0e563f1](https://github.com/sympozium-ai/sympozium/commit/0e563f156ad12877e5a8b97091bd3a199ab3df4c))
+* **harness:** reference an approved AgentRuntime from a run ([9abf37d](https://github.com/sympozium-ai/sympozium/commit/9abf37db01b48ae26547c3ac8a8f7dc73fe6fbd6))
+* **security:** isolate Kubernetes identity per agent run ([f9229d4](https://github.com/sympozium-ai/sympozium/commit/f9229d4b9ce85bc881822ef3010ec0b6672655c1))
+* **security:** isolate Kubernetes identity per AgentRun ([5cd37a7](https://github.com/sympozium-ai/sympozium/commit/5cd37a770df142fca52b6af3de7491829fcc2ec5))
+* **security:** restrict harness NATS access ([925e6d9](https://github.com/sympozium-ai/sympozium/commit/925e6d92ef5a1475d39dc2dd71a1047c53a73ad3))
+* **security:** restrict harness NATS access ([c63a2e5](https://github.com/sympozium-ai/sympozium/commit/c63a2e5a81e8a369068817d27641439bb8ed575d))
+* **web:** live accelerator power on density and topology node views ([52c77a6](https://github.com/sympozium-ai/sympozium/commit/52c77a6e70a79ee3300835b524c812c0741e7030))
+* **web:** simulated accelerator power in the topology demo ([409eceb](https://github.com/sympozium-ai/sympozium/commit/409eceb26961988a3484aab661196f05057433e8))
+
+
+### Bug Fixes
+
+* **eventbus:** bound core NATS publish flushes ([#365](https://github.com/sympozium-ai/sympozium/issues/365)) ([2c90d1b](https://github.com/sympozium-ai/sympozium/commit/2c90d1bee58f366e5f341c7c5a374993de3c3373))
+* **harness:** inherit agent runtimes on normal runs ([058ec37](https://github.com/sympozium-ai/sympozium/commit/058ec3793dd99b59e655b2c5de0d5295116bc642))
+* **harness:** require digest-pinned adapter images ([8636cf9](https://github.com/sympozium-ai/sympozium/commit/8636cf9efb5ccd4fc0ca994ef5ba7b5cbb4e3f8a))
+* **harness:** require digest-pinned adapter images and record the digest ([9a9ce81](https://github.com/sympozium-ai/sympozium/commit/9a9ce8112ead856a3050e1272a435cab21395fb1))
+* **harness:** require explicit policy opt-in ([1326b1f](https://github.com/sympozium-ai/sympozium/commit/1326b1f7a9bbdf177dc7225c0a3f6da2eb110737))
+* **harness:** restrict model credentials to agent allowlist ([44ef22a](https://github.com/sympozium-ai/sympozium/commit/44ef22a5fbe0c38631a86d304047969ad35b2f43))
+* **harness:** restrict model credentials to Agent allowlist ([a8d9ff5](https://github.com/sympozium-ai/sympozium/commit/a8d9ff52ca631e56641d8c169db7fcf55750b129))
+* **ipc:** reconcile pre-existing result files on watch registration ([6e08fd9](https://github.com/sympozium-ai/sympozium/commit/6e08fd92a1d34d01fc95c69d8e098040a7d28390))
+* **memory:** reconcile managed server image ([ee1c92f](https://github.com/sympozium-ai/sympozium/commit/ee1c92f39034b35b48d90100345a2cc3656717f8))
+* **memory:** reconcile managed server image ([00c3ac7](https://github.com/sympozium-ai/sympozium/commit/00c3ac72b589c9e950230f99943db2ace4be0344))
+* **nats:** authenticate density subscriber ([9b0c6fa](https://github.com/sympozium-ai/sympozium/commit/9b0c6fab41b69827268df3454a673f9b3575995c))
+* **rbac:** grant controller and apiserver access to agentruntimes ([94ed965](https://github.com/sympozium-ai/sympozium/commit/94ed965a738b735e3a4851ead6db19225f056e0e))
+
 ## [0.10.48](https://github.com/sympozium-ai/sympozium/compare/v0.10.47...v0.10.48) (2026-08-18)
 
 
