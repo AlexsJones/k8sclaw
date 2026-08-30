@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"strings"
 	"time"
 
@@ -66,10 +67,10 @@ type llmfitInstalledData struct {
 func (fs *DensitySubscriber) Start(ctx context.Context) error {
 	fs.Log.Info("Connecting to NATS for llmfit density events", "url", fs.NATSUrl)
 
-	nc, err := nats.Connect(fs.NATSUrl,
+	opts := []nats.Option{
 		nats.RetryOnFailedConnect(true),
 		nats.MaxReconnects(-1), // Reconnect indefinitely.
-		nats.ReconnectWait(2*time.Second),
+		nats.ReconnectWait(2 * time.Second),
 		nats.DisconnectErrHandler(func(_ *nats.Conn, err error) {
 			if err != nil {
 				fs.Log.Info("NATS disconnected", "error", err)
@@ -78,7 +79,11 @@ func (fs *DensitySubscriber) Start(ctx context.Context) error {
 		nats.ReconnectHandler(func(_ *nats.Conn) {
 			fs.Log.Info("NATS reconnected")
 		}),
-	)
+	}
+	if user, password := os.Getenv("NATS_USERNAME"), os.Getenv("NATS_PASSWORD"); user != "" || password != "" {
+		opts = append(opts, nats.UserInfo(user, password))
+	}
+	nc, err := nats.Connect(fs.NATSUrl, opts...)
 	if err != nil {
 		return err
 	}
