@@ -92,6 +92,21 @@ func (pe *PolicyEnforcer) Handle(ctx context.Context, req admission.Request) adm
 		return admission.Allowed("run is being deleted; skipping policy validation")
 	}
 
+	// Resolve a harness runtime reference into inline image/capabilities before
+	// any other check, so image policy, capability, and digest validation all
+	// see the resolved values rather than a runtime name they cannot use.
+	normalized, err := taskmodes.NormalizeHarnessTask(run.Namespace, run.Spec.Task, func(ns, name string) (*sympoziumv1alpha1.AgentRuntime, error) {
+		var rt sympoziumv1alpha1.AgentRuntime
+		if err := pe.Client.Get(ctx, types.NamespacedName{Namespace: ns, Name: name}, &rt); err != nil {
+			return nil, err
+		}
+		return &rt, nil
+	})
+	if err != nil {
+		return admission.Denied(err.Error())
+	}
+	run.Spec.Task = normalized
+
 	// Look up the owning Agent
 	var instance sympoziumv1alpha1.Agent
 	if err := pe.Client.Get(ctx, types.NamespacedName{

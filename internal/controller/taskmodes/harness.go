@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/api/resource"
 
 	sympoziumv1alpha1 "github.com/sympozium-ai/sympozium/api/v1alpha1"
@@ -93,6 +94,10 @@ const (
 	// operator asserts their image honours. Nothing is assumed: an image
 	// Sympozium did not build gets no claims by default.
 	harnessParamCapabilities = "capabilities"
+	// harnessParamRuntime references an administrator-approved AgentRuntime in
+	// the run's namespace by name. When set, the runtime supplies the image and
+	// capabilities; it is mutually exclusive with the inline harnessParamImage.
+	harnessParamRuntime = "runtime"
 )
 
 // HarnessHandler is the TaskModeHandler for harness mode. It leaves the
@@ -143,17 +148,28 @@ func (h *HarnessHandler) Validate(task *sympoziumv1alpha1.TaskSpec) error {
 		return fmt.Errorf("harness: task is nil")
 	}
 
-	if strings.TrimSpace(task.Parameters[harnessParamImage]) == "" {
-		return fmt.Errorf("harness: task.parameters.%s is required (the adapter image that becomes the pod's primary process; Sympozium ships none)",
-			harnessParamImage)
+	image := strings.TrimSpace(task.Parameters[harnessParamImage])
+	runtimeName := strings.TrimSpace(task.Parameters[harnessParamRuntime])
+
+	if image == "" && runtimeName == "" {
+		return fmt.Errorf("harness: task.parameters requires either %q (an adapter image) or %q (an AgentRuntime reference); Sympozium ships no default",
+			harnessParamImage, harnessParamRuntime)
+	}
+	if image != "" && runtimeName != "" {
+		return fmt.Errorf("harness: set exactly one of task.parameters.%s or task.parameters.%s, not both",
+			harnessParamImage, harnessParamRuntime)
 	}
 
 	// The image becomes the pod's primary process and receives the run's model
 	// and MCP credentials, so a mutable tag is not an acceptable trust anchor:
 	// "v1" can be retagged under the operator. Require a digest-pinned reference
-	// so the exact artifact is fixed and can be recorded on the run.
-	if _, ok := sympoziumv1alpha1.ParseImageDigest(strings.TrimSpace(task.Parameters[harnessParamImage])); !ok {
-		return fmt.Errorf("harness: task.parameters.%s must be a digest-pinned OCI reference (e.g. \"ghcr.io/acme/my-harness@sha256:<64-hex>\"); tag-only or unpinned references are rejected", harnessParamImage)
+	// so the exact artifact is fixed and can be recorded on the run. A runtime
+	// reference skips this here: its image is checked after NormalizeHarnessTask
+	// substitutes it (and the AgentRuntime controller already vets it).
+	if image != "" {
+		if _, ok := sympoziumv1alpha1.ParseImageDigest(image); !ok {
+			return fmt.Errorf("harness: task.parameters.%s must be a digest-pinned OCI reference (e.g. \"ghcr.io/acme/my-harness@sha256:<64-hex>\"); tag-only or unpinned references are rejected", harnessParamImage)
+		}
 	}
 
 	if strings.TrimSpace(task.Parameters[harnessParamPrompt]) == "" {
@@ -297,6 +313,47 @@ func HarnessImageDigest(task *sympoziumv1alpha1.TaskSpec) string {
 	}
 	digest, _ := sympoziumv1alpha1.ParseImageDigest(strings.TrimSpace(task.Parameters[harnessParamImage]))
 	return digest
+}
+
+// NormalizeHarnessTask resolves a harness task's runtime reference into its
+// canonical inline form, so the rest of the pipeline (Validate, image policy,
+// OverrideAgentContainer, digest recording) sees only resolved values. When the
+// task names parameters.runtime, getRuntime fetches the AgentRuntime, its image
+// and capabilities are substituted, and the runtime reference is dropped. A
+// runtime that does not exist or is not Ready fails closed here. Non-harness
+// tasks, string-form tasks, and inline-image harness tasks are returned
+// unchanged.
+func NormalizeHarnessTask(namespace string, task *sympoziumv1alpha1.TaskSpec, getRuntime func(namespace, name string) (*sympoziumv1alpha1.AgentRuntime, error)) (*sympoziumv1alpha1.TaskSpec, error) {
+	if task == nil || task.IsString() || task.GetMode() != Harness {
+		return task, nil
+	}
+	runtimeName := strings.TrimSpace(task.Parameters[harnessParamRuntime])
+	if runtimeName == "" {
+		return task, nil
+	}
+
+	rt, err := getRuntime(namespace, runtimeName)
+	if err != nil {
+		return nil, fmt.Errorf("harness: resolving runtime %q: %w", runtimeName, err)
+	}
+	if !meta.IsStatusConditionTrue(rt.Status.Conditions, sympoziumv1alpha1.AgentRuntimeReadyCondition) {
+		return nil, fmt.Errorf("harness: runtime %q is not Ready; fix the AgentRuntime or choose another", runtimeName)
+	}
+
+	normalized := *task
+	params := make(map[string]string, len(task.Parameters)+2)
+	for k, v := range task.Parameters {
+		if k == harnessParamRuntime {
+			continue
+		}
+		params[k] = v
+	}
+	params[harnessParamImage] = rt.Spec.Image
+	if len(rt.Spec.Capabilities) > 0 {
+		params[harnessParamCapabilities] = strings.Join(rt.Spec.Capabilities, ",")
+	}
+	normalized.Parameters = params
+	return &normalized, nil
 }
 
 // harnessArgs parses task.parameters.args, a JSON array of strings appended

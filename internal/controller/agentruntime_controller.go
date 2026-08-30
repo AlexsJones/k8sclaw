@@ -16,8 +16,6 @@ import (
 	"github.com/sympozium-ai/sympozium/internal/controller/taskmodes"
 )
 
-const agentRuntimeReadyCondition = "Ready"
-
 // AgentRuntimeReconciler reconciles AgentRuntime objects. It is a validation
 // gate, not a deployment controller: the runtime is an external image
 // Sympozium does not run, so the reconciler's job is to verify the spec is
@@ -80,7 +78,7 @@ func (r *AgentRuntimeReconciler) validate(runtime *sympoziumv1alpha1.AgentRuntim
 func (r *AgentRuntimeReconciler) updateStatus(ctx context.Context, runtime *sympoziumv1alpha1.AgentRuntime, digest, reason string) (ctrl.Result, error) {
 	if digest != "" {
 		meta.SetStatusCondition(&runtime.Status.Conditions, metav1.Condition{
-			Type:               agentRuntimeReadyCondition,
+			Type:               sympoziumv1alpha1.AgentRuntimeReadyCondition,
 			Status:             metav1.ConditionTrue,
 			Reason:             "Validated",
 			Message:            "spec validated; runtime is ready to bind",
@@ -89,7 +87,7 @@ func (r *AgentRuntimeReconciler) updateStatus(ctx context.Context, runtime *symp
 		runtime.Status.ResolvedImageDigest = digest
 	} else {
 		meta.SetStatusCondition(&runtime.Status.Conditions, metav1.Condition{
-			Type:               agentRuntimeReadyCondition,
+			Type:               sympoziumv1alpha1.AgentRuntimeReadyCondition,
 			Status:             metav1.ConditionFalse,
 			Reason:             "Invalid",
 			Message:            reason,

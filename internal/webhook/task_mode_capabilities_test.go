@@ -131,6 +131,64 @@ func TestPolicyEnforcer_RejectsUnpinnedHarnessImage(t *testing.T) {
 	}
 }
 
+// A harness run may reference an admin-approved AgentRuntime by name instead of
+// naming an image. Admission resolves the runtime and applies the same image
+// and capability checks to the resolved values.
+func TestPolicyEnforcer_ResolvesRuntimeReference(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := sympoziumv1alpha1.AddToScheme(scheme); err != nil {
+		t.Fatalf("add scheme: %v", err)
+	}
+	agent := &sympoziumv1alpha1.Agent{
+		ObjectMeta: metav1.ObjectMeta{Name: "inst", Namespace: "default"},
+		Spec:       sympoziumv1alpha1.AgentSpec{PolicyRef: "harness-enabled"},
+	}
+	policy := &sympoziumv1alpha1.SympoziumPolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: "harness-enabled", Namespace: "default"},
+		Spec: sympoziumv1alpha1.SympoziumPolicySpec{
+			HarnessPolicy: &sympoziumv1alpha1.HarnessPolicySpec{Enabled: true},
+		},
+	}
+	runtimeObj := &sympoziumv1alpha1.AgentRuntime{
+		ObjectMeta: metav1.ObjectMeta{Name: "codex-v1", Namespace: "default"},
+		Spec: sympoziumv1alpha1.AgentRuntimeSpec{
+			Image:        "ghcr.io/acme/codex-adapter@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			Capabilities: []string{taskmodes.CapabilityPersona},
+		},
+		Status: sympoziumv1alpha1.AgentRuntimeStatus{
+			Conditions: []metav1.Condition{{Type: sympoziumv1alpha1.AgentRuntimeReadyCondition, Status: metav1.ConditionTrue, Reason: "Validated"}},
+		},
+	}
+	cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(agent, policy, runtimeObj).Build()
+	pe := &PolicyEnforcer{Client: cl, Log: logr.Discard(), Decoder: decoderFor(t, scheme)}
+
+	run := capabilityRun(&sympoziumv1alpha1.TaskSpec{
+		Mode:       taskmodes.Harness,
+		Parameters: map[string]string{"prompt": "do it", "runtime": "codex-v1"},
+	})
+	run.Spec.SystemPrompt = "You are a careful reviewer."
+
+	resp := pe.Handle(context.Background(), admissionRequestFor(t, run))
+	if !resp.Allowed {
+		t.Fatalf("expected ALLOW for a ready runtime reference; denied: %s", resp.Result.Message)
+	}
+}
+
+// A run referencing a runtime that does not exist (or is not Ready) fails
+// closed at admission rather than admitting an unresolved image.
+func TestPolicyEnforcer_RejectsMissingRuntime(t *testing.T) {
+	pe := capabilityEnforcer(t)
+	run := capabilityRun(&sympoziumv1alpha1.TaskSpec{
+		Mode:       taskmodes.Harness,
+		Parameters: map[string]string{"prompt": "do it", "runtime": "nope"},
+	})
+
+	resp := pe.Handle(context.Background(), admissionRequestFor(t, run))
+	if resp.Allowed || !strings.Contains(resp.Result.Message, "runtime") {
+		t.Fatalf("response allowed=%v message=%q, want runtime-resolution denial", resp.Allowed, resp.Result.Message)
+	}
+}
+
 // An image that declares nothing gets nothing: a run asking for enforcement
 // the image never claimed is denied rather than admitted and degraded.
 func TestPolicyEnforcer_DeniesUnsupportedCapability(t *testing.T) {

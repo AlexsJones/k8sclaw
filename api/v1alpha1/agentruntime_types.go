@@ -5,6 +5,12 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+// AgentRuntimeReadyCondition is the condition type the AgentRuntime controller
+// sets when the spec validates (image digest-pinned, capabilities supported).
+// Admission and the AgentRun reconciler check it before binding a runtime to a
+// run, so a runtime referenced by name fails closed until it is Ready.
+const AgentRuntimeReadyCondition = "Ready"
+
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
 // +kubebuilder:printcolumn:name="Digest",type=string,JSONPath=`.status.resolvedImageDigest`
