@@ -28,14 +28,15 @@ const systemNamespace = "sympozium-system"
 
 // reservedVolumeNames mirrors the controller-side reservedVolumeNames helper.
 var reservedVolumeNames = map[string]struct{}{
-	"workspace":     {},
-	"ipc":           {},
-	"skills":        {},
-	"tmp":           {},
-	"memory":        {},
-	"mcp-config":    {},
-	"sidecar-tools": {},
-	"harness-home":  {},
+	"workspace":                {},
+	"ipc":                      {},
+	"skills":                   {},
+	"tmp":                      {},
+	"memory":                   {},
+	"mcp-config":               {},
+	"sidecar-tools":            {},
+	"harness-home":             {},
+	"sympozium-run-api-access": {},
 }
 
 // builtinToolNames are the tool names Sympozium may register for the agent
@@ -146,6 +147,9 @@ func (pe *PolicyEnforcer) Handle(ctx context.Context, req admission.Request) adm
 		return admission.Denied(err.Error())
 	}
 	if err := taskmodes.ValidateRunCompatibility(run); err != nil {
+		return admission.Denied(err.Error())
+	}
+	if err := pe.validateHarnessIsolation(ctx, run); err != nil {
 		return admission.Denied(err.Error())
 	}
 
@@ -293,7 +297,7 @@ func (pe *PolicyEnforcer) validateVolumes(ctx context.Context, run *sympoziumv1a
 
 	for _, v := range run.Spec.Volumes {
 		if _, reserved := reservedVolumeNames[v.Name]; reserved {
-			return fmt.Errorf("AgentRun.spec.volumes[%q]: name is reserved by Sympozium (reserved: workspace, ipc, skills, tmp, memory, mcp-config)", v.Name)
+			return fmt.Errorf("AgentRun.spec.volumes[%q]: name is reserved by Sympozium (including workspace, ipc, skills, tmp, memory, mcp-config, and sympozium-run-api-access)", v.Name)
 		}
 		declarations[v.Name] = append(declarations[v.Name], volumeOrigin{
 			source: "AgentRun.spec.volumes",
@@ -320,7 +324,7 @@ func (pe *PolicyEnforcer) validateVolumes(ctx context.Context, run *sympoziumv1a
 		}
 		for _, v := range sp.Spec.Sidecar.Volumes {
 			if _, reserved := reservedVolumeNames[v.Name]; reserved {
-				return fmt.Errorf("SkillPack %q sidecar volume %q: name is reserved by Sympozium (reserved: workspace, ipc, skills, tmp, memory, mcp-config)", spName, v.Name)
+				return fmt.Errorf("SkillPack %q sidecar volume %q: name is reserved by Sympozium (including workspace, ipc, skills, tmp, memory, mcp-config, and sympozium-run-api-access)", spName, v.Name)
 			}
 			declarations[v.Name] = append(declarations[v.Name], volumeOrigin{
 				source: fmt.Sprintf("SkillPack/%s.spec.sidecar.volumes", spName),
@@ -484,6 +488,34 @@ func toolParameterSchema(raw []byte) (map[string]json.RawMessage, map[string]str
 // controller with the supported-mode list.
 func (pe *PolicyEnforcer) validateTaskModeCapabilities(run *sympoziumv1alpha1.AgentRun) error {
 	return taskmodes.ValidateCapabilities(run)
+}
+
+// validateHarnessIsolation rejects privilege sources that would apply at pod
+// scope or can communicate through storage shared with an external runtime.
+// The controller repeats this check for clusters that run without admission.
+func (pe *PolicyEnforcer) validateHarnessIsolation(ctx context.Context, run *sympoziumv1alpha1.AgentRun) error {
+	if taskmodes.HarnessImage(run.Spec.Task) == "" {
+		return nil
+	}
+	if run.Spec.Lifecycle != nil && len(run.Spec.Lifecycle.RBAC) > 0 {
+		return fmt.Errorf("task.mode %q cannot be combined with lifecycle RBAC because hooks share run storage with the external runtime", taskmodes.Harness)
+	}
+	for _, ref := range run.Spec.Skills {
+		if ref.SkillPackRef == "" {
+			continue
+		}
+		name := strings.TrimPrefix(ref.SkillPackRef, "skillpack-")
+		pack := &sympoziumv1alpha1.SkillPack{}
+		if err := pe.Client.Get(ctx, types.NamespacedName{Namespace: run.Namespace, Name: name}, pack); err != nil {
+			if err := pe.Client.Get(ctx, types.NamespacedName{Namespace: systemNamespace, Name: name}, pack); err != nil {
+				continue
+			}
+		}
+		if pack.Spec.Sidecar != nil && pack.Spec.Sidecar.HostAccess != nil && pack.Spec.Sidecar.HostAccess.Enabled {
+			return fmt.Errorf("task.mode %q cannot be combined with SkillPack %q host access, host networking, host PID, or privileged execution", taskmodes.Harness, name)
+		}
+	}
+	return nil
 }
 
 // validateTaskModeBackend rejects a task mode that replaces the agent

@@ -447,6 +447,9 @@ func TestValidateRunCompatibility_RejectsAgentRunnerOnlyControls(t *testing.T) {
 		{name: "server", mutate: func(r *sympoziumv1alpha1.AgentRun) { r.Spec.Mode = "server" }, want: "mode=server"},
 		{name: "dry-run", mutate: func(r *sympoziumv1alpha1.AgentRun) { r.Spec.DryRun = true }, want: "dryRun"},
 		{name: "canary", mutate: func(r *sympoziumv1alpha1.AgentRun) { r.Spec.CanaryMode = true }, want: "canaryMode"},
+		{name: "warm pool", mutate: func(r *sympoziumv1alpha1.AgentRun) {
+			r.Spec.AgentSandbox = &sympoziumv1alpha1.AgentSandboxSpec{Enabled: true, WarmPoolRef: "wp-test"}
+		}, want: "agentSandbox.warmPoolRef"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			run := &sympoziumv1alpha1.AgentRun{Spec: sympoziumv1alpha1.AgentRunSpec{Task: harnessTask(nil)}}

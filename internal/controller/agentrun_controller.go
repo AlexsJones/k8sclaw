@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -91,6 +92,12 @@ var (
 
 const agentRunFinalizer = "sympozium.ai/agentrun-finalizer"
 const systemNamespace = "sympozium-system"
+
+const (
+	legacyAgentServiceAccountName = "sympozium-agent"
+	runAPIAccessVolumeName        = "sympozium-run-api-access"
+	runAPIAccessMountPath         = "/var/run/secrets/kubernetes.io/serviceaccount"
+)
 
 // tokenBudgetCountedAnnotation marks an AgentRun whose token usage has already
 // been aggregated into its ensemble's budget, so repeated reconciles of the
@@ -481,8 +488,10 @@ func (r *AgentRunReconciler) prepareRunPrerequisites(
 ) (runPrerequisites, error) {
 	var out runPrerequisites
 
-	// Ensure the sympozium-agent ServiceAccount exists in the target namespace.
-	if err := r.ensureAgentServiceAccount(ctx, agentRun.Namespace); err != nil {
+	// Give every AgentRun its own Kubernetes identity. The namespace-level
+	// sympozium-agent account is retained only as an annotation template for
+	// workload-identity integrations; no run pod executes as that shared account.
+	if err := r.ensureAgentServiceAccount(ctx, agentRun); err != nil {
 		return out, fmt.Errorf("ensuring agent service account: %w", err)
 	}
 
@@ -546,6 +555,9 @@ func (r *AgentRunReconciler) prepareTaskPrerequisites(
 			log.V(1).Info("Skipping server-only sidecar in task mode", "skillPack", sc.skillPackName)
 		}
 	}
+	if err := validateHarnessIsolation(agentRun, sidecars); err != nil {
+		return nil, &ctrl.Result{}, r.failRun(ctx, agentRun, err.Error())
+	}
 
 	// Write the native sidecar-tools manifest as a read-only ConfigMap when any
 	// attached sidecar declares tools. The definitions come from the SkillPack CRD
@@ -606,6 +618,10 @@ func (r *AgentRunReconciler) prepareTaskPrerequisites(
 	//   - Clock skew between cluster nodes (`date` on each node vs NTP)
 	//   - Controller ClusterRole missing RBAC delegation permissions
 	//     (re-run `helm upgrade` to sync the latest chart RBAC)
+	if err := r.ensureCanaryRBAC(ctx, agentRun); err != nil {
+		return nil, &ctrl.Result{}, r.failRun(ctx, agentRun,
+			fmt.Sprintf("failed to create isolated canary RBAC: %v", err))
+	}
 	if err := r.ensureSkillRBAC(ctx, log, agentRun, sidecars); err != nil {
 		return nil, &ctrl.Result{}, r.failRun(ctx, agentRun,
 			fmt.Sprintf("failed to create skill RBAC — the agent would run without Kubernetes permissions. "+
@@ -1893,8 +1909,8 @@ func (r *AgentRunReconciler) reconcileDelete(ctx context.Context, log logr.Logge
 func (r *AgentRunReconciler) reconcilePendingServer(ctx context.Context, log logr.Logger, agentRun *sympoziumv1alpha1.AgentRun, sidecars []resolvedSidecar) (ctrl.Result, error) {
 	log.Info("Reconciling pending server-mode AgentRun")
 
-	// Ensure ServiceAccount exists.
-	if err := r.ensureAgentServiceAccount(ctx, agentRun.Namespace); err != nil {
+	// Ensure this server-mode run has the same isolated identity as task runs.
+	if err := r.ensureAgentServiceAccount(ctx, agentRun); err != nil {
 		return ctrl.Result{}, fmt.Errorf("ensuring agent service account: %w", err)
 	}
 
@@ -2010,10 +2026,11 @@ func (r *AgentRunReconciler) reconcilePendingServer(ctx context.Context, log log
 					Labels: labels,
 				},
 				Spec: corev1.PodSpec{
-					RestartPolicy:      corev1.RestartPolicyAlways,
-					ServiceAccountName: "sympozium-agent",
-					ImagePullSecrets:   agentRun.Spec.ImagePullSecrets,
-					NodeSelector:       agentRun.Spec.Model.NodeSelector,
+					RestartPolicy:                corev1.RestartPolicyAlways,
+					ServiceAccountName:           agentRunServiceAccountName(agentRun),
+					AutomountServiceAccountToken: boolPtr(false),
+					ImagePullSecrets:             agentRun.Spec.ImagePullSecrets,
+					NodeSelector:                 agentRun.Spec.Model.NodeSelector,
 					Containers: []corev1.Container{
 						{
 							Name:            "web-proxy",
@@ -2061,6 +2078,10 @@ func (r *AgentRunReconciler) reconcilePendingServer(ctx context.Context, log log
 				},
 			},
 		},
+	}
+	if len(serverSidecar.sidecar.RBAC) > 0 || len(serverSidecar.sidecar.ClusterRBAC) > 0 {
+		deploy.Spec.Template.Spec.Volumes = append(deploy.Spec.Template.Spec.Volumes, runAPIAccessVolume())
+		mountRunAPIAccess(&deploy.Spec.Template.Spec.Containers[0])
 	}
 
 	if err := controllerutil.SetControllerReference(agentRun, deploy, r.Scheme); err != nil {
@@ -2404,32 +2425,85 @@ func (r *AgentRunReconciler) validatePolicy(ctx context.Context, agentRun *sympo
 	return nil
 }
 
-// ensureAgentServiceAccount creates the sympozium-agent ServiceAccount in the
-// given namespace if it does not already exist. This is needed because agent
-// Jobs reference this SA and run in the user's namespace, not sympozium-system.
-func (r *AgentRunReconciler) ensureAgentServiceAccount(ctx context.Context, namespace string) error {
+// agentRunServiceAccountName returns the identity used only by this AgentRun.
+// AgentRun names already satisfy Kubernetes DNS-subdomain requirements.
+func agentRunServiceAccountName(agentRun *sympoziumv1alpha1.AgentRun) string {
+	const maxDNSSubdomainLength = 253
+	name := "sympozium-run-" + agentRun.Name
+	if len(name) <= maxDNSSubdomainLength {
+		return name
+	}
+	sum := sha256.Sum256([]byte(agentRun.Name))
+	suffix := fmt.Sprintf("-%x", sum[:8])
+	return strings.TrimRight(name[:maxDNSSubdomainLength-len(suffix)], "-") + suffix
+}
+
+// ensureAgentServiceAccount creates a unique ServiceAccount owned by the run.
+// If the legacy namespace-level account exists, its annotations are copied so
+// existing cloud workload-identity configuration continues to apply. The
+// shared account itself is never selected by an AgentRun pod or RoleBinding.
+func (r *AgentRunReconciler) ensureAgentServiceAccount(ctx context.Context, agentRun *sympoziumv1alpha1.AgentRun) error {
+	name := agentRunServiceAccountName(agentRun)
 	sa := &corev1.ServiceAccount{}
-	err := r.Get(ctx, client.ObjectKey{Name: "sympozium-agent", Namespace: namespace}, sa)
+	err := r.Get(ctx, client.ObjectKey{Name: name, Namespace: agentRun.Namespace}, sa)
 	if err == nil {
-		return nil // already exists
+		return nil
 	}
 	if !errors.IsNotFound(err) {
-		return fmt.Errorf("checking for agent service account: %w", err)
+		return fmt.Errorf("checking for run service account: %w", err)
 	}
+
+	annotations := map[string]string{}
+	template := &corev1.ServiceAccount{}
+	if err := r.Get(ctx, client.ObjectKey{Name: legacyAgentServiceAccountName, Namespace: agentRun.Namespace}, template); errors.IsNotFound(err) {
+		automount := false
+		template = &corev1.ServiceAccount{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      legacyAgentServiceAccountName,
+				Namespace: agentRun.Namespace,
+				Labels: map[string]string{
+					"sympozium.ai/component":       "identity-template",
+					"app.kubernetes.io/managed-by": "sympozium-controller",
+				},
+			},
+			AutomountServiceAccountToken: &automount,
+		}
+		if err := r.Create(ctx, template); err != nil && !errors.IsAlreadyExists(err) {
+			return fmt.Errorf("creating service account annotation template: %w", err)
+		}
+		if err := r.Get(ctx, client.ObjectKey{Name: legacyAgentServiceAccountName, Namespace: agentRun.Namespace}, template); err != nil {
+			return fmt.Errorf("reading service account annotation template: %w", err)
+		}
+	} else if err != nil {
+		return fmt.Errorf("checking service account annotation template: %w", err)
+	}
+	if template != nil {
+		for key, value := range template.Annotations {
+			annotations[key] = value
+		}
+	}
+
+	automount := false
 	sa = &corev1.ServiceAccount{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "sympozium-agent",
-			Namespace: namespace,
+			Name:        name,
+			Namespace:   agentRun.Namespace,
+			Annotations: annotations,
 			Labels: map[string]string{
-				"app.kubernetes.io/managed-by": "sympozium",
+				"sympozium.ai/agent-run":       agentRun.Name,
+				"app.kubernetes.io/managed-by": "sympozium-controller",
 			},
 		},
+		AutomountServiceAccountToken: &automount,
+	}
+	if err := controllerutil.SetControllerReference(agentRun, sa, r.Scheme); err != nil {
+		return fmt.Errorf("setting run service account owner: %w", err)
 	}
 	if err := r.Create(ctx, sa); err != nil {
 		if errors.IsAlreadyExists(err) {
 			return nil
 		}
-		return fmt.Errorf("creating agent service account: %w", err)
+		return fmt.Errorf("creating run service account: %w", err)
 	}
 	return nil
 }
@@ -2503,13 +2577,14 @@ func (r *AgentRunReconciler) buildAgentPodTemplate(
 			Labels: agentPodLabels(agentRun),
 		},
 		Spec: corev1.PodSpec{
-			RestartPolicy:      corev1.RestartPolicyNever,
-			ServiceAccountName: "sympozium-agent",
-			ImagePullSecrets:   agentRun.Spec.ImagePullSecrets,
-			HostNetwork:        hostNetwork,
-			HostPID:            hostPID,
-			DNSPolicy:          dnsPolicy,
-			NodeSelector:       agentRun.Spec.Model.NodeSelector,
+			RestartPolicy:                corev1.RestartPolicyNever,
+			ServiceAccountName:           agentRunServiceAccountName(agentRun),
+			AutomountServiceAccountToken: boolPtr(false),
+			ImagePullSecrets:             agentRun.Spec.ImagePullSecrets,
+			HostNetwork:                  hostNetwork,
+			HostPID:                      hostPID,
+			DNSPolicy:                    dnsPolicy,
+			NodeSelector:                 agentRun.Spec.Model.NodeSelector,
 			SecurityContext: &corev1.PodSecurityContext{
 				RunAsNonRoot:   &runAsNonRoot,
 				RunAsUser:      &runAsUser,
@@ -2525,6 +2600,7 @@ func (r *AgentRunReconciler) buildAgentPodTemplate(
 	// Shared pod mutators (shared memory, relationship context, subagents, …),
 	// registered in agentrun_pod_mutators.go.
 	r.applyPodMutators(ctx, agentRun, &tmpl.Spec)
+	configureRunAPIAccess(agentRun, sidecars, &tmpl.Spec)
 
 	return tmpl, nil
 }
@@ -3751,7 +3827,6 @@ func (r *AgentRunReconciler) buildVolumes(agentRun *sympoziumv1alpha1.AgentRun, 
 			},
 		},
 	}
-
 	// Build skills projected volume from skill references
 	var sources []corev1.VolumeProjection
 	for _, skill := range agentRun.Spec.Skills {
@@ -3965,14 +4040,15 @@ func (r *AgentRunReconciler) buildVolumes(agentRun *sympoziumv1alpha1.AgentRun, 
 // on every agent pod. User-supplied volumes/mounts with these names are
 // silently skipped to prevent accidental clobbering of core functionality.
 var reservedVolumeNames = map[string]struct{}{
-	"workspace":     {},
-	"ipc":           {},
-	"skills":        {},
-	"tmp":           {},
-	"memory":        {},
-	"mcp-config":    {},
-	"sidecar-tools": {},
-	"harness-home":  {},
+	"workspace":            {},
+	"ipc":                  {},
+	"skills":               {},
+	"tmp":                  {},
+	"memory":               {},
+	"mcp-config":           {},
+	"sidecar-tools":        {},
+	"harness-home":         {},
+	runAPIAccessVolumeName: {},
 }
 
 func isReservedVolumeName(name string) bool {
@@ -4029,8 +4105,96 @@ func hostAccessVolumeName(skillPackName string, index int) string {
 	return name
 }
 
+// runAPIAccessVolume reproduces the bounded Kubernetes API credential volume
+// normally injected by the service-account admission plugin, but keeps it
+// under controller control so it can be mounted only into declared trusted
+// sidecars. The token is pod-bound and uses Kubernetes' minimum commonly
+// supported lifetime (10 minutes).
+func runAPIAccessVolume() corev1.Volume {
+	expirationSeconds := int64(600)
+	optional := false
+	return corev1.Volume{
+		Name: runAPIAccessVolumeName,
+		VolumeSource: corev1.VolumeSource{
+			Projected: &corev1.ProjectedVolumeSource{
+				DefaultMode: int32Ptr(0o444),
+				Sources: []corev1.VolumeProjection{
+					{
+						ServiceAccountToken: &corev1.ServiceAccountTokenProjection{
+							Path:              "token",
+							ExpirationSeconds: &expirationSeconds,
+						},
+					},
+					{
+						ConfigMap: &corev1.ConfigMapProjection{
+							LocalObjectReference: corev1.LocalObjectReference{Name: "kube-root-ca.crt"},
+							Items:                []corev1.KeyToPath{{Key: "ca.crt", Path: "ca.crt"}},
+							Optional:             &optional,
+						},
+					},
+					{
+						DownwardAPI: &corev1.DownwardAPIProjection{
+							Items: []corev1.DownwardAPIVolumeFile{{
+								Path:     "namespace",
+								FieldRef: &corev1.ObjectFieldSelector{FieldPath: "metadata.namespace"},
+							}},
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
+func mountRunAPIAccess(container *corev1.Container) {
+	container.VolumeMounts = append(container.VolumeMounts, corev1.VolumeMount{
+		Name:      runAPIAccessVolumeName,
+		MountPath: runAPIAccessMountPath,
+		ReadOnly:  true,
+	})
+}
+
+// configureRunAPIAccess leaves automatic token mounting disabled for every
+// container, then explicitly projects a short-lived token only into SkillPack
+// sidecars and lifecycle hooks that declared Kubernetes RBAC. In particular,
+// the primary agent/harness and ipc-bridge never receive Kubernetes credentials.
+func configureRunAPIAccess(agentRun *sympoziumv1alpha1.AgentRun, sidecars []resolvedSidecar, podSpec *corev1.PodSpec) {
+	trustedContainers := map[string]struct{}{}
+	if agentRun.Spec.CanaryMode {
+		trustedContainers["agent"] = struct{}{}
+	}
+	for _, sidecar := range sidecars {
+		if len(sidecar.sidecar.RBAC) > 0 || len(sidecar.sidecar.ClusterRBAC) > 0 {
+			trustedContainers["skill-"+sidecar.skillPackName] = struct{}{}
+		}
+	}
+	trustedInitContainers := map[string]struct{}{}
+	if agentRun.Spec.Lifecycle != nil && len(agentRun.Spec.Lifecycle.RBAC) > 0 {
+		for _, hook := range agentRun.Spec.Lifecycle.PreRun {
+			trustedInitContainers["pre-"+hook.Name] = struct{}{}
+		}
+	}
+
+	if len(trustedContainers) == 0 && len(trustedInitContainers) == 0 {
+		return
+	}
+	podSpec.Volumes = append(podSpec.Volumes, runAPIAccessVolume())
+	for i := range podSpec.Containers {
+		if _, ok := trustedContainers[podSpec.Containers[i].Name]; ok {
+			mountRunAPIAccess(&podSpec.Containers[i])
+		}
+	}
+	for i := range podSpec.InitContainers {
+		if _, ok := trustedInitContainers[podSpec.InitContainers[i].Name]; ok {
+			mountRunAPIAccess(&podSpec.InitContainers[i])
+		}
+	}
+}
+
 // boolPtr returns a pointer to a bool.
 func boolPtr(b bool) *bool { return &b }
+
+func int32Ptr(i int32) *int32 { return &i }
 
 // agentRunHasMemorySkill returns true if the AgentRun references the "memory" SkillPack.
 func agentRunHasMemorySkill(agentRun *sympoziumv1alpha1.AgentRun) bool {
@@ -4697,7 +4861,7 @@ func (r *AgentRunReconciler) ensureSkillRBAC(ctx context.Context, log logr.Logge
 			if err := controllerutil.SetControllerReference(agentRun, role, r.Scheme); err != nil {
 				log.Error(err, "Failed to set owner on Role")
 			}
-			if err := r.Create(ctx, role); err != nil && !errors.IsAlreadyExists(err) {
+			if err := r.reconcileRole(ctx, role); err != nil {
 				return fmt.Errorf("creating skill Role %s: %w", roleName, err)
 			}
 
@@ -4719,7 +4883,7 @@ func (r *AgentRunReconciler) ensureSkillRBAC(ctx context.Context, log logr.Logge
 				Subjects: []rbacv1.Subject{
 					{
 						Kind:      "ServiceAccount",
-						Name:      "sympozium-agent",
+						Name:      agentRunServiceAccountName(agentRun),
 						Namespace: agentRun.Namespace,
 					},
 				},
@@ -4727,7 +4891,7 @@ func (r *AgentRunReconciler) ensureSkillRBAC(ctx context.Context, log logr.Logge
 			if err := controllerutil.SetControllerReference(agentRun, rb, r.Scheme); err != nil {
 				log.Error(err, "Failed to set owner on RoleBinding")
 			}
-			if err := r.Create(ctx, rb); err != nil && !errors.IsAlreadyExists(err) {
+			if err := r.reconcileRoleBinding(ctx, rb); err != nil {
 				return fmt.Errorf("creating skill RoleBinding %s: %w", roleName, err)
 			}
 			log.Info("Created skill RBAC (namespaced)", "role", roleName, "skill", sc.skillPackName)
@@ -4756,7 +4920,7 @@ func (r *AgentRunReconciler) ensureSkillRBAC(ctx context.Context, log logr.Logge
 				},
 				Rules: rules,
 			}
-			if err := r.Create(ctx, cr); err != nil && !errors.IsAlreadyExists(err) {
+			if err := r.reconcileClusterRole(ctx, cr); err != nil {
 				return fmt.Errorf("creating skill ClusterRole %s: %w", crName, err)
 			}
 
@@ -4777,12 +4941,12 @@ func (r *AgentRunReconciler) ensureSkillRBAC(ctx context.Context, log logr.Logge
 				Subjects: []rbacv1.Subject{
 					{
 						Kind:      "ServiceAccount",
-						Name:      "sympozium-agent",
+						Name:      agentRunServiceAccountName(agentRun),
 						Namespace: agentRun.Namespace,
 					},
 				},
 			}
-			if err := r.Create(ctx, crb); err != nil && !errors.IsAlreadyExists(err) {
+			if err := r.reconcileClusterRoleBinding(ctx, crb); err != nil {
 				return fmt.Errorf("creating skill ClusterRoleBinding %s: %w", crName, err)
 			}
 			log.Info("Created skill RBAC (cluster)", "clusterRole", crName, "skill", sc.skillPackName)
@@ -4791,10 +4955,72 @@ func (r *AgentRunReconciler) ensureSkillRBAC(ctx context.Context, log logr.Logge
 	return nil
 }
 
+// validateHarnessIsolation rejects pod-level privilege combinations that an
+// external primary container would inherit or could reach through shared
+// volumes. These combinations remain unavailable until they have a mediated
+// boundary of their own.
+func validateHarnessIsolation(agentRun *sympoziumv1alpha1.AgentRun, sidecars []resolvedSidecar) error {
+	if taskmodes.HarnessImage(agentRun.Spec.Task) == "" {
+		return nil
+	}
+	if agentRun.Spec.Lifecycle != nil && len(agentRun.Spec.Lifecycle.RBAC) > 0 {
+		return fmt.Errorf("task.mode %q cannot be combined with lifecycle RBAC because hooks share run storage with the external runtime", taskmodes.Harness)
+	}
+	for _, sidecar := range sidecars {
+		if sidecar.sidecar.HostAccess != nil && sidecar.sidecar.HostAccess.Enabled {
+			return fmt.Errorf("task.mode %q cannot be combined with SkillPack %q host access, host networking, host PID, or privileged execution", taskmodes.Harness, sidecar.skillPackName)
+		}
+	}
+	return nil
+}
+
+// ensureCanaryRBAC grants the trusted built-in canary runner its fixed health
+// check permissions through the same per-run identity boundary as SkillPacks.
+// Harness mode rejects canaryMode, so this token can never land in an external
+// runtime container.
+func (r *AgentRunReconciler) ensureCanaryRBAC(ctx context.Context, agentRun *sympoziumv1alpha1.AgentRun) error {
+	if !agentRun.Spec.CanaryMode {
+		return nil
+	}
+
+	name := "sympozium-canary-" + agentRun.Name
+	labels := map[string]string{
+		"sympozium.ai/agent-run":  agentRun.Name,
+		"sympozium.ai/component":  "canary",
+		"sympozium.ai/managed-by": "sympozium",
+	}
+	role := &rbacv1.ClusterRole{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Labels: labels},
+		Rules: []rbacv1.PolicyRule{
+			{APIGroups: []string{""}, Resources: []string{"nodes"}, Verbs: []string{"get", "list"}},
+			{APIGroups: []string{"sympozium.ai"}, Resources: []string{"sympoziumschedules", "mcpservers"}, Verbs: []string{"get", "list"}},
+		},
+	}
+	if err := r.reconcileClusterRole(ctx, role); err != nil {
+		return fmt.Errorf("creating canary ClusterRole %s: %w", name, err)
+	}
+	binding := &rbacv1.ClusterRoleBinding{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Labels: labels},
+		RoleRef: rbacv1.RoleRef{
+			APIGroup: "rbac.authorization.k8s.io",
+			Kind:     "ClusterRole",
+			Name:     name,
+		},
+		Subjects: []rbacv1.Subject{{
+			Kind:      "ServiceAccount",
+			Name:      agentRunServiceAccountName(agentRun),
+			Namespace: agentRun.Namespace,
+		}},
+	}
+	if err := r.reconcileClusterRoleBinding(ctx, binding); err != nil {
+		return fmt.Errorf("creating canary ClusterRoleBinding %s: %w", name, err)
+	}
+	return nil
+}
+
 // ensureLifecycleRBAC creates namespace-scoped Role and RoleBinding for lifecycle
-// hook containers. This grants the "sympozium-agent" ServiceAccount the permissions
-// specified in lifecycle.rbac, so hook containers can interact with Kubernetes
-// resources (e.g., create/delete ConfigMaps).
+// hook containers. This grants only the current AgentRun's ServiceAccount the
+// requested permissions, preventing permission union across concurrent runs.
 func (r *AgentRunReconciler) ensureLifecycleRBAC(ctx context.Context, log logr.Logger, agentRun *sympoziumv1alpha1.AgentRun) error {
 	if agentRun.Spec.Lifecycle == nil || len(agentRun.Spec.Lifecycle.RBAC) == 0 {
 		return nil
@@ -4825,7 +5051,7 @@ func (r *AgentRunReconciler) ensureLifecycleRBAC(ctx context.Context, log logr.L
 	if err := controllerutil.SetControllerReference(agentRun, role, r.Scheme); err != nil {
 		log.Error(err, "Failed to set owner on lifecycle Role")
 	}
-	if err := r.Create(ctx, role); err != nil && !errors.IsAlreadyExists(err) {
+	if err := r.reconcileRole(ctx, role); err != nil {
 		return fmt.Errorf("creating lifecycle Role %s: %w", roleName, err)
 	}
 
@@ -4847,7 +5073,7 @@ func (r *AgentRunReconciler) ensureLifecycleRBAC(ctx context.Context, log logr.L
 		Subjects: []rbacv1.Subject{
 			{
 				Kind:      "ServiceAccount",
-				Name:      "sympozium-agent",
+				Name:      agentRunServiceAccountName(agentRun),
 				Namespace: agentRun.Namespace,
 			},
 		},
@@ -4855,12 +5081,76 @@ func (r *AgentRunReconciler) ensureLifecycleRBAC(ctx context.Context, log logr.L
 	if err := controllerutil.SetControllerReference(agentRun, rb, r.Scheme); err != nil {
 		log.Error(err, "Failed to set owner on lifecycle RoleBinding")
 	}
-	if err := r.Create(ctx, rb); err != nil && !errors.IsAlreadyExists(err) {
+	if err := r.reconcileRoleBinding(ctx, rb); err != nil {
 		return fmt.Errorf("creating lifecycle RoleBinding %s: %w", roleName, err)
 	}
 
 	log.Info("Created lifecycle RBAC", "role", roleName)
 	return nil
+}
+
+// The RBAC objects are deterministic and may already exist when a controller
+// restarts midway through a run. Reconcile mutable fields rather than treating
+// AlreadyExists as success: otherwise a RoleBinding created by an older
+// controller can keep pointing at the shared legacy ServiceAccount.
+func (r *AgentRunReconciler) reconcileRole(ctx context.Context, desired *rbacv1.Role) error {
+	existing := &rbacv1.Role{}
+	key := client.ObjectKeyFromObject(desired)
+	if err := r.Get(ctx, key, existing); errors.IsNotFound(err) {
+		return r.Create(ctx, desired)
+	} else if err != nil {
+		return err
+	}
+	existing.Labels = desired.Labels
+	existing.OwnerReferences = desired.OwnerReferences
+	existing.Rules = desired.Rules
+	return r.Update(ctx, existing)
+}
+
+func (r *AgentRunReconciler) reconcileRoleBinding(ctx context.Context, desired *rbacv1.RoleBinding) error {
+	existing := &rbacv1.RoleBinding{}
+	key := client.ObjectKeyFromObject(desired)
+	if err := r.Get(ctx, key, existing); errors.IsNotFound(err) {
+		return r.Create(ctx, desired)
+	} else if err != nil {
+		return err
+	}
+	if existing.RoleRef != desired.RoleRef {
+		return fmt.Errorf("RoleBinding %s/%s has immutable roleRef %#v, want %#v", existing.Namespace, existing.Name, existing.RoleRef, desired.RoleRef)
+	}
+	existing.Labels = desired.Labels
+	existing.OwnerReferences = desired.OwnerReferences
+	existing.Subjects = desired.Subjects
+	return r.Update(ctx, existing)
+}
+
+func (r *AgentRunReconciler) reconcileClusterRole(ctx context.Context, desired *rbacv1.ClusterRole) error {
+	existing := &rbacv1.ClusterRole{}
+	key := client.ObjectKeyFromObject(desired)
+	if err := r.Get(ctx, key, existing); errors.IsNotFound(err) {
+		return r.Create(ctx, desired)
+	} else if err != nil {
+		return err
+	}
+	existing.Labels = desired.Labels
+	existing.Rules = desired.Rules
+	return r.Update(ctx, existing)
+}
+
+func (r *AgentRunReconciler) reconcileClusterRoleBinding(ctx context.Context, desired *rbacv1.ClusterRoleBinding) error {
+	existing := &rbacv1.ClusterRoleBinding{}
+	key := client.ObjectKeyFromObject(desired)
+	if err := r.Get(ctx, key, existing); errors.IsNotFound(err) {
+		return r.Create(ctx, desired)
+	} else if err != nil {
+		return err
+	}
+	if existing.RoleRef != desired.RoleRef {
+		return fmt.Errorf("ClusterRoleBinding %s has immutable roleRef %#v, want %#v", existing.Name, existing.RoleRef, desired.RoleRef)
+	}
+	existing.Labels = desired.Labels
+	existing.Subjects = desired.Subjects
+	return r.Update(ctx, existing)
 }
 
 // cleanupSkillRBAC removes cluster-scoped RBAC resources created for an AgentRun.
@@ -5411,6 +5701,12 @@ func (r *AgentRunReconciler) buildPostRunJob(
 			},
 		},
 	}
+	if len(agentRun.Spec.Lifecycle.RBAC) > 0 {
+		volumes = append(volumes, runAPIAccessVolume())
+		for i := range initContainers {
+			mountRunAPIAccess(&initContainers[i])
+		}
+	}
 
 	return &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{
@@ -5427,9 +5723,10 @@ func (r *AgentRunReconciler) buildPostRunJob(
 					Labels: labels,
 				},
 				Spec: corev1.PodSpec{
-					RestartPolicy:      corev1.RestartPolicyNever,
-					ServiceAccountName: "sympozium-agent",
-					ImagePullSecrets:   agentRun.Spec.ImagePullSecrets,
+					RestartPolicy:                corev1.RestartPolicyNever,
+					ServiceAccountName:           agentRunServiceAccountName(agentRun),
+					AutomountServiceAccountToken: boolPtr(false),
+					ImagePullSecrets:             agentRun.Spec.ImagePullSecrets,
 					SecurityContext: &corev1.PodSecurityContext{
 						RunAsNonRoot: &runAsNonRoot,
 						RunAsUser:    &runAsUser,

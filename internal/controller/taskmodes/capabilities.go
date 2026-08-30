@@ -250,6 +250,9 @@ func ValidateRunCompatibility(run *sympoziumv1alpha1.AgentRun) error {
 	if run.Spec.CanaryMode {
 		unsupported = append(unsupported, "canaryMode")
 	}
+	if run.Spec.AgentSandbox != nil && run.Spec.AgentSandbox.WarmPoolRef != "" {
+		unsupported = append(unsupported, "agentSandbox.warmPoolRef")
+	}
 	if len(unsupported) > 0 {
 		return fmt.Errorf("task.mode %q does not support AgentRun controls %v because they are implemented by agent-runner", Harness, unsupported)
 	}

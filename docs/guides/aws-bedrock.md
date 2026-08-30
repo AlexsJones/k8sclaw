@@ -85,8 +85,8 @@ eksctl utils associate-iam-oidc-provider \
       },
       "Action": "sts:AssumeRoleWithWebIdentity",
       "Condition": {
-        "StringEquals": {
-          "oidc.eks.<region>.amazonaws.com/id/<oidc-id>:sub": "system:serviceaccount:sympozium:sympozium-agent"
+        "StringLike": {
+          "oidc.eks.<region>.amazonaws.com/id/<oidc-id>:sub": "system:serviceaccount:sympozium:sympozium-run-*"
         }
       }
     }
@@ -96,12 +96,18 @@ eksctl utils associate-iam-oidc-provider \
 
 3. **Attach Bedrock permissions policy** to the role (same as Option A)
 
-4. **Annotate your service account:**
+4. **Annotate the namespace identity template:**
 ```bash
 kubectl annotate serviceaccount sympozium-agent \
   eks.amazonaws.com/role-arn=arn:aws:iam::<account-id>:role/<bedrock-role-name> \
   -n sympozium
 ```
+
+Each AgentRun uses a unique `sympozium-run-<run>` ServiceAccount. The controller
+copies workload-identity annotations from `sympozium-agent` when it creates that
+identity, while the IAM trust policy above limits federation to run accounts in
+this namespace. The base account is an annotation template and is not selected
+by AgentRun pods.
 
 ### Option C: EC2 Instance Profile / EKS Node Role
 
@@ -246,6 +252,9 @@ eksctl create iamserviceaccount \
   --role-name sympozium-bedrock-role \
   --attach-policy-arn arn:aws:iam::<account>:policy/BedrockAccess \
   --approve
+
+# Update the generated role trust condition from StringEquals on
+# sympozium-agent to StringLike on sympozium-run-* as shown above.
 
 # 2. Create minimal secret (IRSA handles auth)
 kubectl create secret generic bedrock-agent-key -n sympozium \

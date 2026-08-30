@@ -45,7 +45,7 @@ This is the most fundamental difference between the two projects.
 
 ### Tool Isolation
 
-**Sympozium** injects every skill as a **dedicated sidecar container** in the agent pod. Each sidecar gets its own ServiceAccount with least-privilege RBAC that is created at run start and garbage-collected at run end. Skills communicate with the agent container over a shared `/workspace` volume and gRPC. A kubectl skill has cluster access; the agent container itself does not.
+**Sympozium** injects every skill as a **dedicated sidecar container** in the agent pod. Each AgentRun gets a unique ServiceAccount; least-privilege RBAC and a short-lived projected token are exposed only to sidecars that declare Kubernetes access. Skills communicate with the agent container over shared workspace/IPC surfaces. A kubectl skill can have cluster access; the agent or external harness container does not receive its Kubernetes credential.
 
 **kagent** loads tools **in-process** within the engine via MCP clients or built-in function calls. Tool execution shares the same process, memory space, and Kubernetes credentials as the agent itself.
 

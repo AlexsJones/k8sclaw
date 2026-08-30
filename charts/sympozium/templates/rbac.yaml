@@ -17,6 +17,18 @@ metadata:
     {{- include "sympozium.labels" . | nindent 4 }}
     app.kubernetes.io/component: apiserver
 ---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  # Annotation template only. AgentRun pods use unique sympozium-run-* accounts
+  # that copy workload-identity annotations from this object.
+  name: sympozium-agent
+  namespace: {{ include "sympozium.namespace" . }}
+  labels:
+    {{- include "sympozium.labels" . | nindent 4 }}
+    app.kubernetes.io/component: identity-template
+automountServiceAccountToken: false
+---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -284,37 +296,6 @@ roleRef:
 subjects:
   - kind: ServiceAccount
     name: sympozium-apiserver
-    namespace: {{ include "sympozium.namespace" . }}
----
-# Canary health-check RBAC — allows the system canary agent to list
-# cluster resources for deterministic health checks.
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
-metadata:
-  name: {{ include "sympozium.fullname" . }}-canary
-  labels:
-    {{- include "sympozium.labels" . | nindent 4 }}
-rules:
-  - apiGroups: [""]
-    resources: ["nodes"]
-    verbs: ["get", "list"]
-  - apiGroups: ["sympozium.ai"]
-    resources: ["sympoziumschedules", "mcpservers"]
-    verbs: ["get", "list"]
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
-metadata:
-  name: {{ include "sympozium.fullname" . }}-canary
-  labels:
-    {{- include "sympozium.labels" . | nindent 4 }}
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: ClusterRole
-  name: {{ include "sympozium.fullname" . }}-canary
-subjects:
-  - kind: ServiceAccount
-    name: sympozium-agent
     namespace: {{ include "sympozium.namespace" . }}
 {{- end }}
 {{- if and .Values.rbac.create .Values.llmfit.daemonset.enabled }}
