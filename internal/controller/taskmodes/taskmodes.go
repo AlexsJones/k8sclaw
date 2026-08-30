@@ -140,6 +140,24 @@ func Get(mode string) (TaskModeHandler, bool) {
 	return h, ok
 }
 
+// ValidateTask runs the registered handler's validation for an object-form
+// task. It intentionally allows unregistered modes: downstream controller
+// binaries may register modes that the separately deployed webhook does not
+// know about.
+func ValidateTask(task *sympoziumv1alpha1.TaskSpec) error {
+	if task == nil || task.IsString() {
+		return nil
+	}
+	handler, ok := Get(task.GetMode())
+	if !ok {
+		return nil
+	}
+	if err := handler.Validate(task); err != nil {
+		return fmt.Errorf("task.mode %q validation failed: %w", task.GetMode(), err)
+	}
+	return nil
+}
+
 // SupportedModes returns the registered mode names sorted alphabetically.
 // Used by the controller to render a clear error message when an AgentRun
 // requests an unregistered mode.

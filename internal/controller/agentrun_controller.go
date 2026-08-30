@@ -2308,6 +2308,9 @@ func (r *AgentRunReconciler) validatePolicy(ctx context.Context, agentRun *sympo
 	}
 
 	if instance.Spec.PolicyRef == "" {
+		if taskmodes.HarnessImage(agentRun.Spec.Task) != "" {
+			return fmt.Errorf("task.mode %q requires an Agent with a SympoziumPolicy whose spec.harnessPolicy.enabled is true", taskmodes.Harness)
+		}
 		return nil // No policy, allow
 	}
 
@@ -2317,6 +2320,11 @@ func (r *AgentRunReconciler) validatePolicy(ctx context.Context, agentRun *sympo
 		Name:      instance.Spec.PolicyRef,
 	}, policy); err != nil {
 		return fmt.Errorf("policy %q not found: %w", instance.Spec.PolicyRef, err)
+	}
+
+	if taskmodes.HarnessImage(agentRun.Spec.Task) != "" &&
+		(policy.Spec.HarnessPolicy == nil || !policy.Spec.HarnessPolicy.Enabled) {
+		return fmt.Errorf("task.mode %q is disabled by policy; set spec.harnessPolicy.enabled: true to opt in", taskmodes.Harness)
 	}
 
 	// Validate the harness image against the registry allowlist.

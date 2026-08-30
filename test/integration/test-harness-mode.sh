@@ -29,6 +29,8 @@ NAMESPACE="${TEST_NAMESPACE:-default}"
 TIMEOUT="${TEST_TIMEOUT:-240}"
 INSTANCE_NAME="inttest-harness-$(date +%s)"
 RUN_NAME="${INSTANCE_NAME}-run"
+POLICY_NAME="${INSTANCE_NAME}-policy"
+HARNESS_AUTH_SECRET="${HARNESS_AUTH_SECRET:-}"
 
 # Sympozium builds no harness images, so the test supplies its own. The
 # stand-in below is the smallest thing that honours the adapter contract.
@@ -59,6 +61,7 @@ cleanup() {
   kubectl delete agentrun "${RUN_NAME}-capcheck" -n "$NAMESPACE" --ignore-not-found >/dev/null 2>&1 || true
   kubectl delete agentrun "${RUN_NAME}-cellncheck" -n "$NAMESPACE" --ignore-not-found >/dev/null 2>&1 || true
   kubectl delete agent "$INSTANCE_NAME" -n "$NAMESPACE" --ignore-not-found >/dev/null 2>&1 || true
+  kubectl delete sympoziumpolicy "$POLICY_NAME" -n "$NAMESPACE" --ignore-not-found >/dev/null 2>&1 || true
   kubectl delete job -n "$NAMESPACE" -l "sympozium.ai/agent-run=${RUN_NAME}" --ignore-not-found >/dev/null 2>&1 || true
   kubectl delete pvc "${RUN_NAME}-workspace" -n "$NAMESPACE" --ignore-not-found >/dev/null 2>&1 || true
   kubectl delete role "sympozium-lifecycle-${RUN_NAME}" -n "$NAMESPACE" --ignore-not-found >/dev/null 2>&1 || true
@@ -75,14 +78,23 @@ fi
 
 info "Namespace '$NAMESPACE', harness image '${STANDIN_IMAGE}'"
 
-# ── Create the Agent ─────────────────────────────────────────────────────────
+# ── Explicitly opt in, then create the Agent ────────────────────────────────
 
 cat <<EOF | kubectl apply -n "$NAMESPACE" -f -
+apiVersion: sympozium.ai/v1alpha1
+kind: SympoziumPolicy
+metadata:
+  name: ${POLICY_NAME}
+spec:
+  harnessPolicy:
+    enabled: true
+---
 apiVersion: sympozium.ai/v1alpha1
 kind: Agent
 metadata:
   name: ${INSTANCE_NAME}
 spec:
+  policyRef: ${POLICY_NAME}
   agents:
     default:
       model: ${LM_STUDIO_MODEL}

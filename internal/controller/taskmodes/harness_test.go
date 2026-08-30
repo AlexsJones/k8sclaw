@@ -95,6 +95,21 @@ func TestHarnessHandler_Validate_RejectsUnknownCapability(t *testing.T) {
 	}
 }
 
+func TestHarnessHandler_Validate_RejectsUnmediatedCapabilities(t *testing.T) {
+	h := NewHarnessHandler()
+	for _, capability := range []string{CapabilityOutputSchema, CapabilitySubagents, CapabilityResume} {
+		t.Run(capability, func(t *testing.T) {
+			err := h.Validate(harnessTask(map[string]string{harnessParamCapabilities: capability}))
+			if err == nil {
+				t.Fatalf("Validate(%s) returned nil; expected unsupported-capability error", capability)
+			}
+			if !strings.Contains(err.Error(), capability) {
+				t.Errorf("error should name %q, got: %v", capability, err)
+			}
+		})
+	}
+}
+
 func TestHarnessHandler_Validate_RejectsMalformedArgs(t *testing.T) {
 	h := NewHarnessHandler()
 	err := h.Validate(harnessTask(map[string]string{
@@ -215,6 +230,9 @@ func TestHarnessHandler_Override_UsesSuppliedImageAndItsOwnEntrypoint(t *testing
 	if len(override.Command) != 0 {
 		t.Errorf("Command = %v, want empty so the image's own ENTRYPOINT runs", override.Command)
 	}
+	if override.WorkingDir != "/workspace" {
+		t.Errorf("WorkingDir = %q, want /workspace regardless of image WORKDIR", override.WorkingDir)
+	}
 }
 
 func TestHarnessHandler_Override_SetEnvCarriesEveryHarnessValue(t *testing.T) {
@@ -225,11 +243,12 @@ func TestHarnessHandler_Override_SetEnvCarriesEveryHarnessValue(t *testing.T) {
 	}
 
 	want := map[string]string{
-		"TASK":                  "summarise the incident",
-		"HOME":                  harnessHomePath,
-		"XDG_CONFIG_HOME":       harnessHomePath + "/.config",
-		"XDG_CACHE_HOME":        harnessHomePath + "/.cache",
-		"SYMPOZIUM_RESULT_PATH": "/ipc/output/result.json",
+		"TASK":                               "summarise the incident",
+		"HOME":                               harnessHomePath,
+		"XDG_CONFIG_HOME":                    harnessHomePath + "/.config",
+		"XDG_CACHE_HOME":                     harnessHomePath + "/.cache",
+		"SYMPOZIUM_RESULT_PATH":              "/ipc/output/result.json",
+		"SYMPOZIUM_HARNESS_CONTRACT_VERSION": HarnessContractVersion,
 	}
 	for name, value := range want {
 		if got, ok := envValue(override.SetEnv, name); !ok || got != value {
@@ -333,6 +352,34 @@ func TestHarnessHandler_Override_PassesThroughArgs(t *testing.T) {
 		if override.Args[i] != want[i] {
 			t.Errorf("Args[%d] = %q, want %q", i, override.Args[i], want[i])
 		}
+	}
+}
+
+func TestValidateRunCompatibility_RejectsAgentRunnerOnlyControls(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		mutate func(*sympoziumv1alpha1.AgentRun)
+		want   string
+	}{
+		{name: "server", mutate: func(r *sympoziumv1alpha1.AgentRun) { r.Spec.Mode = "server" }, want: "mode=server"},
+		{name: "dry-run", mutate: func(r *sympoziumv1alpha1.AgentRun) { r.Spec.DryRun = true }, want: "dryRun"},
+		{name: "canary", mutate: func(r *sympoziumv1alpha1.AgentRun) { r.Spec.CanaryMode = true }, want: "canaryMode"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			run := &sympoziumv1alpha1.AgentRun{Spec: sympoziumv1alpha1.AgentRunSpec{Task: harnessTask(nil)}}
+			tc.mutate(run)
+			err := ValidateRunCompatibility(run)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("ValidateRunCompatibility() error = %v, want error naming %q", err, tc.want)
+			}
+		})
+	}
+}
+
+func TestValidateRunCompatibility_AllowsOrdinaryHarnessRun(t *testing.T) {
+	run := &sympoziumv1alpha1.AgentRun{Spec: sympoziumv1alpha1.AgentRunSpec{Task: harnessTask(nil)}}
+	if err := ValidateRunCompatibility(run); err != nil {
+		t.Fatalf("ordinary harness run rejected: %v", err)
 	}
 }
 

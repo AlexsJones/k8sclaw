@@ -26,6 +26,7 @@ Everything arrives as environment variables and mounted files on an ordinary con
 | `MCP_CONFIG_PATH` | Path to the MCP server registry, as **JSON**: `{"servers":[{"name","url","toolsPrefix","timeout","headers","auth":{"type":"bearer","secretKey":"MCP_AUTH_X"}}]}`. Read the token from the env var `auth.secretKey` names — it is on the container. Connect to **every** entry: one of them may be `sympozium-skills`, which is how the run's SkillPack tools reach you. |
 | `HOME` | `/home/agent`, an `emptyDir`. The only writable path besides `/workspace`, `/ipc/output` and `/tmp`. |
 | `SYMPOZIUM_RESULT_PATH` | Where to write the result. Defaults to `/ipc/output/result.json`; read it from env rather than hardcoding. |
+| `SYMPOZIUM_HARNESS_CONTRACT_VERSION` | Adapter contract version (`v1alpha1` today). Check it at startup and fail closed on unknown versions. |
 | `/workspace` | The run's PVC, and the container's working directory. |
 | `/skills/` | Skill files, if the Agent has any. |
 | `task.parameters.args` | Passed through as the container's `args`. Your `ENTRYPOINT` receives them as `"$@"`. |
@@ -74,8 +75,9 @@ The pod security context is not relaxed for harness mode, so the image must alre
 
 ## Declaring capabilities honestly
 
-`task.parameters.capabilities` is a comma-separated list of what your image honours:
-`outputSchema`, `toolFilter`, `persona`, `subagents`, `resume`. Sympozium did not build the
+`task.parameters.capabilities` is currently a comma-separated list of what your image honours:
+`toolFilter` and `persona`. Claims for `outputSchema`, `subagents`, or `resume` are rejected
+until Sympozium provides a platform-mediated implementation. Sympozium did not build the
 image and cannot inspect it, so this declaration is the entire basis on which a run is
 admitted.
 

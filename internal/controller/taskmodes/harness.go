@@ -29,7 +29,14 @@ import (
 // does not take on — the same division as the celln backend, where the
 // execution runtime lives in its own repository. Writing one is
 // docs/modes/harness-adapters.md.
-const Harness = "harness"
+const (
+	Harness = "harness"
+
+	// HarnessContractVersion identifies the adapter contract exposed by this
+	// implementation. Adapters should fail closed on versions they do not
+	// understand rather than guessing at filesystem or result semantics.
+	HarnessContractVersion = "v1alpha1"
+)
 
 // harnessHomeVolume gives the harness a writable HOME on a pod that keeps
 // readOnlyRootFilesystem. Several harnesses assume they can write to
@@ -147,8 +154,21 @@ func (h *HarnessHandler) Validate(task *sympoziumv1alpha1.TaskSpec) error {
 	}
 
 	if raw, present := task.Parameters[harnessParamCapabilities]; present {
-		if _, err := ParseCapabilities(splitCommaList(raw)); err != nil {
+		caps, err := ParseCapabilities(splitCommaList(raw))
+		if err != nil {
 			return fmt.Errorf("harness: task.parameters.%s: %w", harnessParamCapabilities, err)
+		}
+		// These claims describe platform-mediated behavior that does not exist
+		// for an external process yet. Accepting a self-assertion would make the
+		// descriptor say more than Sympozium can enforce or verify.
+		if caps.OutputSchema || caps.Subagents || caps.Resume {
+			unsupported := Capabilities{
+				OutputSchema: caps.OutputSchema,
+				Subagents:    caps.Subagents,
+				Resume:       caps.Resume,
+			}.Names()
+			return fmt.Errorf("harness: task.parameters.%s claims unsupported platform-mediated capabilities %v; currently supported declarations: [%s %s]",
+				harnessParamCapabilities, unsupported, CapabilityPersona, CapabilityToolFilter)
 		}
 	}
 
@@ -207,8 +227,9 @@ func (h *HarnessHandler) OverrideAgentContainer(task *sympoziumv1alpha1.TaskSpec
 
 	homeSizeLimit := resource.MustParse("256Mi")
 	return &AgentContainerOverride{
-		Image: image,
-		Args:  args,
+		Image:      image,
+		Args:       args,
+		WorkingDir: "/workspace",
 		SetEnv: []corev1.EnvVar{
 			// The task text. Object-form tasks leave the central TASK
 			// assignment empty, so this replaces it.
@@ -221,6 +242,7 @@ func (h *HarnessHandler) OverrideAgentContainer(task *sympoziumv1alpha1.TaskSpec
 			// Where the adapter writes the result contract. In env so the
 			// path lives in one place rather than in every adapter.
 			{Name: "SYMPOZIUM_RESULT_PATH", Value: "/ipc/output/result.json"},
+			{Name: "SYMPOZIUM_HARNESS_CONTRACT_VERSION", Value: HarnessContractVersion},
 		},
 		VolumeMounts: []corev1.VolumeMount{
 			{Name: harnessHomeVolume, MountPath: harnessHomePath},

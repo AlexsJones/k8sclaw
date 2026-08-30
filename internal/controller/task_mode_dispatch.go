@@ -61,6 +61,9 @@ func resolveTaskModeAdjustments(
 	if err := taskmodes.ValidateCapabilities(agentRun); err != nil {
 		return nil, err
 	}
+	if err := taskmodes.ValidateRunCompatibility(agentRun); err != nil {
+		return nil, err
+	}
 
 	contexts := make([]taskmodes.SidecarContext, 0, len(sidecars))
 	for _, sc := range sidecars {
@@ -150,6 +153,9 @@ func (r *AgentRunReconciler) applyAgentContainerOverride(
 	}
 	if len(override.Args) > 0 {
 		agent.Args = override.Args
+	}
+	if override.WorkingDir != "" {
+		agent.WorkingDir = override.WorkingDir
 	}
 	for _, e := range override.SetEnv {
 		setEnvVar(&agent.Env, e)

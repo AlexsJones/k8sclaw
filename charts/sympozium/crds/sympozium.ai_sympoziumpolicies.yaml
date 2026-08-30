@@ -57,6 +57,20 @@ spec:
                   type: boolean
                 description: FeatureGates controls which features are enabled/disabled.
                 type: object
+              harnessPolicy:
+                description: |-
+                  HarnessPolicy controls whether an Agent bound to this policy may replace
+                  Sympozium's trusted agent-runner with an external harness adapter image.
+                  External harnesses are disabled unless this field is present and enabled.
+                properties:
+                  enabled:
+                    default: false
+                    description: |-
+                      Enabled explicitly opts Agents bound to this policy into external harness
+                      execution. It defaults to false because the harness becomes the pod's
+                      primary process and receives the run's model and MCP credentials.
+                    type: boolean
+                type: object
               imagePolicy:
                 description: |-
                   ImagePolicy defines allowed container image registries for user-specified

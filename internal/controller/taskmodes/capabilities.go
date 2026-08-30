@@ -232,3 +232,26 @@ func ValidateCapabilities(run *sympoziumv1alpha1.AgentRun) error {
 		"task.mode %q does not support %v requested by this AgentRun (mode supports: %v)",
 		mode, missing, supported)
 }
+
+// ValidateRunCompatibility rejects AgentRun controls whose implementation
+// lives inside agent-runner and therefore cannot be honoured when an external
+// harness replaces that process.
+func ValidateRunCompatibility(run *sympoziumv1alpha1.AgentRun) error {
+	if run == nil || HarnessImage(run.Spec.Task) == "" {
+		return nil
+	}
+	var unsupported []string
+	if run.Spec.Mode == "server" {
+		unsupported = append(unsupported, "mode=server")
+	}
+	if run.Spec.DryRun {
+		unsupported = append(unsupported, "dryRun")
+	}
+	if run.Spec.CanaryMode {
+		unsupported = append(unsupported, "canaryMode")
+	}
+	if len(unsupported) > 0 {
+		return fmt.Errorf("task.mode %q does not support AgentRun controls %v because they are implemented by agent-runner", Harness, unsupported)
+	}
+	return nil
+}

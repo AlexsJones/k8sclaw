@@ -308,7 +308,15 @@ func TestReconcilePending_CellnAndAgentContainerOverride_Rejected(t *testing.T) 
 		},
 	}
 
-	r := newAgentRunTestReconciler(t, run, parityAgent())
+	agent := parityAgent()
+	agent.Spec.PolicyRef = "harness-enabled"
+	policy := &sympoziumv1alpha1.SympoziumPolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: "harness-enabled", Namespace: run.Namespace},
+		Spec: sympoziumv1alpha1.SympoziumPolicySpec{
+			HarnessPolicy: &sympoziumv1alpha1.HarnessPolicySpec{Enabled: true},
+		},
+	}
+	r := newAgentRunTestReconciler(t, run, agent, policy)
 
 	result, err := r.reconcilePending(context.Background(), logr.Discard(), run)
 	if err != nil {

@@ -23,7 +23,8 @@ func policyWithRegistries(name string, registries ...string) *sympoziumv1alpha1.
 	return &sympoziumv1alpha1.SympoziumPolicy{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"},
 		Spec: sympoziumv1alpha1.SympoziumPolicySpec{
-			ImagePolicy: &sympoziumv1alpha1.ImagePolicySpec{AllowedRegistries: registries},
+			ImagePolicy:   &sympoziumv1alpha1.ImagePolicySpec{AllowedRegistries: registries},
+			HarnessPolicy: &sympoziumv1alpha1.HarnessPolicySpec{Enabled: true},
 		},
 	}
 }
@@ -31,6 +32,35 @@ func policyWithRegistries(name string, registries ...string) *sympoziumv1alpha1.
 func harnessRunWithImage(image string) *sympoziumv1alpha1.AgentRun {
 	run := harnessModeRun(map[string]string{"image": image})
 	return run
+}
+
+func TestValidatePolicy_RequiresExplicitHarnessOptIn(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		policy *sympoziumv1alpha1.SympoziumPolicy
+	}{
+		{name: "no-policy"},
+		{name: "policy-disabled", policy: &sympoziumv1alpha1.SympoziumPolicy{
+			ObjectMeta: metav1.ObjectMeta{Name: "disabled", Namespace: "default"},
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			agent := parityAgent()
+			objects := []client.Object{}
+			if tc.policy != nil {
+				agent.Spec.PolicyRef = tc.policy.Name
+				objects = append(objects, tc.policy)
+			}
+			run := harnessRunWithImage("ghcr.io/acme/my-harness:v1")
+			objects = append(objects, run, agent)
+			r := newAgentRunTestReconciler(t, objects...)
+
+			err := r.validatePolicy(context.Background(), run)
+			if err == nil || !strings.Contains(err.Error(), "harnessPolicy.enabled") {
+				t.Fatalf("validatePolicy() error = %v, want explicit opt-in denial", err)
+			}
+		})
+	}
 }
 
 func TestValidatePolicy_RejectsHarnessImageOutsideAllowedRegistries(t *testing.T) {

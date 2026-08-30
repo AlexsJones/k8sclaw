@@ -5,15 +5,43 @@
 # adapter image someone else built and maintains. Writing one is
 # docs/modes/harness-adapters.md.
 #
-# The image must come from a registry SympoziumPolicy.imagePolicy.allowedRegistries
-# permits — that list is the control bounding which harnesses may run here.
+# BYO means a contract-compatible adapter image, not an arbitrary upstream
+# harness image. External runtimes are disabled unless the backing Agent's
+# policy explicitly opts in. Replace the example image and secret before use.
+apiVersion: sympozium.ai/v1alpha1
+kind: SympoziumPolicy
+metadata:
+  name: harness-example
+  namespace: default
+spec:
+  harnessPolicy:
+    enabled: true
+  imagePolicy:
+    allowedRegistries:
+      # This sample uses an exact tag. Prefer an exact digest in production.
+      - ghcr.io/acme/my-harness:v1
+---
+apiVersion: sympozium.ai/v1alpha1
+kind: Agent
+metadata:
+  name: harness-example
+  namespace: default
+spec:
+  policyRef: harness-example
+  agents:
+    primary:
+      model: deepseek-chat
+  authRefs:
+    - provider: deepseek
+      secret: alice-deepseek-key
+---
 apiVersion: sympozium.ai/v1alpha1
 kind: AgentRun
 metadata:
-  name: alice-harness-001
+  name: harness-example-001
   namespace: default
 spec:
-  agentRef: alice
+  agentRef: harness-example
   agentId: primary
   sessionKey: "session-harness-001"
   task:
@@ -26,8 +54,7 @@ spec:
       # Required. The task text. Object-form tasks have no top-level prompt
       # field, so harness mode takes it from here and sets TASK from it.
       prompt: "Review the latest pull request and provide feedback on code quality"
-      # What this image actually honours. Comma-separated; one of
-      # outputSchema, persona, resume, subagents, toolFilter.
+      # What this image actually honours. Currently: persona, toolFilter.
       #
       # Sympozium did not build the image and cannot vouch for it, so the
       # declaration is the whole basis for admission: anything undeclared and

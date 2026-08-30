@@ -26,6 +26,9 @@ type AgentContainerOverride struct {
 	// Args replaces the image's CMD. Leave nil to keep it.
 	Args []string
 
+	// WorkingDir replaces the image's WORKDIR. Leave empty to keep it.
+	WorkingDir string
+
 	// SetEnv entries replace any same-named entry already on the container
 	// and are appended when there is none. This is the only way to displace
 	// a central assignment (TASK, MODEL_*); ConfigureAgentContainer appends

@@ -22,7 +22,7 @@ import (
 // act on it without reading the handler source.
 
 // capabilityEnforcer returns a PolicyEnforcer whose client holds one Agent
-// with no policy bound, so the capability check is the only thing under test.
+// explicitly opted into harness mode, so capability checks remain isolated.
 func capabilityEnforcer(t *testing.T) *PolicyEnforcer {
 	t.Helper()
 	scheme := runtime.NewScheme()
@@ -31,8 +31,15 @@ func capabilityEnforcer(t *testing.T) *PolicyEnforcer {
 	}
 	agent := &sympoziumv1alpha1.Agent{
 		ObjectMeta: metav1.ObjectMeta{Name: "inst", Namespace: "default"},
+		Spec:       sympoziumv1alpha1.AgentSpec{PolicyRef: "harness-enabled"},
 	}
-	cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(agent).Build()
+	policy := &sympoziumv1alpha1.SympoziumPolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: "harness-enabled", Namespace: "default"},
+		Spec: sympoziumv1alpha1.SympoziumPolicySpec{
+			HarnessPolicy: &sympoziumv1alpha1.HarnessPolicySpec{Enabled: true},
+		},
+	}
+	cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(agent, policy).Build()
 	return &PolicyEnforcer{Client: cl, Log: logr.Discard(), Decoder: decoderFor(t, scheme)}
 }
 
@@ -59,6 +66,53 @@ func harnessTaskSpec(params map[string]string) *sympoziumv1alpha1.TaskSpec {
 	return &sympoziumv1alpha1.TaskSpec{
 		Mode:       taskmodes.Harness,
 		Parameters: params,
+	}
+}
+
+func TestPolicyEnforcer_HarnessRequiresExplicitPolicyOptIn(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		policyRef  string
+		withPolicy bool
+	}{
+		{name: "no-policy"},
+		{name: "policy-disabled", policyRef: "disabled", withPolicy: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			scheme := runtime.NewScheme()
+			if err := sympoziumv1alpha1.AddToScheme(scheme); err != nil {
+				t.Fatalf("add scheme: %v", err)
+			}
+			agent := &sympoziumv1alpha1.Agent{
+				ObjectMeta: metav1.ObjectMeta{Name: "inst", Namespace: "default"},
+				Spec:       sympoziumv1alpha1.AgentSpec{PolicyRef: tc.policyRef},
+			}
+			objects := []runtime.Object{agent}
+			if tc.withPolicy {
+				objects = append(objects, &sympoziumv1alpha1.SympoziumPolicy{
+					ObjectMeta: metav1.ObjectMeta{Name: tc.policyRef, Namespace: "default"},
+				})
+			}
+			cl := fake.NewClientBuilder().WithScheme(scheme).WithRuntimeObjects(objects...).Build()
+			pe := &PolicyEnforcer{Client: cl, Log: logr.Discard(), Decoder: decoderFor(t, scheme)}
+
+			resp := pe.Handle(context.Background(), admissionRequestFor(t, capabilityRun(harnessTaskSpec(nil))))
+			if resp.Allowed || !strings.Contains(resp.Result.Message, "harnessPolicy.enabled") {
+				t.Fatalf("response allowed=%v message=%q, want explicit opt-in denial", resp.Allowed, resp.Result.Message)
+			}
+		})
+	}
+}
+
+func TestPolicyEnforcer_RejectsUnmediatedHarnessCapabilityClaim(t *testing.T) {
+	pe := capabilityEnforcer(t)
+	run := capabilityRun(harnessTaskSpec(map[string]string{
+		"capabilities": taskmodes.CapabilityResume,
+	}))
+
+	resp := pe.Handle(context.Background(), admissionRequestFor(t, run))
+	if resp.Allowed || !strings.Contains(resp.Result.Message, taskmodes.CapabilityResume) {
+		t.Fatalf("response allowed=%v message=%q, want unsupported claim denial", resp.Allowed, resp.Result.Message)
 	}
 }
 
@@ -240,6 +294,7 @@ func TestPolicyEnforcer_DeniesHarnessImageOutsideAllowedRegistries(t *testing.T)
 			ImagePolicy: &sympoziumv1alpha1.ImagePolicySpec{
 				AllowedRegistries: []string{"ghcr.io/sympozium-ai/"},
 			},
+			HarnessPolicy: &sympoziumv1alpha1.HarnessPolicySpec{Enabled: true},
 		},
 	}
 	agent := &sympoziumv1alpha1.Agent{
@@ -274,6 +329,7 @@ func TestPolicyEnforcer_AllowsHarnessImageInsideAllowedRegistries(t *testing.T) 
 			ImagePolicy: &sympoziumv1alpha1.ImagePolicySpec{
 				AllowedRegistries: []string{"ghcr.io/acme/"},
 			},
+			HarnessPolicy: &sympoziumv1alpha1.HarnessPolicySpec{Enabled: true},
 		},
 	}
 	agent := &sympoziumv1alpha1.Agent{
@@ -330,12 +386,19 @@ func TestPolicyEnforcer_AllowsOrdinaryMCPServerName(t *testing.T) {
 	agent := &sympoziumv1alpha1.Agent{
 		ObjectMeta: metav1.ObjectMeta{Name: "inst", Namespace: "default"},
 		Spec: sympoziumv1alpha1.AgentSpec{
+			PolicyRef: "harness-enabled",
 			MCPServers: []sympoziumv1alpha1.MCPServerRef{
 				{Name: "github", URL: "http://gh:8080", ToolsPrefix: "gh"},
 			},
 		},
 	}
-	cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(agent).Build()
+	policy := &sympoziumv1alpha1.SympoziumPolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: "harness-enabled", Namespace: "default"},
+		Spec: sympoziumv1alpha1.SympoziumPolicySpec{
+			HarnessPolicy: &sympoziumv1alpha1.HarnessPolicySpec{Enabled: true},
+		},
+	}
+	cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(agent, policy).Build()
 	pe := &PolicyEnforcer{Client: cl, Log: logr.Discard(), Decoder: decoderFor(t, scheme)}
 
 	resp := pe.Handle(context.Background(), admissionRequestFor(t, capabilityRun(harnessTaskSpec(nil))))

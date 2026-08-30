@@ -121,7 +121,13 @@ func (pe *PolicyEnforcer) Handle(ctx context.Context, req admission.Request) adm
 	// Validate the run against its task mode's capability descriptor, so a
 	// request the mode cannot honour is rejected here rather than accepted
 	// and silently ignored at runtime.
+	if err := taskmodes.ValidateTask(run.Spec.Task); err != nil {
+		return admission.Denied(err.Error())
+	}
 	if err := pe.validateTaskModeCapabilities(run); err != nil {
+		return admission.Denied(err.Error())
+	}
+	if err := taskmodes.ValidateRunCompatibility(run); err != nil {
 		return admission.Denied(err.Error())
 	}
 
@@ -137,8 +143,12 @@ func (pe *PolicyEnforcer) Handle(ctx context.Context, req admission.Request) adm
 		return admission.Denied(err.Error())
 	}
 
-	// If no policy is bound, allow
+	// Replacing the trusted runner is a privileged operation. Require an
+	// explicit policy binding before the otherwise-permissive early return.
 	if instance.Spec.PolicyRef == "" {
+		if taskmodes.HarnessImage(run.Spec.Task) != "" {
+			return admission.Denied("task.mode \"harness\" requires an Agent with a SympoziumPolicy whose spec.harnessPolicy.enabled is true")
+		}
 		return admission.Allowed("no policy bound")
 	}
 
@@ -150,6 +160,11 @@ func (pe *PolicyEnforcer) Handle(ctx context.Context, req admission.Request) adm
 	}, &policy); err != nil {
 		return admission.Errored(http.StatusInternalServerError,
 			fmt.Errorf("failed to find SympoziumPolicy %s: %w", instance.Spec.PolicyRef, err))
+	}
+
+	if taskmodes.HarnessImage(run.Spec.Task) != "" &&
+		(policy.Spec.HarnessPolicy == nil || !policy.Spec.HarnessPolicy.Enabled) {
+		return admission.Denied("task.mode \"harness\" is disabled by policy; set spec.harnessPolicy.enabled: true to opt in")
 	}
 
 	// Validate sandbox policy

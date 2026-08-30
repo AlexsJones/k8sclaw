@@ -1,15 +1,18 @@
 # Task Mode: `harness` (External Agent Harnesses)
 
-Sympozium optionally runs **someone else's agent harness** as the pod's primary process
+Sympozium can experimentally run **a conforming adapter for someone else's agent harness** as the pod's primary process
 instead of `agent-runner`. It is selected per run with `task.mode: harness` on an `AgentRun`,
-and the harness arrives as an image the operator names.
+and the adapter arrives as an image the operator names. The backing Agent must be bound to a
+`SympoziumPolicy` with `spec.harnessPolicy.enabled: true`; external runtimes fail closed by
+default.
 
 The bet is that Sympozium's own strengths — policy CRDs and the admission webhook, the
 synthetic membrane, ensembles and relationships, gVisor/Kata isolation, response gates, cost
 estimation, channels, schedules — do not care what binary drove the agent loop. This mode
 makes that explicit: which harness runs inside the Pod becomes the operator's choice.
 
-**Sympozium ships the seam, not the harnesses.** There is no built-in harness image and no
+**BYO means a contract-compatible adapter image, not an arbitrary upstream harness image.**
+Sympozium ships the seam, not the harnesses. There is no built-in harness image and no
 list of blessed ones. An adapter tracks its upstream harness's release cadence — flags,
 config formats, auth shapes — which is work this repo deliberately does not take on. Writing
 one is [harness-adapters.md](harness-adapters.md).
@@ -22,6 +25,12 @@ registry, response gates, retries, cost estimation, memory extraction, ensembles
 and the run-detail UI. All of it works on a run it never drove, because the result contract
 is unchanged.
 
+The current creation UX is experimental: the web API and New Run form create string-form
+tasks and do not expose an approved-runtime selector. Use an object-form `AgentRun` manifest
+such as [`config/samples/agentrun_harness.yaml`](../../config/samples/agentrun_harness.yaml).
+Channels and schedules do not inherit harness mode yet; that requires moving runtime choice
+onto an administrator-approved Agent/runtime profile.
+
 It deliberately does **not** give you:
 
 - **`agent-runner`'s tool loop.** The harness brings its own, or none.
@@ -32,6 +41,30 @@ It deliberately does **not** give you:
 - **Sympozium-built images.** `parameters.image` is required. There is no default.
 
 ```yaml
+apiVersion: sympozium.ai/v1alpha1
+kind: SympoziumPolicy
+metadata:
+  name: byo-enabled
+spec:
+  harnessPolicy:
+    enabled: true
+  imagePolicy:
+    allowedRegistries:
+      - ghcr.io/acme/my-harness:v1
+---
+apiVersion: sympozium.ai/v1alpha1
+kind: Agent
+metadata:
+  name: my-agent
+spec:
+  policyRef: byo-enabled
+  agents:
+    primary:
+      model: deepseek-chat
+  authRefs:
+    - provider: deepseek
+      secret: my-deepseek-key
+---
 apiVersion: sympozium.ai/v1alpha1
 kind: AgentRun
 metadata:
@@ -88,9 +121,10 @@ Two consequences worth knowing:
   wraps `buildContainers`, so task-mode dispatch applies and a harness run gets kernel-level
   isolation like any other.
 
-Harness mode needs no enable flag, unlike Celln. Celln's flag exists because it deploys a
-privileged installer DaemonSet; harness mode deploys nothing at all — it changes one
-container's image on a pod that was already going to exist.
+Harness mode requires an explicit policy opt-in because it changes the trusted primary
+process and exposes the run's model and MCP credentials to that process. Celln's enable flag
+instead controls deployment of its privileged installer DaemonSet; the two gates protect
+different boundaries.
 
 ## What Sympozium supplies
 
@@ -107,6 +141,8 @@ Nothing new was built for this. The mode reuses what the platform already had:
 | Skills | `/skills/`, as today. SkillPack **tools** arrive through the skill tool server — see [SkillPack tools](#skillpack-tools). The raw tool manifest is deliberately *not* mounted: it lists tools the policy denies, and a harness has no way to dispatch them anyway |
 | Sandbox / pod security | unchanged — non-root, `readOnlyRootFilesystem`, `drop: [ALL]`, RuntimeDefault seccomp |
 | Writable `$HOME` | an `emptyDir` at `/home/agent` (volume `harness-home`), with `HOME`, `XDG_CONFIG_HOME` and `XDG_CACHE_HOME` pointed at it — **not** a relaxed security context |
+| Adapter contract | `SYMPOZIUM_HARNESS_CONTRACT_VERSION=v1alpha1`; reject versions the adapter does not understand |
+| Working directory | `/workspace`, regardless of the image's own `WORKDIR` |
 | Result | `/ipc/output/result.json` plus the `__SYMPOZIUM_RESULT__` stdout marker |
 | `/ipc` | **only** `input/` (read-only) and `output/` — see [/ipc is not a shared surface](#ipc-is-not-a-shared-surface) |
 
@@ -302,14 +338,14 @@ Two consequences, because the field looks stricter than it is:
 - **A short name carries no registry.** `docker.io/library/` does not match `alpine:3.20`.
   That direction fails closed.
 
-**It does nothing in three cases**, all of which are the documented behaviour rather than a
-bug, and all of which are worth checking before relying on the control:
+The harness gate and the image allowlist are separate controls:
 
 | Situation | Effect |
 |---|---|
-| The Agent has no `policyRef` | No policy is looked up. No image restriction. |
-| The bound policy has no `imagePolicy` | No image restriction. |
-| `allowedRegistries` is empty | "No list" means "no restriction", per the field docs. |
+| The Agent has no `policyRef` | Harness execution is denied. |
+| The bound policy omits `harnessPolicy` or sets `enabled: false` | Harness execution is denied. |
+| `harnessPolicy.enabled: true`, but no `imagePolicy` | Harness execution is enabled with no image restriction. This is experimental-only and not recommended for shared clusters. |
+| `harnessPolicy.enabled: true` and `allowedRegistries` is empty | Harness execution is enabled with no image restriction. |
 
 The check runs in **both** the admission webhook and the controller. The webhook gives the
 better error, at `kubectl apply` time; the controller repeats it because the webhook is a
@@ -323,7 +359,8 @@ on which external harness executes. A rejection there fails the run with the ima
 |---|---|
 | `parameters.image` missing | Run fails validation in the controller with the missing-parameter name; no pod is created. |
 | Image outside `allowedRegistries` | **Denied at admission**, naming the image; and again in the controller, which fails the run without creating a Job. |
-| No `policyRef`, no `imagePolicy`, or an empty `allowedRegistries` | **No image restriction** — see [Bounding which harnesses may run](#bounding-which-harnesses-may-run). |
+| No explicit `harnessPolicy.enabled: true` | **Denied at admission and by the controller**; no pod is created. |
+| Explicit opt-in but no image allowlist | Admitted with no image restriction; use only for controlled experimentation. |
 | A capability is requested but not declared | **Denied at admission**, naming the mode and the capability. |
 | `backend: celln` | **Denied at admission**: celln never builds the container harness mode replaces. |
 | Image declares a capability it does not honour | Admitted and run. The field is silently dropped — this is the one failure the descriptor cannot catch, and why a claim is a promise. |
@@ -348,11 +385,13 @@ The agent container keeps its default requests (250m / 512Mi) and limits (1 CPU 
 Node-based harnesses sit close to that memory limit; raise it on the Agent if one is
 OOM-killed.
 
-### Resume
+### Unsupported controls
 
-Every harness declares `resume: false` today, and none can declare otherwise until in-place
-gate resume lands. A harness that cannot be parked falls back to the successor-clone retry
-path, which is the existing behaviour for every mode.
+Harness declarations are currently limited to `persona` and `toolFilter`. Claims for
+`outputSchema`, `subagents`, or `resume` are rejected because Sympozium has no mediated
+surface for an external process to implement them safely. `mode: server`, `dryRun`, and
+`canaryMode` are also rejected rather than being silently handled by logic that only exists
+inside `agent-runner`.
 
 ## See Also
 
