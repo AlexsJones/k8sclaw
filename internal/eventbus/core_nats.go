@@ -19,6 +19,12 @@ type CoreNATSEventBus struct {
 	conn *nats.Conn
 }
 
+const coreNATSFlushTimeout = 5 * time.Second
+
+func coreNATSFlushContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(ctx, coreNATSFlushTimeout)
+}
+
 // NewCoreNATSEventBus creates a core-NATS client. NATS_USERNAME and
 // NATS_PASSWORD are optional so existing unauthenticated external NATS
 // installations remain supported during migration.
@@ -43,7 +49,12 @@ func (n *CoreNATSEventBus) Publish(ctx context.Context, topic string, event *Eve
 	// Unlike JetStream Publish, core NATS publish is asynchronous. Flush before
 	// returning because the bridge may terminate immediately after writing a
 	// terminal result and must not lose that result during connection close.
-	if err := n.conn.FlushWithContext(ctx); err != nil {
+	// FlushWithContext requires a context with a deadline. IPC bridge watchers
+	// are deliberately long-lived and receive a cancellation-only context, so
+	// derive a bounded child context for the synchronous core-NATS flush.
+	flushCtx, cancel := coreNATSFlushContext(ctx)
+	defer cancel()
+	if err := n.conn.FlushWithContext(flushCtx); err != nil {
 		return fmt.Errorf("flushing publish to %s: %w", msg.Subject, err)
 	}
 	return nil
