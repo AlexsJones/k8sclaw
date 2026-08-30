@@ -1232,7 +1232,7 @@ func (r *EnsembleReconciler) reconcileSharedMemory(ctx context.Context, log logr
 		// Already exists. The rest of the spec is deliberately left alone, but the
 		// admin-token env is reconciled so enabling adminDelete (or pointing it at a
 		// different Secret) takes effect without deleting the Deployment.
-		if err := syncMemoryAdminTokenEnv(ctx, r.Client, log, &existingDeploy); err != nil {
+		if err := syncMemoryDeployment(ctx, r.Client, log, &existingDeploy, image); err != nil {
 			return err
 		}
 	}

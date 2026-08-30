@@ -650,11 +650,11 @@ func memoryServerContainer(spec *corev1.PodSpec) *corev1.Container {
 	return nil
 }
 
-// syncMemoryAdminTokenEnv reconciles just the MEMORY_ADMIN_TOKEN env var on an
-// existing memory Deployment: added when adminDelete is switched on, repointed
-// when the Secret name changes, removed when the feature is switched off. It is
-// a no-op when the env already matches, so steady-state reconciles issue no
-// writes and the pod is not restarted.
+// syncMemoryDeployment reconciles controller-owned settings on an existing
+// memory Deployment. The rest of the spec remains create-only, while the
+// memory-server image tracks the configured Sympozium image tag and the
+// admin-token env tracks its Secret reference. It is a no-op when both already
+// match, so steady-state reconciles issue no writes and the pod is not restarted.
 //
 // Shared by the per-agent memory Deployment (AgentReconciler) and the shared
 // workflow memory Deployment (EnsembleReconciler), both of which are otherwise
@@ -663,10 +663,17 @@ func memoryServerContainer(spec *corev1.PodSpec) *corev1.Container {
 // Note this reacts to the Secret *reference* changing, not to the token value
 // inside the Secret. Rotating the value in place leaves the pod holding the old
 // token in its env until it restarts.
-func syncMemoryAdminTokenEnv(ctx context.Context, c client.Client, log logr.Logger, deploy *appsv1.Deployment) error {
+func syncMemoryDeployment(ctx context.Context, c client.Client, log logr.Logger, deploy *appsv1.Deployment, image string) error {
 	container := memoryServerContainer(&deploy.Spec.Template.Spec)
 	if container == nil {
 		return nil
+	}
+
+	changed := false
+	if image != "" && container.Image != image {
+		log.Info("Updating memory server image", "deployment", deploy.Name, "from", container.Image, "to", image)
+		container.Image = image
+		changed = true
 	}
 
 	desired := memoryAdminTokenEnv()
@@ -685,21 +692,33 @@ func syncMemoryAdminTokenEnv(ctx context.Context, c client.Client, log logr.Logg
 
 	switch {
 	case want == nil && idx < 0:
-		return nil // Disabled and absent — nothing to do.
+		// Disabled and absent — nothing to do.
 	case want == nil:
 		container.Env = append(container.Env[:idx], container.Env[idx+1:]...)
 		log.Info("Removing memory admin token env", "deployment", deploy.Name)
+		changed = true
 	case idx < 0:
 		container.Env = append(container.Env, *want)
 		log.Info("Adding memory admin token env", "deployment", deploy.Name)
+		changed = true
 	case equality.Semantic.DeepEqual(container.Env[idx], *want):
-		return nil // Already correct.
+		// Already correct.
 	default:
 		container.Env[idx] = *want
 		log.Info("Updating memory admin token env", "deployment", deploy.Name)
+		changed = true
 	}
 
+	if !changed {
+		return nil
+	}
 	return c.Update(ctx, deploy)
+}
+
+// syncMemoryAdminTokenEnv is retained for callers and focused tests that only
+// need to reconcile the admin token without changing the image.
+func syncMemoryAdminTokenEnv(ctx context.Context, c client.Client, log logr.Logger, deploy *appsv1.Deployment) error {
+	return syncMemoryDeployment(ctx, c, log, deploy, "")
 }
 
 // reconcileMemoryDeployment ensures a Deployment + Service exist for the memory
@@ -733,7 +752,7 @@ func (r *AgentReconciler) reconcileMemoryDeployment(ctx context.Context, log log
 		// Already exists. The rest of the spec is deliberately left alone, but the
 		// admin-token env is reconciled so enabling adminDelete (or pointing it at a
 		// different Secret) takes effect without deleting the Deployment.
-		return syncMemoryAdminTokenEnv(ctx, r.Client, log, &existingDeploy)
+		return syncMemoryDeployment(ctx, r.Client, log, &existingDeploy, image)
 	}
 
 	replicas := int32(1)
