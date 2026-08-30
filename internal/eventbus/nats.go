@@ -35,27 +35,21 @@ func NewNATSEventBus(url string) (*NATSEventBus, error) {
 	// limit means a NATS pod recreation that takes longer than
 	// limit*ReconnectWait permanently kills the connection, silently breaking
 	// every subscription until the process restarts.
-	nc, err := nats.Connect(url,
-		nats.RetryOnFailedConnect(true),
-		nats.MaxReconnects(-1),
-		nats.ReconnectWait(2*time.Second),
+	opts := append(connectOptions(),
 		nats.DisconnectErrHandler(func(_ *nats.Conn, err error) {
 			log.Printf("eventbus: disconnected from NATS: %v", err)
 		}),
 		nats.ReconnectHandler(func(c *nats.Conn) {
 			log.Printf("eventbus: reconnected to NATS at %s", c.ConnectedUrl())
-			// NATS may have been recreated with no stream; recreate it so
-			// publishes succeed and consumers can be re-established.
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
 			if _, err := n.ensureStream(ctx); err != nil {
 				log.Printf("eventbus: failed to ensure stream after reconnect: %v", err)
 			}
 		}),
-		nats.ClosedHandler(func(_ *nats.Conn) {
-			log.Printf("eventbus: NATS connection closed")
-		}),
+		nats.ClosedHandler(func(_ *nats.Conn) { log.Printf("eventbus: NATS connection closed") }),
 	)
+	nc, err := nats.Connect(url, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("connecting to NATS: %w", err)
 	}

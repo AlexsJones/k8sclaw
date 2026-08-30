@@ -118,6 +118,15 @@ NATS URL — internal or external.
 {{- end }}
 {{- end }}
 
+{{/* Name of credentials Secret for bundled NATS. */}}
+{{- define "sympozium.natsAuthSecret" -}}
+{{- if .Values.nats.auth.existingSecret }}
+{{- .Values.nats.auth.existingSecret }}
+{{- else }}
+{{- printf "%s-nats-auth" (include "sympozium.fullname" .) }}
+{{- end }}
+{{- end }}
+
 {{/*
 Namespace helper.
 */}}

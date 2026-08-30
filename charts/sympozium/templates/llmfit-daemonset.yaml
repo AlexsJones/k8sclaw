@@ -54,6 +54,15 @@ spec:
                   fieldPath: spec.nodeName
             - name: NATS_URL
               value: {{ include "sympozium.natsUrl" . }}
+            {{- if and .Values.nats.enabled .Values.nats.auth.enabled }}
+            - name: NATS_USERNAME
+              value: sympozium-control
+            - name: NATS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "sympozium.natsAuthSecret" . }}
+                  key: control-password
+            {{- end }}
             - name: LLMFIT_EVENT_INTERVAL
               value: {{ .Values.llmfit.daemonset.eventInterval | quote }}
             - name: LLMFIT_HOST_PROC

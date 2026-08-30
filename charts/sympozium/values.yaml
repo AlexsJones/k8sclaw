@@ -93,6 +93,15 @@ nats:
       memory: 64Mi
   # -- External NATS URL (used when nats.enabled=false)
   externalUrl: ""
+  auth:
+    # -- Require credentials for the bundled NATS server. The bridge account is
+    # restricted to mediated IPC subjects; all other Sympozium components use
+    # the control-plane account. External NATS operators must provide an
+    # equivalent subject policy themselves.
+    enabled: true
+    # -- Existing Secret containing `control-password` and `bridge-password`.
+    # Leave empty for Helm to create and retain a random secret.
+    existingSecret: ""
   persistence:
     enabled: false
     size: 1Gi
