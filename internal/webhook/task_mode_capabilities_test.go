@@ -189,9 +189,10 @@ func TestPolicyEnforcer_RejectsMissingRuntime(t *testing.T) {
 	}
 }
 
-// A harness run that names neither an image nor a runtime inherits the Agent's
-// spec.runtimeRef. This is the path channels/schedules/ensembles/API/UI take to
-// select an external runtime without authoring task.parameters.runtime.
+// An ordinary string-form run inherits the Agent's spec.runtimeRef and is
+// validated as a harness run. This is the shape channels, schedules, the API,
+// and the UI create; testing an object-form harness task here would miss the
+// product entrypoints this inheritance exists to support.
 func TestPolicyEnforcer_InheritsAgentRuntimeRef(t *testing.T) {
 	scheme := runtime.NewScheme()
 	if err := sympoziumv1alpha1.AddToScheme(scheme); err != nil {
@@ -219,10 +220,7 @@ func TestPolicyEnforcer_InheritsAgentRuntimeRef(t *testing.T) {
 	cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(agent, policy, runtimeObj).Build()
 	pe := &PolicyEnforcer{Client: cl, Log: logr.Discard(), Decoder: decoderFor(t, scheme)}
 
-	run := capabilityRun(&sympoziumv1alpha1.TaskSpec{
-		Mode:       taskmodes.Harness,
-		Parameters: map[string]string{"prompt": "do it"},
-	})
+	run := capabilityRun(sympoziumv1alpha1.NewStringTask("do it"))
 
 	resp := pe.Handle(context.Background(), admissionRequestFor(t, run))
 	if !resp.Allowed {

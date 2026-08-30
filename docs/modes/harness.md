@@ -403,8 +403,8 @@ other check, so the image allowlist, digest recording, and capability gating app
 resolved values exactly as they do for an inline image. A runtime that does not exist or is
 not `Ready` is rejected at admission.
 
-An Agent can bind a runtime so every run inherits it — including channel, schedule, ensemble,
-API, and UI runs — without authoring `task.parameters.runtime` per run:
+An Agent can bind a default runtime so its ordinary string-form runs inherit it — including
+channel, schedule, API, and UI runs — without authoring an object-form task:
 
 ```yaml
 apiVersion: sympozium.ai/v1alpha1
@@ -416,11 +416,13 @@ spec:
   # ...
 ```
 
-A run on that Agent still sets `task.mode: harness` but omits both `image` and `runtime`;
-the runtime comes from the Agent. An explicit `image` or `runtime` on the run overrides the
-Agent's `runtimeRef`. Agent-level runtime selection is not expressible through an Ensemble
-persona (it is an administrator decision, not a persona concept); set it out of band on the
-Agent.
+The controller converts the string task into harness mode, preserves the original text as the
+adapter prompt, and resolves the runtime from the Agent. An explicit object-form harness task
+with an `image` or `runtime` overrides the Agent default.
+
+Agent-level runtime selection is not expressible through an Ensemble persona because it is an
+administrator decision rather than a persona concept. Set it out of band on the generated
+Agent; Ensemble reconciliation preserves that administrator-owned field.
 
 ## Graceful degradation
 

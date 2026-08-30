@@ -646,6 +646,23 @@ func TestApplyAgentRuntime_FillsInMissingRuntime(t *testing.T) {
 	}
 }
 
+func TestApplyAgentRuntime_ConvertsStringTask(t *testing.T) {
+	task := sympoziumv1alpha1.NewStringTask("do it through the normal entrypoint")
+	got := ApplyAgentRuntime(task, "  codex-v1  ")
+	if got.IsString() || got.GetMode() != Harness {
+		t.Fatalf("ApplyAgentRuntime did not convert string task to harness mode: %+v", got)
+	}
+	if got.Parameters[harnessParamRuntime] != "codex-v1" {
+		t.Errorf("runtime = %q, want trimmed Agent runtimeRef", got.Parameters[harnessParamRuntime])
+	}
+	if got.Parameters[harnessParamPrompt] != "do it through the normal entrypoint" {
+		t.Errorf("prompt = %q, want original string task", got.Parameters[harnessParamPrompt])
+	}
+	if !task.IsString() || task.GetPrompt() != "do it through the normal entrypoint" {
+		t.Fatal("ApplyAgentRuntime mutated the input string task")
+	}
+}
+
 func TestApplyAgentRuntime_DoesNotOverrideExplicitImageOrRuntime(t *testing.T) {
 	withImage := harnessTask(nil)
 	if got := ApplyAgentRuntime(withImage, "codex-v1"); got.Parameters[harnessParamRuntime] != "" {

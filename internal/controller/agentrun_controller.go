@@ -681,9 +681,13 @@ func (r *AgentRunReconciler) reconcilePending(ctx context.Context, log logr.Logg
 	// instead of a runtime name. When the task names neither an image nor a
 	// runtime, the Agent's runtimeRef is inherited.
 	var runtimeInstance sympoziumv1alpha1.Agent
-	if err := r.Get(ctx, client.ObjectKey{Namespace: agentRun.Namespace, Name: agentRun.Spec.AgentRef}, &runtimeInstance); err == nil {
-		agentRun.Spec.Task = taskmodes.ApplyAgentRuntime(agentRun.Spec.Task, runtimeInstance.Spec.RuntimeRef)
+	if err := r.Get(ctx, client.ObjectKey{Namespace: agentRun.Namespace, Name: agentRun.Spec.AgentRef}, &runtimeInstance); err != nil {
+		if errors.IsNotFound(err) {
+			return ctrl.Result{}, r.failRun(ctx, agentRun, fmt.Sprintf("Agent %q not found while resolving runtime", agentRun.Spec.AgentRef))
+		}
+		return ctrl.Result{}, fmt.Errorf("reading Agent %q while resolving runtime: %w", agentRun.Spec.AgentRef, err)
 	}
+	agentRun.Spec.Task = taskmodes.ApplyAgentRuntime(agentRun.Spec.Task, runtimeInstance.Spec.RuntimeRef)
 	if normalized, err := taskmodes.NormalizeHarnessTask(agentRun.Namespace, agentRun.Spec.Task, func(ns, name string) (*sympoziumv1alpha1.AgentRuntime, error) {
 		var rt sympoziumv1alpha1.AgentRuntime
 		if err := r.Get(ctx, client.ObjectKey{Namespace: ns, Name: name}, &rt); err != nil {

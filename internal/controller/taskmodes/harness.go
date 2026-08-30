@@ -315,19 +315,29 @@ func HarnessImageDigest(task *sympoziumv1alpha1.TaskSpec) string {
 	return digest
 }
 
-// ApplyAgentRuntime fills in a harness task's runtime reference from the
-// Agent's spec.runtimeRef when the task names neither an inline image nor a
-// runtime. It returns the (possibly unchanged) task. This is what lets a
-// channel, schedule, ensemble, API, or UI run inherit the Agent's runtime
-// without authoring task.parameters.runtime per run.
+// ApplyAgentRuntime applies an Agent's default runtime to a task. String-form
+// tasks are converted to harness mode while preserving their prompt; this is
+// the path used by channels, schedules, the API, the UI, and other ordinary run
+// entrypoints. An object-form harness task inherits the runtime only when it
+// names neither an inline image nor an explicit runtime.
 func ApplyAgentRuntime(task *sympoziumv1alpha1.TaskSpec, agentRuntimeRef string) *sympoziumv1alpha1.TaskSpec {
-	if task == nil || task.IsString() || task.GetMode() != Harness {
+	runtimeRef := strings.TrimSpace(agentRuntimeRef)
+	if task == nil || runtimeRef == "" {
+		return task
+	}
+	if task.IsString() {
+		return &sympoziumv1alpha1.TaskSpec{
+			Mode: Harness,
+			Parameters: map[string]string{
+				harnessParamPrompt:  task.GetPrompt(),
+				harnessParamRuntime: runtimeRef,
+			},
+		}
+	}
+	if task.GetMode() != Harness {
 		return task
 	}
 	if strings.TrimSpace(task.Parameters[harnessParamImage]) != "" || strings.TrimSpace(task.Parameters[harnessParamRuntime]) != "" {
-		return task
-	}
-	if strings.TrimSpace(agentRuntimeRef) == "" {
 		return task
 	}
 
@@ -336,7 +346,7 @@ func ApplyAgentRuntime(task *sympoziumv1alpha1.TaskSpec, agentRuntimeRef string)
 	for k, v := range task.Parameters {
 		params[k] = v
 	}
-	params[harnessParamRuntime] = agentRuntimeRef
+	params[harnessParamRuntime] = runtimeRef
 	cp.Parameters = params
 	return &cp
 }
