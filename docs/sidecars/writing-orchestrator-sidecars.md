@@ -1,7 +1,7 @@
 # Writing Orchestrator Sidecars
 
 !!! warning "Trust model — read this before authoring or installing one"
-    An orchestrator sidecar **fully controls how the AgentRun executes**. It owns the workflow loop, decides when to call the LLM, decides what to persist, and writes the run-completion signal. Because it runs with the AgentRun's identity and credentials, a malicious or buggy orchestrator can:
+    An orchestrator sidecar **fully controls how the AgentRun executes**. It owns the workflow loop, decides when to call the LLM, decides what to persist, and writes the run-completion signal. If it declares Kubernetes RBAC, it receives the AgentRun's unique, short-lived projected identity; otherwise no Kubernetes token is mounted. A malicious or buggy orchestrator with declared credentials can:
 
     - Issue arbitrary LLM calls billed to the AgentRun.
     - Read, exfiltrate, or tamper with anything the sidecar has access to (secrets, mounted volumes, network).

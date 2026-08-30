@@ -309,6 +309,14 @@ has a direct analogue, and the line falls in the same place:
   `/ipc/output` was produced by an LLM and is treated as adversarial, exactly as for
   `agent-runner`. Validate anything a harness writes before acting on it. The narrowed `/ipc`
   mount is what keeps "adversarial" from meaning "can create sub-agent runs".
+- **The harness has no Kubernetes identity.** Every AgentRun gets a unique
+  ServiceAccount, but automatic token mounting is disabled. A pod-bound token is
+  projected only into trusted SkillPack sidecars that explicitly declare RBAC;
+  it is not mounted into the harness or IPC bridge. Concurrent runs therefore do
+  not union their Kubernetes permissions.
+- **Pod-wide host privileges are incompatible.** Harness admission rejects
+  lifecycle RBAC and SkillPacks with host access, host networking, host PID, or
+  privileged execution until those paths have a separately mediated boundary.
 
 The result payload is assembled with `jq --arg`, so harness output is encoded as a JSON
 string and cannot forge a result structure. It cannot forge the marker either: an agent that
@@ -403,9 +411,26 @@ other check, so the image allowlist, digest recording, and capability gating app
 resolved values exactly as they do for an inline image. A runtime that does not exist or is
 not `Ready` is rejected at admission.
 
-Binding a runtime to an Agent — so channels, schedules, ensembles, the API and the UI inherit
-it without authoring `task.parameters.runtime` per run — is the next step on the epic and is
-**not** wired up yet.
+An Agent can bind a default runtime so its ordinary string-form runs inherit it — including
+channel, schedule, API, and UI runs — without authoring an object-form task:
+
+```yaml
+apiVersion: sympozium.ai/v1alpha1
+kind: Agent
+metadata:
+  name: my-agent
+spec:
+  runtimeRef: codex-v1
+  # ...
+```
+
+The controller converts the string task into harness mode, preserves the original text as the
+adapter prompt, and resolves the runtime from the Agent. An explicit object-form harness task
+with an `image` or `runtime` overrides the Agent default.
+
+Agent-level runtime selection is not expressible through an Ensemble persona because it is an
+administrator decision rather than a persona concept. Set it out of band on the generated
+Agent; Ensemble reconciliation preserves that administrator-owned field.
 
 ## Graceful degradation
 
@@ -418,6 +443,7 @@ it without authoring `task.parameters.runtime` per run — is the next step on t
 | Explicit opt-in but no image allowlist | Admitted with no image restriction; use only for controlled experimentation. |
 | A capability is requested but not declared | **Denied at admission**, naming the mode and the capability. |
 | `backend: celln` | **Denied at admission**: celln never builds the container harness mode replaces. |
+| Lifecycle RBAC or a host-access/privileged SkillPack | **Denied at admission and by the controller**; these surfaces are not isolated from an external primary container. |
 | Image declares a capability it does not honour | Admitted and run. The field is silently dropped — this is the one failure the descriptor cannot catch, and why a claim is a promise. |
 | Image ignores the result contract | Run fails with no result rather than hanging: no marker, no `/ipc/output/result.json`, and the container exit drives the phase. |
 | Harness writes to `/ipc/spawn`, `/ipc/tools`, … | Not possible: those paths are not in its mount namespace. A write fails with "no such file or directory". |

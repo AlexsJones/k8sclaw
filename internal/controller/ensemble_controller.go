@@ -313,10 +313,11 @@ func (r *EnsembleReconciler) reconcileAgentConfig(
 		// existing Agents with no change here — the field-by-field form had to be
 		// extended for each one and drifted behind buildAgent (see #264).
 		//
-		// AgentSpec carries no out-of-band state, so nothing is carried over from
-		// the existing object. Fields buildAgent never sets are cleared; they are
-		// listed in agentFieldsNotExpressibleByEnsemble in ensemble_parity_test.go.
+		// Runtime selection is administrator-owned rather than persona-owned, so
+		// retain an out-of-band runtimeRef while converging every Ensemble-owned
+		// field to buildAgent's desired spec.
 		desired := r.buildAgent(pack, persona, instanceName, modelEndpoint)
+		desired.Spec.RuntimeRef = existingInst.Spec.RuntimeRef
 
 		needsUpdate := false
 		specDrifted := !reflect.DeepEqual(existingInst.Spec, desired.Spec)

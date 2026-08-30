@@ -447,6 +447,9 @@ func TestValidateRunCompatibility_RejectsAgentRunnerOnlyControls(t *testing.T) {
 		{name: "server", mutate: func(r *sympoziumv1alpha1.AgentRun) { r.Spec.Mode = "server" }, want: "mode=server"},
 		{name: "dry-run", mutate: func(r *sympoziumv1alpha1.AgentRun) { r.Spec.DryRun = true }, want: "dryRun"},
 		{name: "canary", mutate: func(r *sympoziumv1alpha1.AgentRun) { r.Spec.CanaryMode = true }, want: "canaryMode"},
+		{name: "warm pool", mutate: func(r *sympoziumv1alpha1.AgentRun) {
+			r.Spec.AgentSandbox = &sympoziumv1alpha1.AgentSandboxSpec{Enabled: true, WarmPoolRef: "wp-test"}
+		}, want: "agentSandbox.warmPoolRef"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			run := &sympoziumv1alpha1.AgentRun{Spec: sympoziumv1alpha1.AgentRunSpec{Task: harnessTask(nil)}}
@@ -629,6 +632,62 @@ func TestNormalizeHarnessTask_PassesThroughNonRuntimeTasks(t *testing.T) {
 	}
 	if got, err := NormalizeHarnessTask("default", nil, nil); err != nil || got != nil {
 		t.Fatalf("nil task should pass through unchanged: %v, %v", got, err)
+	}
+}
+
+func TestApplyAgentRuntime_FillsInMissingRuntime(t *testing.T) {
+	task := &sympoziumv1alpha1.TaskSpec{
+		Mode:       Harness,
+		Parameters: map[string]string{harnessParamPrompt: "do it"},
+	}
+	got := ApplyAgentRuntime(task, "codex-v1")
+	if got.Parameters[harnessParamRuntime] != "codex-v1" {
+		t.Fatalf("ApplyAgentRuntime did not inject runtime ref: %v", got.Parameters)
+	}
+	if task.Parameters[harnessParamRuntime] != "" {
+		t.Fatal("ApplyAgentRuntime mutated the input task")
+	}
+}
+
+func TestApplyAgentRuntime_ConvertsStringTask(t *testing.T) {
+	task := sympoziumv1alpha1.NewStringTask("do it through the normal entrypoint")
+	got := ApplyAgentRuntime(task, "  codex-v1  ")
+	if got.IsString() || got.GetMode() != Harness {
+		t.Fatalf("ApplyAgentRuntime did not convert string task to harness mode: %+v", got)
+	}
+	if got.Parameters[harnessParamRuntime] != "codex-v1" {
+		t.Errorf("runtime = %q, want trimmed Agent runtimeRef", got.Parameters[harnessParamRuntime])
+	}
+	if got.Parameters[harnessParamPrompt] != "do it through the normal entrypoint" {
+		t.Errorf("prompt = %q, want original string task", got.Parameters[harnessParamPrompt])
+	}
+	if !task.IsString() || task.GetPrompt() != "do it through the normal entrypoint" {
+		t.Fatal("ApplyAgentRuntime mutated the input string task")
+	}
+}
+
+func TestApplyAgentRuntime_DoesNotOverrideExplicitImageOrRuntime(t *testing.T) {
+	withImage := harnessTask(nil)
+	if got := ApplyAgentRuntime(withImage, "codex-v1"); got.Parameters[harnessParamRuntime] != "" {
+		t.Fatalf("explicit image should not be overridden by Agent runtimeRef: %v", got.Parameters)
+	}
+	withRuntime := &sympoziumv1alpha1.TaskSpec{
+		Mode:       Harness,
+		Parameters: map[string]string{harnessParamPrompt: "do it", harnessParamRuntime: "other"},
+	}
+	if got := ApplyAgentRuntime(withRuntime, "codex-v1"); got.Parameters[harnessParamRuntime] != "other" {
+		t.Fatalf("explicit runtime should not be overridden by Agent runtimeRef: %v", got.Parameters)
+	}
+	// Empty Agent runtimeRef, non-harness task, and nil task are all no-ops.
+	if got := ApplyAgentRuntime(harnessTask(nil), ""); got.Parameters[harnessParamRuntime] != "" {
+		t.Fatal("empty Agent runtimeRef should not inject")
+	}
+	sidecar := &sympoziumv1alpha1.TaskSpec{Mode: SidecarDriven, Tool: "primary"}
+	if got := ApplyAgentRuntime(sidecar, "codex-v1"); got != sidecar {
+		t.Fatal("non-harness task should pass through unchanged")
+	}
+	if got := ApplyAgentRuntime(nil, "codex-v1"); got != nil {
+		t.Fatal("nil task should pass through unchanged")
 	}
 }
 

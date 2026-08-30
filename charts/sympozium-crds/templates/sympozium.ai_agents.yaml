@@ -343,7 +343,7 @@ spec:
                             description: |-
                               RBAC defines namespace-scoped Kubernetes RBAC rules to create for
                               lifecycle hook containers. A Role and RoleBinding are provisioned
-                              in the agent namespace, bound to the "sympozium-agent" ServiceAccount.
+                              in the agent namespace, bound only to this AgentRun's unique ServiceAccount.
                               This allows hooks to interact with Kubernetes resources (e.g., create
                               or delete ConfigMaps, read Secrets).
                             items:
@@ -2822,6 +2822,14 @@ spec:
               policyRef:
                 description: PolicyRef references the SympoziumPolicy that applies
                   to this instance.
+                type: string
+              runtimeRef:
+                description: |-
+                  RuntimeRef references an administrator-approved AgentRuntime that
+                  replaces agent-runner as the primary process for this Agent's ordinary
+                  string-form runs. Those runs are dispatched through harness mode with this
+                  runtime and their original task as the prompt. An explicit object-form
+                  harness task may still select an image or runtime itself.
                 type: string
               skills:
                 description: Skills to mount (from SkillPack CRDs or ConfigMaps).

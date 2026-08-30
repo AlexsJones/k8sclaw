@@ -109,8 +109,11 @@ func TestBuildJob_ServiceAccount(t *testing.T) {
 	r := &AgentRunReconciler{}
 	job, _ := r.buildJob(context.Background(), newTestRun(), false, nil, nil, nil, nil)
 
-	if job.Spec.Template.Spec.ServiceAccountName != "sympozium-agent" {
-		t.Errorf("SA = %q, want sympozium-agent", job.Spec.Template.Spec.ServiceAccountName)
+	if job.Spec.Template.Spec.ServiceAccountName != "sympozium-run-test-run" {
+		t.Errorf("SA = %q, want sympozium-run-test-run", job.Spec.Template.Spec.ServiceAccountName)
+	}
+	if job.Spec.Template.Spec.AutomountServiceAccountToken == nil || *job.Spec.Template.Spec.AutomountServiceAccountToken {
+		t.Error("agent pod must disable automatic service-account token mounting")
 	}
 }
 
@@ -1780,8 +1783,11 @@ func TestBuildPostRunJob_ServiceAccount(t *testing.T) {
 
 	job := r.buildPostRunJob(run, 0, "done")
 
-	if job.Spec.Template.Spec.ServiceAccountName != "sympozium-agent" {
-		t.Errorf("postRun Job ServiceAccountName = %q, want sympozium-agent", job.Spec.Template.Spec.ServiceAccountName)
+	if job.Spec.Template.Spec.ServiceAccountName != "sympozium-run-test-run" {
+		t.Errorf("postRun Job ServiceAccountName = %q, want sympozium-run-test-run", job.Spec.Template.Spec.ServiceAccountName)
+	}
+	if job.Spec.Template.Spec.AutomountServiceAccountToken == nil || *job.Spec.Template.Spec.AutomountServiceAccountToken {
+		t.Error("postRun pod must disable automatic service-account token mounting")
 	}
 }
 

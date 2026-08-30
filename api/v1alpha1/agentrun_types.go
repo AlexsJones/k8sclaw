@@ -571,7 +571,7 @@ type LifecycleHooks struct {
 
 	// RBAC defines namespace-scoped Kubernetes RBAC rules to create for
 	// lifecycle hook containers. A Role and RoleBinding are provisioned
-	// in the agent namespace, bound to the "sympozium-agent" ServiceAccount.
+	// in the agent namespace, bound only to this AgentRun's unique ServiceAccount.
 	// This allows hooks to interact with Kubernetes resources (e.g., create
 	// or delete ConfigMaps, read Secrets).
 	// +optional

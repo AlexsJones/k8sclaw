@@ -189,6 +189,45 @@ func TestPolicyEnforcer_RejectsMissingRuntime(t *testing.T) {
 	}
 }
 
+// An ordinary string-form run inherits the Agent's spec.runtimeRef and is
+// validated as a harness run. This is the shape channels, schedules, the API,
+// and the UI create; testing an object-form harness task here would miss the
+// product entrypoints this inheritance exists to support.
+func TestPolicyEnforcer_InheritsAgentRuntimeRef(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := sympoziumv1alpha1.AddToScheme(scheme); err != nil {
+		t.Fatalf("add scheme: %v", err)
+	}
+	agent := &sympoziumv1alpha1.Agent{
+		ObjectMeta: metav1.ObjectMeta{Name: "inst", Namespace: "default"},
+		Spec:       sympoziumv1alpha1.AgentSpec{PolicyRef: "harness-enabled", RuntimeRef: "codex-v1"},
+	}
+	policy := &sympoziumv1alpha1.SympoziumPolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: "harness-enabled", Namespace: "default"},
+		Spec: sympoziumv1alpha1.SympoziumPolicySpec{
+			HarnessPolicy: &sympoziumv1alpha1.HarnessPolicySpec{Enabled: true},
+		},
+	}
+	runtimeObj := &sympoziumv1alpha1.AgentRuntime{
+		ObjectMeta: metav1.ObjectMeta{Name: "codex-v1", Namespace: "default"},
+		Spec: sympoziumv1alpha1.AgentRuntimeSpec{
+			Image: "ghcr.io/acme/codex-adapter@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		},
+		Status: sympoziumv1alpha1.AgentRuntimeStatus{
+			Conditions: []metav1.Condition{{Type: sympoziumv1alpha1.AgentRuntimeReadyCondition, Status: metav1.ConditionTrue, Reason: "Validated"}},
+		},
+	}
+	cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(agent, policy, runtimeObj).Build()
+	pe := &PolicyEnforcer{Client: cl, Log: logr.Discard(), Decoder: decoderFor(t, scheme)}
+
+	run := capabilityRun(sympoziumv1alpha1.NewStringTask("do it"))
+
+	resp := pe.Handle(context.Background(), admissionRequestFor(t, run))
+	if !resp.Allowed {
+		t.Fatalf("expected ALLOW via inherited Agent runtimeRef; denied: %s", resp.Result.Message)
+	}
+}
+
 // An image that declares nothing gets nothing: a run asking for enforcement
 // the image never claimed is denied rather than admitted and degraded.
 func TestPolicyEnforcer_DeniesUnsupportedCapability(t *testing.T) {

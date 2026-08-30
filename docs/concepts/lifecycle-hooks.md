@@ -89,7 +89,7 @@ All lifecycle hook containers receive these env vars:
 
 ## RBAC for Hooks
 
-By default, lifecycle hook containers run with the `sympozium-agent` ServiceAccount, which has **no Kubernetes permissions**. If your hooks need to interact with the Kubernetes API (e.g., create or delete ConfigMaps), declare the required RBAC rules:
+Every AgentRun gets a unique ServiceAccount with automatic token mounting disabled. Lifecycle hooks receive **no Kubernetes token or permissions** by default. If your hooks need to interact with the Kubernetes API (for example, to create or delete ConfigMaps), declare the required RBAC rules:
 
 ```yaml
 spec:
@@ -109,7 +109,7 @@ spec:
         command: ["kubectl", "delete", "configmap", "run-context"]
 ```
 
-The controller creates a namespace-scoped Role and RoleBinding for the run, bound to `sympozium-agent`. These are garbage-collected when the AgentRun is deleted — no standing permissions.
+The controller creates a namespace-scoped Role and RoleBinding for the run, bound only to that AgentRun's ServiceAccount. It projects a pod-bound, 10-minute token into the declared hook containers, not into the agent, harness, IPC bridge, or unrelated sidecars. The ServiceAccount and namespace-scoped RBAC are garbage-collected when the AgentRun is deleted; cluster-scoped RBAC is removed when the run completes.
 
 ## Examples
 

@@ -382,8 +382,9 @@ the sidecar container into the agent pod and creates scoped RBAC resources
 cluster-wide access). The controller uses a scoped `ClusterRole` with explicitly
 enumerated permissions rather than `cluster-admin`, so any new API groups required
 by SkillPack RBAC rules must also be added to the controller's own ClusterRole to
-avoid Kubernetes RBAC escalation prevention. RBAC resources are garbage-collected
-when the AgentRun completes or is deleted.
+avoid Kubernetes RBAC escalation prevention. Cluster-scoped RBAC is removed when
+the AgentRun completes; namespaced RBAC and the run identity are owned by the
+AgentRun and are garbage-collected when it is deleted.
 
 ```
 ┌─────────────────────────────────────────────────┐
@@ -398,7 +399,8 @@ when the AgentRun completes or is deleted.
 │   /skills        NATS            full RBAC      │
 │   /ipc                                          │
 │                                                 │
-│  ServiceAccount: sympozium-agent                 │
+│  ServiceAccount: sympozium-run-<run>              │
+│  token mounted only in RBAC sidecars              │
 │  + Role: sympozium-skill-k8s-ops-<run>           │
 │  + ClusterRole: sympozium-skill-k8s-ops-<run>    │
 └─────────────────────────────────────────────────┘
@@ -629,7 +631,8 @@ spec:
         sympozium.ai/agent-run: run-abc123
     spec:
       restartPolicy: Never
-      serviceAccountName: sympozium-agent   # minimal RBAC, no cluster access
+      serviceAccountName: sympozium-run-run-abc123
+      automountServiceAccountToken: false
 
       securityContext:
         runAsNonRoot: true
@@ -1208,7 +1211,8 @@ the IPC bridge flushes them to the database in batches.
 │  • capabilities: drop ALL                                                │
 │  • seccompProfile: RuntimeDefault                                        │
 │  • No host network/PID/IPC namespace sharing                             │
-│  • No service account token auto-mount                                   │
+│  • No service account token auto-mount; short-lived tokens only in       │
+│    RBAC-declaring trusted sidecars/hooks                                  │
 │  • NetworkPolicy: deny all (or restricted egress)                        │
 │  • Resource limits enforced (CPU, memory, pids, ephemeral storage)       │
 │  • Secrets mounted only for authorized providers                         │

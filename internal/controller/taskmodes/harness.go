@@ -315,6 +315,42 @@ func HarnessImageDigest(task *sympoziumv1alpha1.TaskSpec) string {
 	return digest
 }
 
+// ApplyAgentRuntime applies an Agent's default runtime to a task. String-form
+// tasks are converted to harness mode while preserving their prompt; this is
+// the path used by channels, schedules, the API, the UI, and other ordinary run
+// entrypoints. An object-form harness task inherits the runtime only when it
+// names neither an inline image nor an explicit runtime.
+func ApplyAgentRuntime(task *sympoziumv1alpha1.TaskSpec, agentRuntimeRef string) *sympoziumv1alpha1.TaskSpec {
+	runtimeRef := strings.TrimSpace(agentRuntimeRef)
+	if task == nil || runtimeRef == "" {
+		return task
+	}
+	if task.IsString() {
+		return &sympoziumv1alpha1.TaskSpec{
+			Mode: Harness,
+			Parameters: map[string]string{
+				harnessParamPrompt:  task.GetPrompt(),
+				harnessParamRuntime: runtimeRef,
+			},
+		}
+	}
+	if task.GetMode() != Harness {
+		return task
+	}
+	if strings.TrimSpace(task.Parameters[harnessParamImage]) != "" || strings.TrimSpace(task.Parameters[harnessParamRuntime]) != "" {
+		return task
+	}
+
+	cp := *task
+	params := make(map[string]string, len(task.Parameters)+1)
+	for k, v := range task.Parameters {
+		params[k] = v
+	}
+	params[harnessParamRuntime] = runtimeRef
+	cp.Parameters = params
+	return &cp
+}
+
 // NormalizeHarnessTask resolves a harness task's runtime reference into its
 // canonical inline form, so the rest of the pipeline (Validate, image policy,
 // OverrideAgentContainer, digest recording) sees only resolved values. When the

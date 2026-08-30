@@ -284,7 +284,7 @@ If the sidecar needs to talk to the Kubernetes API (e.g. `kubectl get pods`), de
 
 ### Namespace-scoped RBAC (`rbac`)
 
-Creates a **Role** + **RoleBinding** in the AgentRun's namespace, bound to the `sympozium-agent` ServiceAccount:
+Creates a **Role** + **RoleBinding** in the AgentRun's namespace, bound only to that AgentRun's unique ServiceAccount. Automatic token mounting stays disabled; the controller projects a pod-bound, 10-minute token only into the SkillPack sidecar that declared RBAC:
 
 ```yaml
   sidecar:

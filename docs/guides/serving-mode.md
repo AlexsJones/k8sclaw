@@ -34,7 +34,7 @@ spec:
 ### Reconciliation flow
 
 1. **Pending** — Controller detects `requiresServer: true` on a resolved sidecar and calls `reconcilePendingServer()`:
-   - Ensures the `sympozium-agent` ServiceAccount exists
+   - Creates a unique `sympozium-run-<run>` ServiceAccount for the serving run
    - Creates ephemeral RBAC for the skill
    - Generates an API key Secret (if not provided)
    - Builds and creates a Deployment with the sidecar container
