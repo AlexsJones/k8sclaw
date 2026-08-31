@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import {
   useRuns,
   useDeleteRun,
@@ -78,6 +78,7 @@ export function RunsPage() {
   const createRun = useCreateRun();
   const gateVerdict = useGateVerdict();
   const [open, setOpen] = useState(false);
+  const [searchParams, setSearchParams] = useSearchParams();
   const [search, setSearch] = useState("");
   const { isUnseen, markAllSeen } = useRunsSeen();
   const markedRef = useRef(false);
@@ -89,6 +90,14 @@ export function RunsPage() {
     backend: "job",
     runtimeRef: "",
   });
+  const selectedAgent = (instances.data || []).find((agent) => agent.metadata.name === form.agentRef);
+
+  useEffect(() => {
+    if (searchParams.get("create") === "1") {
+      setOpen(true);
+      setSearchParams({}, { replace: true });
+    }
+  }, [searchParams, setSearchParams]);
 
   // Mark all runs as seen after a short delay so "new" dots are visible briefly.
   useEffect(() => {
@@ -183,16 +192,16 @@ export function RunsPage() {
                 />
               </div>
               <div className="space-y-2">
-                <Label>Harness runtime (optional)</Label>
+                <Label>One-run harness override (advanced)</Label>
                 <Select
                   value={form.runtimeRef || "inherit"}
                   onValueChange={(v) => setForm({ ...form, runtimeRef: v === "inherit" ? "" : v })}
                 >
                   <SelectTrigger>
-                    <SelectValue placeholder="Use agent default" />
+                    <SelectValue placeholder="Use Agent default" />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="inherit">Use agent default</SelectItem>
+                    <SelectItem value="inherit">Use Agent default{selectedAgent?.spec.runtimeRef ? ` — ${selectedAgent.spec.runtimeRef}` : " — built-in runner"}</SelectItem>
                     {(runtimes.data || []).map((runtime) => (
                       <SelectItem key={runtime.metadata.name} value={runtime.metadata.name}>
                         {runtime.metadata.name}{runtime.spec.supportOwner ? ` — ${runtime.spec.supportOwner}` : ""}
@@ -201,7 +210,7 @@ export function RunsPage() {
                   </SelectContent>
                 </Select>
                 <p className="text-xs text-muted-foreground">
-                  Choose an administrator-approved adapter. Leaving this empty preserves the agent’s configured runtime and normal AgentRun behaviour.
+                  This is normally not needed: runs inherit <span className="font-mono">{selectedAgent?.spec.runtimeRef || "the built-in runner"}</span> from the selected Agent. Choose another approved harness only for this run.
                 </p>
               </div>
               <div className="grid grid-cols-2 gap-4">

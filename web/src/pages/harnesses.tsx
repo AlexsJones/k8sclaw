@@ -1,9 +1,10 @@
 import { Link } from "react-router-dom";
-import { useRuntimes } from "@/hooks/use-api";
+import { useRuntimes, useInstallDefaultRuntimes } from "@/hooks/use-api";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { ShieldCheck, ShieldX, ExternalLink } from "lucide-react";
+import { ShieldCheck, ShieldX, ExternalLink, Download, Plus } from "lucide-react";
+import { Button } from "@/components/ui/button";
 
 function ready(runtime: import("@/lib/api").AgentRuntime) {
   return runtime.status?.conditions?.some(
@@ -13,6 +14,7 @@ function ready(runtime: import("@/lib/api").AgentRuntime) {
 
 export function HarnessesPage() {
   const { data: runtimes, isLoading } = useRuntimes();
+  const installDefaults = useInstallDefaultRuntimes();
 
   if (isLoading) {
     return <Skeleton className="h-64 w-full" />;
@@ -20,20 +22,27 @@ export function HarnessesPage() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold">Harnesses</h1>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Administrator-approved execution adapters. These are trusted runtime
-          profiles, not arbitrary container images.
-        </p>
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-bold">Harnesses</h1>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Administrator-approved execution adapters. These are trusted runtime
+            profiles, not arbitrary container images.
+          </p>
+        </div>
+        <Button variant="outline" size="sm" onClick={() => installDefaults.mutate()} disabled={installDefaults.isPending}>
+          <Download className="mr-2 h-4 w-4" /> {installDefaults.isPending ? "Installing…" : "Install defaults"}
+        </Button>
       </div>
 
       {(runtimes || []).length === 0 ? (
         <Card>
-          <CardContent className="py-8 text-sm text-muted-foreground">
-            No approved harnesses are registered in this namespace. Create an
-            <code className="mx-1 rounded bg-muted px-1">AgentRuntime</code>
-            before selecting one on an Agent.
+          <CardContent className="space-y-4 py-8 text-sm text-muted-foreground">
+            <p>No approved harnesses are registered in this namespace.</p>
+            <p>Install Pi and Hermes as curated, digest-pinned defaults. This also installs the required harness policy; it does not create an Agent or credentials.</p>
+            <Button size="sm" onClick={() => installDefaults.mutate()} disabled={installDefaults.isPending}>
+              <Download className="mr-2 h-4 w-4" /> {installDefaults.isPending ? "Installing…" : "Install default harnesses"}
+            </Button>
           </CardContent>
         </Card>
       ) : (
@@ -82,8 +91,8 @@ export function HarnessesPage() {
                     <Link to={`/harnesses/${runtime.metadata.name}`} className="inline-flex items-center gap-1 text-blue-400 hover:text-blue-300">
                       Inspect harness <ExternalLink className="h-3 w-3" />
                     </Link>
-                    <Link to="/agents" className="inline-flex items-center gap-1 text-blue-400 hover:text-blue-300">
-                      Select from an Agent <ExternalLink className="h-3 w-3" />
+                    <Link to={`/agents?runtime=${encodeURIComponent(runtime.metadata.name)}&policy=harness-examples`} className="inline-flex items-center gap-1 text-blue-400 hover:text-blue-300">
+                      <Plus className="h-3 w-3" /> Create Agent using this harness
                     </Link>
                   </div>
                 </CardContent>

@@ -39,6 +39,7 @@ import {
   useGatewayConfig,
   useDensityNodes,
   useDraNodes,
+  useRuntimes,
 } from "@/hooks/use-api";
 import { StimulusDialogProvider, StimulusDialogCtx } from "@/components/canvas-primitives";
 import type { StimulusNodeData } from "@/components/canvas-primitives";
@@ -64,6 +65,7 @@ import {
   ListOrdered,
   Eye,
   Network,
+  Shield,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type {
@@ -71,6 +73,7 @@ import type {
   Ensemble,
   Model,
   AgentRun,
+  AgentRuntime,
   ProviderNode,
   NodeProvider,
   GatewayConfigResponse,
@@ -348,6 +351,27 @@ interface AgentRunNodeData {
   [key: string]: unknown;
 }
 
+interface HarnessNodeData {
+  name: string;
+  ready: boolean;
+  owner: string;
+  [key: string]: unknown;
+}
+
+function HarnessNode({ data }: NodeProps<Node<HarnessNodeData>>) {
+  return (
+    <div className="border border-amber-500/40 bg-amber-500/5 px-3 py-2 shadow-sm min-w-[150px]">
+      <Handle type="target" position={Position.Top} className="!bg-amber-400 !w-1.5 !h-1.5" />
+      <Handle type="source" position={Position.Bottom} className="!bg-amber-400 !w-1.5 !h-1.5" />
+      <div className="flex items-center gap-1.5">
+        <Shield className="h-3.5 w-3.5 text-amber-400 shrink-0" />
+        <Link to={`/harnesses/${data.name}`} className="text-[11px] font-medium hover:underline truncate">{data.name}</Link>
+      </div>
+      <p className="mt-0.5 text-[9px] text-muted-foreground">{data.ready ? "Ready" : "Not ready"}{data.owner ? ` · ${data.owner}` : ""}</p>
+    </div>
+  );
+}
+
 const runPhaseBorder: Record<string, string> = {
   Running: "border-blue-500/50 bg-blue-500/5",
   Pending: "border-yellow-500/50 bg-yellow-500/5",
@@ -525,6 +549,7 @@ export const nodeTypes = {
   persona: PersonaNode,
   agent: StandaloneAgentNode,
   agentRun: AgentRunNode,
+  harness: HarnessNode,
   cloudProvider: CloudProviderNode,
   gateway: GatewayNode,
 };
@@ -542,6 +567,7 @@ export const NODE_SIZES: Record<string, [number, number]> = {
   persona:       [150, 50],
   agent:         [170, 56],
   agentRun:      [140, 40],
+  harness:       [170, 56],
 };
 
 /** Run dagre layout on nodes and edges, positioning top-to-bottom. */
@@ -587,6 +613,7 @@ function entityFingerprint(
   models: Model[],
   ensembles: Ensemble[],
   agents: Agent[],
+  runtimes: AgentRuntime[],
   hasGateway: boolean,
   draNodes?: DraNodeSummary[],
 ): string {
@@ -596,6 +623,7 @@ function entityFingerprint(
     models.map((m) => m.metadata.name).sort().join(","),
     ensembles.map((e) => e.metadata.name).sort().join(","),
     agents.map((a) => a.metadata.name).sort().join(","),
+    runtimes.map((r) => r.metadata.name).sort().join(","),
     hasGateway ? "gw" : "",
   ];
   return parts.join("|");
@@ -610,6 +638,7 @@ function buildTopology(
   models: Model[],
   ensembles: Ensemble[],
   agents: Agent[],
+  runtimes: AgentRuntime[],
   gateway: GatewayConfigResponse | undefined,
   runningByEnsemble: Record<string, number>,
   webEndpointAgents: string[],
@@ -633,6 +662,23 @@ function buildTopology(
   const standaloneAgents = agents.filter(
     (a) => !ensembleAgentRefs.has(a.metadata.name),
   );
+
+  // A harness is execution infrastructure. Render only harnesses actually
+  // selected by an Agent, keeping the topology focused on live relationships.
+  const referencedRuntimeNames = new Set(
+    agents.map((agent) => agent.spec.runtimeRef).filter(Boolean),
+  );
+  for (const runtime of runtimes.filter((runtime) => referencedRuntimeNames.has(runtime.metadata.name))) {
+    const ready = runtime.status?.conditions?.some(
+      (condition) => condition.type === "Ready" && condition.status === "True",
+    ) || false;
+    nodes.push({
+      id: `harness-${runtime.metadata.name}`,
+      type: "harness",
+      position: P,
+      data: { name: runtime.metadata.name, ready, owner: runtime.spec.supportOwner || "" },
+    });
+  }
 
   // ── Provider detection ─────────────────────────────────────────────────
   const PROVIDER_LABELS: Record<string, string> = {
@@ -851,6 +897,19 @@ function buildTopology(
         runPhase: runPhases[agent.metadata.name],
       },
     });
+    if (agent.spec.runtimeRef && runtimes.some((runtime) => runtime.metadata.name === agent.spec.runtimeRef)) {
+      edges.push({
+        id: `e-${agentId}-harness-${agent.spec.runtimeRef}`,
+        source: agentId,
+        target: `harness-${agent.spec.runtimeRef}`,
+        style: { stroke: "#f59e0b", strokeWidth: 1.5, strokeDasharray: "4 3" },
+        markerEnd: { type: MarkerType.ArrowClosed, color: "#f59e0b" },
+        label: "executes with",
+        labelStyle: { fontSize: 9, fill: "#8a8c82" },
+        labelBgStyle: { fill: "#09090b", fillOpacity: 0.8 },
+        labelBgPadding: [4, 2] as [number, number],
+      });
+    }
     const modelName = agentModelMap.get(agent.metadata.name);
     if (modelName) {
       edges.push({
@@ -1212,6 +1271,7 @@ function TopologyCanvas() {
   const { data: ensembles } = useEnsembles();
   const { data: models } = useModels();
   const { data: agents } = useAgents();
+  const { data: runtimes } = useRuntimes();
   const { data: runs } = useRuns();
   const { data: providerNodes } = useProviderNodes(true);
   const { data: gateway } = useGatewayConfig();
@@ -1331,6 +1391,7 @@ function TopologyCanvas() {
       models || [],
       ensembles || [],
       agents || [],
+      runtimes || [],
       !!gateway,
       draData?.nodes,
     ) + "|runs:" + activeRunFingerprint;
@@ -1344,6 +1405,7 @@ function TopologyCanvas() {
         models || [],
         ensembles || [],
         agents || [],
+        runtimes || [],
         gateway,
         runningByEnsemble,
         webEndpointAgents,
@@ -1380,6 +1442,7 @@ function TopologyCanvas() {
           models || [],
           ensembles || [],
           agents || [],
+          runtimes || [],
           gateway,
           runningByEnsemble,
           webEndpointAgents,
@@ -1403,6 +1466,7 @@ function TopologyCanvas() {
           models || [],
           ensembles || [],
           agents || [],
+          runtimes || [],
           gateway,
           runningByEnsemble,
           webEndpointAgents,
@@ -1414,7 +1478,7 @@ function TopologyCanvas() {
         return freshEdges;
       });
     }
-  }, [providerNodes, models, ensembles, agents, gateway, runningByEnsemble, webEndpointAgents, runPhases, activeRuns, activeRunFingerprint, densityData, draData]);
+  }, [providerNodes, models, ensembles, agents, runtimes, gateway, runningByEnsemble, webEndpointAgents, runPhases, activeRuns, activeRunFingerprint, densityData, draData]);
 
   // Save positions to localStorage after any node drag ends.
   const handleNodesChange = useCallback(

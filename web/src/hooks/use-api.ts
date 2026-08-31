@@ -69,6 +69,20 @@ export function useRuntimes() {
   return useQuery({ queryKey: ["runtimes"], queryFn: api.runtimes.list });
 }
 
+export function useInstallDefaultRuntimes() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: api.runtimes.installDefaults,
+    onSuccess: (data) => {
+      qc.invalidateQueries({ queryKey: ["runtimes"] });
+      qc.invalidateQueries({ queryKey: ["policies"] });
+      const installed = data.copied.filter((name) => name.startsWith("runtime/")).length;
+      toast.success(installed ? `Installed ${installed} default harness${installed === 1 ? "" : "es"}` : "Default harnesses are already installed");
+    },
+    onError: toastError,
+  });
+}
+
 export function useAgent(name: string) {
   return useQuery({
     queryKey: ["agents", name],

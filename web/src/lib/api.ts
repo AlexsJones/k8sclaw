@@ -754,6 +754,13 @@ export interface InstallDefaultMCPServersResponse {
   alreadyPresent: string[];
 }
 
+export interface InstallDefaultRuntimesResponse {
+  sourceNamespace: string;
+  targetNamespace: string;
+  copied: string[];
+  alreadyPresent: string[];
+}
+
 export interface MCPServerAuthStatusResponse {
   status: string;
   secretName: string;
@@ -1253,6 +1260,7 @@ export const api = {
       awsSecretAccessKey?: string;
       awsSessionToken?: string;
       policyRef?: string;
+	  runtimeRef?: string;
       skills?: SkillRef[];
       channels?: ChannelSpec[];
       heartbeatInterval?: string;
@@ -1293,6 +1301,10 @@ export const api = {
 
   runtimes: {
     list: () => apiFetch<AgentRuntime[]>("/api/v1/runtimes"),
+    installDefaults: () =>
+      apiFetch<InstallDefaultRuntimesResponse>("/api/v1/runtimes/install-defaults", {
+        method: "POST",
+      }),
   },
 
   policies: {

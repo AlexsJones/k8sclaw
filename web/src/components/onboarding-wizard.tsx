@@ -44,6 +44,7 @@ import {
 import { cn } from "@/lib/utils";
 import { useCapabilities, useModels } from "@/hooks/use-api";
 import { api } from "@/lib/api";
+import type { AgentRuntime, SympoziumPolicy } from "@/lib/api";
 import {
   YamlModal,
   instanceYamlFromWizard,
@@ -214,6 +215,10 @@ export interface WizardResult {
   requireApproval?: boolean;
   /** References a cluster-local Model CR for inference (no API key needed). */
   modelRef?: string;
+  /** Administrator-approved external harness used by this Agent's normal runs. */
+  runtimeRef?: string;
+  /** Policy required to authorize the selected harness. */
+  policyRef?: string;
 }
 
 interface OnboardingWizardProps {
@@ -227,6 +232,10 @@ interface OnboardingWizardProps {
   agentConfigCount?: number;
   /** Available SkillPacks to choose from */
   availableSkills?: string[];
+  /** Administrator-approved harnesses available in the current namespace. */
+  availableRuntimes?: AgentRuntime[];
+  /** Policies available in the current namespace. */
+  availablePolicies?: SympoziumPolicy[];
   /** Pre-fill form values */
   defaults?: Partial<WizardResult>;
   /** Called when the user clicks Activate / Create */
@@ -238,6 +247,7 @@ interface OnboardingWizardProps {
 
 type WizardStep =
   | "name"
+  | "runtime"
   | "provider"
   | "apikey"
   | "model"
@@ -254,6 +264,7 @@ function stepsForMode(mode: "agent" | "persona" | "canary"): WizardStep[] {
   if (mode === "agent") {
     return [
       "name",
+      "runtime",
       "provider",
       "apikey",
       "model",
@@ -287,6 +298,7 @@ function StepIndicator({
 }) {
   const labels: Record<WizardStep, string> = {
     name: "Name",
+    runtime: "Execution",
     provider: "Provider",
     apikey: "Auth",
     model: "Model",
@@ -298,6 +310,7 @@ function StepIndicator({
   };
   const icons: Record<WizardStep, React.ReactNode> = {
     name: <Server className="h-3.5 w-3.5" />,
+    runtime: <Terminal className="h-3.5 w-3.5" />,
     provider: <Bot className="h-3.5 w-3.5" />,
     apikey: <Key className="h-3.5 w-3.5" />,
     model: <Sparkles className="h-3.5 w-3.5" />,
@@ -514,6 +527,8 @@ export function OnboardingWizard({
   targetName,
   agentConfigCount,
   availableSkills = [],
+  availableRuntimes = [],
+  availablePolicies = [],
   defaults,
   onComplete,
   isPending,
@@ -545,6 +560,8 @@ export function OnboardingWizard({
     awsAccessKeyId: defaults?.awsAccessKeyId || "",
     awsSecretAccessKey: defaults?.awsSecretAccessKey || "",
     awsSessionToken: defaults?.awsSessionToken || "",
+    runtimeRef: defaults?.runtimeRef || "",
+    policyRef: defaults?.policyRef || "",
   });
   const [inferenceMode, setInferenceMode] = useState<"workload" | "node">(
     "workload",
@@ -745,6 +762,8 @@ export function OnboardingWizard({
       awsAccessKeyId: d.awsAccessKeyId || "",
       awsSecretAccessKey: d.awsSecretAccessKey || "",
       awsSessionToken: d.awsSessionToken || "",
+      runtimeRef: d.runtimeRef || "",
+      policyRef: d.policyRef || "",
     });
     setStep(steps[0]);
     setChannelActionIdx(0);
@@ -832,6 +851,49 @@ export function OnboardingWizard({
               />
               {nameError && <p className="text-xs text-red-500">{nameError}</p>}
             </div>
+          </div>
+        )}
+
+        {/* ── Execution step (Agent only) ───────────────────────────── */}
+        {step === "runtime" && (
+          <div className="space-y-4">
+            <div>
+              <Label>How will this Agent execute?</Label>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Choose the Agent's default execution runtime. Normal AgentRuns inherit this choice; a run may make a one-off override later.
+              </p>
+            </div>
+            <Select
+              value={form.runtimeRef || "builtin"}
+              onValueChange={(value) => {
+                const runtimeRef = value === "builtin" ? "" : value;
+                const isDefaultCatalog = availableRuntimes.some((runtime) => runtime.metadata.name === runtimeRef && runtime.metadata.labels?.["sympozium.ai/harness-example"] === "true");
+                setForm({ ...form, runtimeRef, policyRef: runtimeRef && isDefaultCatalog ? "harness-examples" : runtimeRef ? form.policyRef : "" });
+              }}
+            >
+              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="builtin">Built-in Agent runner — recommended default</SelectItem>
+                {availableRuntimes.map((runtime) => (
+                  <SelectItem key={runtime.metadata.name} value={runtime.metadata.name}>
+                    {runtime.metadata.name}{runtime.spec.supportOwner ? ` — ${runtime.spec.supportOwner}` : ""}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {form.runtimeRef ? (
+              <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-3 text-xs text-muted-foreground">
+                <span className="font-medium text-foreground">Harness selected: {form.runtimeRef}.</span>{" "}
+                This external adapter becomes the primary process for this Agent's runs. Your provider, model, endpoint, and credential selected in the next steps remain the Agent configuration passed to it. Sympozium still enforces identity, policy, mounts, NATS permissions, and lifecycle.
+              </div>
+            ) : (
+              <div className="rounded-lg border border-border/60 bg-muted/30 p-3 text-xs text-muted-foreground">
+                The built-in Agent runner will execute this Agent's runs.
+              </div>
+            )}
+            {form.runtimeRef && !availablePolicies.some((policy) => policy.metadata.name === form.policyRef) && (
+              <p className="text-xs text-amber-500">The selected harness needs an approving policy. Install the default harnesses for this namespace, or ask an administrator to provide one.</p>
+            )}
           </div>
         )}
 
@@ -1613,6 +1675,12 @@ export function OnboardingWizard({
                 <div className="flex justify-between">
                   <span className="text-muted-foreground">Name</span>
                   <span className="font-mono text-blue-400">{form.name}</span>
+                </div>
+              )}
+              {mode === "agent" && (
+                <div className="flex justify-between gap-4">
+                  <span className="text-muted-foreground">Execution</span>
+                  <span className="font-mono text-right">{form.runtimeRef || "Built-in Agent runner"}</span>
                 </div>
               )}
               {mode === "persona" && targetName && (

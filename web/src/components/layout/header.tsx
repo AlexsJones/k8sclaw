@@ -14,6 +14,9 @@ import { useWebSocket } from "@/hooks/use-websocket";
 import { useState } from "react";
 import { formatAge } from "@/lib/utils";
 import { ThemeToggle } from "@/components/theme-toggle";
+import { useNavigate } from "react-router-dom";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Bot, Play, Plus, Shield } from "lucide-react";
 
 export function Header() {
   const { logout } = useAuth();
@@ -21,6 +24,8 @@ export function Header() {
   const { data: namespaces } = useNamespaces();
   const { data: canary } = useCanaryConfig();
   const [ns, setNs] = useState(getNamespace());
+  const [createOpen, setCreateOpen] = useState(false);
+  const navigate = useNavigate();
 
   const handleNsChange = (value: string) => {
     setNs(value);
@@ -48,6 +53,9 @@ export function Header() {
         </div>
       </div>
       <div className="flex items-center gap-3">
+        <Button size="sm" onClick={() => setCreateOpen(true)}>
+          <Plus className="mr-1.5 h-4 w-4" /> Create
+        </Button>
         {/* Canary health indicator */}
         {canary?.enabled && canary.healthStatus && (
           <div
@@ -101,6 +109,29 @@ export function Header() {
           <LogOut className="h-4 w-4" />
         </Button>
       </div>
+      <Dialog open={createOpen} onOpenChange={setCreateOpen}>
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Create</DialogTitle>
+            <DialogDescription>Choose the resource you want to create in namespace <span className="font-mono">{ns}</span>.</DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <button className="rounded-lg border border-border p-4 text-left transition-colors hover:border-primary/60 hover:bg-primary/5" onClick={() => { setCreateOpen(false); navigate("/runs?create=1"); }}>
+              <Play className="mb-3 h-5 w-5 text-primary" />
+              <p className="font-medium">AgentRun</p>
+              <p className="mt-1 text-xs text-muted-foreground">Run an existing Agent once. It inherits that Agent’s configured harness by default.</p>
+            </button>
+            <button className="rounded-lg border border-border p-4 text-left transition-colors hover:border-primary/60 hover:bg-primary/5" onClick={() => { setCreateOpen(false); navigate("/harnesses"); }}>
+              <Shield className="mb-3 h-5 w-5 text-amber-500" />
+              <p className="font-medium">Agent Harness</p>
+              <p className="mt-1 text-xs text-muted-foreground">Install or choose a trusted external execution adapter, then create an Agent bound to it.</p>
+            </button>
+          </div>
+          <button className="text-left text-xs text-muted-foreground hover:text-foreground" onClick={() => { setCreateOpen(false); navigate("/agents"); }}>
+            <Bot className="mr-1 inline h-3 w-3" /> Or create a standard Agent with the built-in runner.
+          </button>
+        </DialogContent>
+      </Dialog>
     </header>
   );
 }
