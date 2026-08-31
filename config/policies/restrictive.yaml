@@ -58,3 +58,6 @@ spec:
       - secrets
       - clusterroles
       - clusterrolebindings
+    # Ceiling on lifecycle.retry.maxAttempts. A gate that always returns
+    # "retry" would otherwise burn tokens unbounded.
+    maxRetryAttempts: 3

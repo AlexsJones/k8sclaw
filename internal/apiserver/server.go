@@ -1045,6 +1045,10 @@ func (s *Server) deleteRun(w http.ResponseWriter, r *http.Request) {
 
 const manualGateHookName = "manual-approval-gate"
 
+// manualGateApprovalWindow is how long a run waits for a human verdict before
+// gateDefault decides for them. It matches the gate hook's own `sleep 86400`.
+const manualGateApprovalWindow = 24 * time.Hour
+
 // applyRequireApproval adds or removes a built-in manual approval gate hook
 // on the instance's lifecycle. When enabled, all runs from this instance will
 // pause in PostRunning until an operator approves via the UI or API.
@@ -1067,9 +1071,14 @@ func applyRequireApproval(inst *sympoziumv1alpha1.Agent, enable bool) {
 
 		lc.GateDefault = "block"
 		lc.PostRun = append(lc.PostRun, sympoziumv1alpha1.LifecycleHookContainer{
-			Name:    manualGateHookName,
-			Image:   "busybox:1.36",
-			Gate:    true,
+			Name:  manualGateHookName,
+			Image: "busybox:1.36",
+			Gate:  true,
+			// The hook sleeps for a day; declare that as its timeout so the
+			// postRun Job's deadline matches. Without it the reviewer gets the
+			// 10-minute default, and a run left overnight is blocked by
+			// gateDefault before anyone has looked at it.
+			Timeout: &metav1.Duration{Duration: manualGateApprovalWindow},
 			Command: []string{"sh", "-c", "echo 'Waiting for manual approval...'; sleep 86400"},
 		})
 
@@ -1128,6 +1137,16 @@ type GateVerdictRequest struct {
 	Reason   string `json:"reason,omitempty"`   // audit trail
 }
 
+// gateVerdictAttempt returns the run's current 1-based attempt. status.attempt
+// is 0 on a first attempt that has never been retried, which means the same
+// thing as 1.
+func gateVerdictAttempt(run *sympoziumv1alpha1.AgentRun) int {
+	if run.Status.Attempt >= 1 {
+		return run.Status.Attempt
+	}
+	return 1
+}
+
 func (s *Server) patchRunGateVerdict(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	ns := r.URL.Query().Get("namespace")
@@ -1159,8 +1178,12 @@ func (s *Server) patchRunGateVerdict(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if run.Status.Phase != sympoziumv1alpha1.AgentRunPhasePostRunning {
-		http.Error(w, fmt.Sprintf("run is in phase %q, gate verdict can only be set during PostRunning", run.Status.Phase), http.StatusConflict)
+	// AwaitingGate is the in-place retry phase: the pod is parked holding its
+	// conversation while the gate decides, rather than having exited into a
+	// postRun Job. A verdict is equally valid in either.
+	if run.Status.Phase != sympoziumv1alpha1.AgentRunPhasePostRunning &&
+		run.Status.Phase != sympoziumv1alpha1.AgentRunPhaseAwaitingGate {
+		http.Error(w, fmt.Sprintf("run is in phase %q, gate verdict can only be set during PostRunning or AwaitingGate", run.Status.Phase), http.StatusConflict)
 		return
 	}
 
@@ -1169,6 +1192,11 @@ func (s *Server) patchRunGateVerdict(w http.ResponseWriter, r *http.Request) {
 	}
 	verdictJSON, _ := json.Marshal(req)
 	run.Annotations["sympozium.ai/gate-verdict"] = string(verdictJSON)
+	// Stamp the attempt this decision was made against. An in-place retry chain
+	// lives on one CR, so without it a browser tab still showing attempt 1's
+	// controls could resolve attempt 2. The controller drops a verdict whose
+	// stamp does not match the attempt awaiting one.
+	run.Annotations["sympozium.ai/gate-verdict-attempt"] = strconv.Itoa(gateVerdictAttempt(&run))
 
 	if err := s.client.Update(r.Context(), &run); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)

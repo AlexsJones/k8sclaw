@@ -12,6 +12,7 @@ import (
 
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
+	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes"
@@ -42,6 +43,8 @@ func TestMain(m *testing.M) {
 	scheme := runtime.NewScheme()
 	must(clientgoscheme.AddToScheme(scheme))
 	must(sympoziumv1alpha1.AddToScheme(scheme))
+	// CRDs themselves, so tests can assert on served schema (print columns).
+	must(apiextensionsv1.AddToScheme(scheme))
 
 	// Start envtest — real etcd + kube-apiserver, no kubelet.
 	testEnv = &envtest.Environment{
@@ -153,9 +156,9 @@ func TestMain(m *testing.M) {
 
 	k8sClient = mgr.GetClient()
 
-	// Build the API server HTTP handler (no auth).
+	// Build the API server HTTP handler (no auth — a nil token reader).
 	srv := apiserver.NewServer(k8sClient, nil, clientset, log)
-	mux = srv.Handler("")
+	mux = srv.Handler(nil)
 
 	// Ensure required namespaces exist (envtest doesn't create them).
 	for _, nsName := range []string{"default", "sympozium-system"} {

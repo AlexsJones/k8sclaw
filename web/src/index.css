@@ -158,6 +158,11 @@
 .phase-postrunning {
   @apply bg-orange-500/20 text-orange-400 border-orange-500/30;
 }
+/* Amber, matching the "retried" gate verdict: the run is blocked on a
+   decision, not failing. */
+.phase-awaitinggate {
+  @apply bg-amber-500/20 text-amber-400 border-amber-500/30;
+}
 
 /* ═══════════════════════════════════════════════════════════════════
    GLOW EFFECTS

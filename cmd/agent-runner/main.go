@@ -445,7 +445,22 @@ func main() {
 	// reads join the same trace as the rest of the run.
 	rt := effectiveRunTimeout(provider)
 	log.Printf("run_timeout=%s", rt)
-	ctx, cancel := context.WithTimeout(context.Background(), rt)
+	var (
+		ctx    context.Context
+		cancel context.CancelFunc
+	)
+	if gateInPlaceEnabled() {
+		// An in-place gate-retry run spends most of its life parked, and parked time is
+		// not run time. Hanging the run timeout off the root context would
+		// kill the pod while it waits for a verdict, which is exactly the pod
+		// death this design exists to avoid — so the budget moves down to each
+		// individual attempt inside runInPlaceGateLoop. The park itself is
+		// bounded separately (parkTimeout), and the controller's watchdog
+		// remains the outer authority.
+		ctx, cancel = context.WithCancel(context.Background())
+	} else {
+		ctx, cancel = context.WithTimeout(context.Background(), rt)
+	}
 	defer cancel()
 
 	obs := initObservability(ctx)
@@ -637,10 +652,30 @@ func main() {
 	}
 	defer promptWg.Wait()
 
-	switch provider {
-	case "anthropic":
+	switch {
+	case gateInPlaceEnabled():
+		// The run has a response gate and lifecycle.retry: park between
+		// attempts on one live provider instead of exiting and letting the
+		// controller clone a successor. The provider is built once here (via
+		// the same buildLLMProvider the prompt service uses) so the
+		// conversation, and every tool result in it, survives the gate cycle.
+		if provider == "bedrock" && len(providerHeaders) > 0 {
+			log.Printf("WARNING: custom provider headers are not supported for the Bedrock provider")
+		}
+		responseText, inputTokens, outputTokens, toolCalls, err = runInPlaceGateLoop(ctx, promptServiceDeps{
+			Ctx:             ctx,
+			ProviderName:    provider,
+			APIKey:          apiKey,
+			BaseURL:         baseURL,
+			Model:           modelName,
+			SystemPrompt:    systemPrompt,
+			Task:            task,
+			Tools:           tools,
+			ProviderHeaders: providerHeaders,
+		}, rt)
+	case provider == "anthropic":
 		responseText, inputTokens, outputTokens, toolCalls, err = callAnthropic(ctx, apiKey, baseURL, modelName, systemPrompt, task, tools, providerHeaders)
-	case "bedrock":
+	case provider == "bedrock":
 		if len(providerHeaders) > 0 {
 			log.Printf("WARNING: custom provider headers are not supported for the Bedrock provider")
 		}

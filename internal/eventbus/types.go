@@ -70,7 +70,15 @@ const (
 
 	// ContextClear is the agent-runner inbound event the bridge publishes when
 	// a sidecar writes /ipc/context/clear-{RequestID}.json.
-	TopicContextClear      = "agent.context.clear"
+	TopicContextClear = "agent.context.clear"
+
+	// GateVerdict carries a gate verdict from the controller to a parked agent
+	// pod, which continues its existing conversation rather than being replaced
+	// by a successor run. Per-run: agent.gate.verdict.{runID}. The bridge is the
+	// only subscriber; it writes the payload to /ipc/gate/verdict-{attempt}.json
+	// for the agent-runner to pick up.
+	TopicGateVerdict = "agent.gate.verdict"
+
 	TopicScheduleUpsert    = "schedule.upsert"
 	TopicStimulusDelivered = "ensemble.stimulus.delivered"
 

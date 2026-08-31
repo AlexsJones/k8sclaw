@@ -22,10 +22,56 @@ import {
   ShieldAlert,
   Check,
   X,
+  RotateCcw,
 } from "lucide-react";
 import { Breadcrumbs } from "@/components/breadcrumbs";
 import { useRunsSeen } from "@/hooks/use-runs-seen";
 import { costTooltip, effectiveCost, formatAge, formatUsd, taskText } from "@/lib/utils";
+
+// Presentation for each gate verdict. "retried" is amber rather than red: the
+// attempt was superseded by another one, which is not a failure — the chain may
+// still succeed. Unknown verdicts fall back to the red "something went wrong"
+// treatment.
+const GATE_VERDICT_STYLES: Record<
+  string,
+  { border: string; text: string; icon: typeof ShieldCheck }
+> = {
+  approved: {
+    border: "border-green-500/30 bg-green-500/5",
+    text: "text-green-400",
+    icon: ShieldCheck,
+  },
+  "allowed-by-default": {
+    border: "border-green-500/30 bg-green-500/5",
+    text: "text-green-400",
+    icon: ShieldCheck,
+  },
+  rewritten: {
+    border: "border-blue-500/30 bg-blue-500/5",
+    text: "text-blue-400",
+    icon: Pencil,
+  },
+  retried: {
+    border: "border-amber-500/30 bg-amber-500/5",
+    text: "text-amber-400",
+    icon: RotateCcw,
+  },
+  rejected: {
+    border: "border-red-500/30 bg-red-500/5",
+    text: "text-red-400",
+    icon: ShieldX,
+  },
+};
+
+const GATE_VERDICT_FALLBACK = {
+  border: "border-red-500/30 bg-red-500/5",
+  text: "text-red-400",
+  icon: ShieldAlert,
+};
+
+function gateVerdictStyle(verdict: string) {
+  return GATE_VERDICT_STYLES[verdict] ?? GATE_VERDICT_FALLBACK;
+}
 
 export function RunDetailPage() {
   const { name } = useParams<{ name: string }>();
@@ -33,10 +79,16 @@ export function RunDetailPage() {
   const gateVerdict = useGateVerdict();
   const { markSeenUpTo } = useRunsSeen();
 
+  // AwaitingGate is explicit: the pod is parked holding its conversation while
+  // the gate decides, and status.gateVerdict may already carry "retried" from
+  // the attempt before this one. The PostRunning branch is the older shape,
+  // where the agent has exited and the gate runs in a postRun Job — it has no
+  // phase of its own, so it is still inferred.
   const isAwaitingGate =
-    run?.status?.phase === "PostRunning" &&
-    !run?.status?.gateVerdict &&
-    run?.spec.lifecycle?.postRun?.some((h) => h.gate);
+    run?.status?.phase === "AwaitingGate" ||
+    (run?.status?.phase === "PostRunning" &&
+      !run?.status?.gateVerdict &&
+      run?.spec.lifecycle?.postRun?.some((h) => h.gate));
 
   // Mark this run as seen when viewing its detail page.
   useEffect(() => {
@@ -63,6 +115,11 @@ export function RunDetailPage() {
     ? `${(usage.durationMs / 1000).toFixed(1)}s`
     : "—";
   const est = effectiveCost(run);
+  // Populated only for an in-pod gate-resume chain, where every attempt lives
+  // on this one run. A single-attempt run and a successor-clone chain both
+  // leave it empty, and the timeline stays hidden.
+  const attempts = run.status?.attempts ?? [];
+  const currentAttempt = run.status?.attempt ?? 1;
 
   return (
     <div className="space-y-6">
@@ -138,7 +195,7 @@ export function RunDetailPage() {
             <Card>
               <CardContent className="flex items-center gap-3 p-4">
                 <DollarSign className="h-5 w-5 text-green-400" />
-                <div className="min-w-0" title={costTooltip(est)}>
+                <div className="min-w-0" title={costTooltip(est, attempts.length)}>
                   <p className="text-sm text-muted-foreground">Est. spend</p>
                   <p className="text-lg font-bold">
                     {formatUsd(est.amountMicro)}
@@ -182,10 +239,12 @@ export function RunDetailPage() {
             <div>
               <p className="text-sm font-medium text-amber-400">
                 Approval required
+                {attempts.length > 0 && ` — attempt ${currentAttempt}`}
               </p>
               <p className="text-xs text-muted-foreground">
-                This run's response is being held by a gate hook. Review and
-                approve or reject.
+                {run.status?.phase === "AwaitingGate"
+                  ? "The agent is parked holding its conversation and workspace. Approving ends the run; rejecting can hand it back for another attempt."
+                  : "This run's response is being held by a gate hook. Review and approve or reject."}
               </p>
             </div>
           </div>
@@ -241,43 +300,85 @@ export function RunDetailPage() {
         </div>
       )}
 
-      {/* Gate verdict banner */}
-      {run.status?.gateVerdict && (
-        <div
-          data-testid="gate-verdict-banner"
-          className={`flex items-center gap-2 rounded-lg border p-3 ${
-            run.status.gateVerdict === "approved" ||
-            run.status.gateVerdict === "allowed-by-default"
-              ? "border-green-500/30 bg-green-500/5"
-              : run.status.gateVerdict === "rewritten"
-                ? "border-blue-500/30 bg-blue-500/5"
-                : "border-red-500/30 bg-red-500/5"
-          }`}
-        >
-          {run.status.gateVerdict === "approved" ||
-          run.status.gateVerdict === "allowed-by-default" ? (
-            <ShieldCheck className="h-4 w-4 text-green-400" />
-          ) : run.status.gateVerdict === "rewritten" ? (
-            <Pencil className="h-4 w-4 text-blue-400" />
-          ) : run.status.gateVerdict === "rejected" ? (
-            <ShieldX className="h-4 w-4 text-red-400" />
-          ) : (
-            <ShieldAlert className="h-4 w-4 text-red-400" />
-          )}
-          <span
-            className={`text-sm ${
-              run.status.gateVerdict === "approved" ||
-              run.status.gateVerdict === "allowed-by-default"
-                ? "text-green-400"
-                : run.status.gateVerdict === "rewritten"
-                  ? "text-blue-400"
-                  : "text-red-400"
-            }`}
-          >
-            Response gate: {run.status.gateVerdict}
-          </span>
-        </div>
+      {/* Attempt timeline — one entry per attempt of an in-pod gate-resume
+          chain. A successor-clone chain has no timeline here: each of its
+          attempts is a separate run, linked by status.retryOf. */}
+      {attempts.length > 0 && (
+        <Card data-testid="attempt-timeline">
+          <CardHeader>
+            <CardTitle className="text-sm">
+              Attempts ({attempts.length})
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            {attempts.map((a) => {
+              const style = a.gateVerdict
+                ? gateVerdictStyle(a.gateVerdict)
+                : null;
+              const Icon = style?.icon ?? Clock;
+              const isCurrent = a.attempt === currentAttempt && !a.gateVerdict;
+              return (
+                <div
+                  key={a.attempt}
+                  data-testid={`attempt-${a.attempt}`}
+                  className={`rounded-lg border p-3 ${
+                    style?.border ?? "border-border"
+                  }`}
+                >
+                  <div className="flex items-center gap-2 text-sm">
+                    <Icon
+                      className={`h-4 w-4 ${style?.text ?? "text-muted-foreground"} ${
+                        isCurrent ? "animate-spin" : ""
+                      }`}
+                    />
+                    <span className="font-medium">Attempt {a.attempt}</span>
+                    {a.gateVerdict && (
+                      <Badge variant="outline" className={style?.text}>
+                        {a.gateVerdict}
+                      </Badge>
+                    )}
+                    {a.tokenUsage && (
+                      <span className="text-xs text-muted-foreground">
+                        {a.tokenUsage.totalTokens.toLocaleString()} tokens ·{" "}
+                        {a.tokenUsage.toolCalls} tool calls
+                      </span>
+                    )}
+                    {a.costEstimate && (
+                      <span className="text-xs text-muted-foreground">
+                        {formatUsd(a.costEstimate.amountMicro)}
+                      </span>
+                    )}
+                  </div>
+                  {a.gateReason && (
+                    <p className="mt-2 text-xs text-muted-foreground whitespace-pre-wrap">
+                      {a.gateReason}
+                    </p>
+                  )}
+                </div>
+              );
+            })}
+          </CardContent>
+        </Card>
       )}
+
+      {/* Gate verdict banner */}
+      {run.status?.gateVerdict &&
+        (() => {
+          const style = gateVerdictStyle(run.status.gateVerdict);
+          const Icon = style.icon;
+          return (
+            <div
+              data-testid="gate-verdict-banner"
+              className={`flex items-center gap-2 rounded-lg border p-3 ${style.border}`}
+            >
+              <Icon className={`h-4 w-4 ${style.text}`} />
+              <span className={`text-sm ${style.text}`}>
+                Response gate: {run.status.gateVerdict}
+                {run.status.retryOf && ` (retry of ${run.status.retryOf})`}
+              </span>
+            </div>
+          );
+        })()}
 
       <Tabs defaultValue="task">
         <TabsList>

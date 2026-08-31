@@ -104,6 +104,7 @@ const phaseDot: Record<string, string> = {
 	Pending: "bg-yellow-500 animate-pulse",
 	Serving: "bg-violet-500 animate-pulse",
 	AwaitingDelegate: "bg-amber-500 animate-pulse",
+	AwaitingGate: "bg-amber-500 animate-pulse",
 };
 
 const phaseLabel: Record<string, string> = {
@@ -113,6 +114,7 @@ const phaseLabel: Record<string, string> = {
 	Pending: "Pending",
 	Serving: "Serving",
 	AwaitingDelegate: "Awaiting",
+	AwaitingGate: "Gate",
 };
 
 // ══════════════════════════════════════════════════════════════════════════════

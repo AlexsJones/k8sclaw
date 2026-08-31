@@ -317,8 +317,13 @@ const (
 	AgentRunPhaseServing          AgentRunPhase = "Serving"
 	AgentRunPhasePostRunning      AgentRunPhase = "PostRunning"
 	AgentRunPhaseAwaitingDelegate AgentRunPhase = "AwaitingDelegate"
-	AgentRunPhaseSucceeded        AgentRunPhase = "Succeeded"
-	AgentRunPhaseFailed           AgentRunPhase = "Failed"
+	// AgentRunPhaseAwaitingGate means the pod is alive but parked: it wrote an
+	// attempt result and is waiting on a gate verdict over IPC. Same shape as
+	// AwaitingDelegate. Only reachable with both a gate hook and
+	// lifecycle.retry; without retry the gate resolves from PostRunning.
+	AgentRunPhaseAwaitingGate AgentRunPhase = "AwaitingGate"
+	AgentRunPhaseSucceeded    AgentRunPhase = "Succeeded"
+	AgentRunPhaseFailed       AgentRunPhase = "Failed"
 	// AgentRunPhaseSkipped is a terminal phase for runs a preRun lifecycle
 	// hook skipped (no work to do). The agent never made an LLM call, so the
 	// run consumed no tokens; it is distinct from Succeeded and Failed.
@@ -373,10 +378,12 @@ type AgentRunStatus struct {
 
 	// CostEstimate is the estimated dollar cost of this run, derived from
 	// tokenUsage and the cluster price table at completion time. It is an
-	// ESTIMATE, not billing data: retried runs count only the final attempt
-	// and failed runs report no usage. Absent (never zero) when the provider
-	// is local/self-hosted, the run uses modelRef, or no price-table entry
-	// matches.
+	// ESTIMATE, not billing data: failed runs report no usage, and a
+	// successor-clone retry chain counts only the attempt this CR represents
+	// (sum across the chain by walking retryOf). An in-place gate-retry chain
+	// keeps every attempt on this CR, so its estimate covers all of them.
+	// Absent (never zero) when the provider is local/self-hosted, the run uses
+	// modelRef, or no price-table entry matches.
 	// +optional
 	CostEstimate *CostEstimate `json:"costEstimate,omitempty"`
 
@@ -406,10 +413,32 @@ type AgentRunStatus struct {
 	PostRunJobName string `json:"postRunJobName,omitempty"`
 
 	// GateVerdict records the outcome of the response gate hook, if configured.
-	// One of: approved, rejected, rewritten, timeout, error, allowed-by-default.
+	// One of: approved, rejected, rewritten, timeout, error, allowed-by-default,
+	// retried (superseded by a successor attempt), retries-exhausted.
 	// Empty when no gate hook is configured.
 	// +optional
 	GateVerdict string `json:"gateVerdict,omitempty"`
+
+	// Attempt is this run's 1-based position in its retry chain. 0 or 1 both
+	// mean "first attempt"; only retry successors carry an explicit value.
+	// +optional
+	Attempt int `json:"attempt,omitempty"`
+
+	// RetryOf is the name of the predecessor AgentRun this attempt retries.
+	// Empty on a first attempt. Walk it backwards to reconstruct the chain.
+	//
+	// Only the successor-clone retry path writes this; in-place gate retry
+	// records its attempts in Attempts instead.
+	// +optional
+	RetryOf string `json:"retryOf,omitempty"`
+
+	// Attempts records one entry per attempt when the retry chain lives on a
+	// single CR (in-place gate retry). It replaces walking RetryOf across
+	// successor CRs, and bounds the chain: maxChainTokens sums its TokenUsage.
+	//
+	// Empty for a run that never parked, including every successor-clone chain.
+	// +optional
+	Attempts []AttemptStatus `json:"attempts,omitempty"`
 
 	// Delegates tracks in-flight persona delegations for this run.
 	// Populated when the run enters AwaitingDelegate phase.
@@ -426,6 +455,51 @@ type AgentRunStatus struct {
 	// router to track progress.
 	// +optional
 	CellnActionID string `json:"cellnActionId,omitempty"`
+}
+
+// AttemptStatus records one attempt of an in-place gate-retry chain. The pod
+// survives the gate cycle, so every attempt lands on the same AgentRun and
+// there is no successor CR to hold its status.
+//
+// Result and GateReason are bounded by the controller before writing: both
+// come from outside the control plane, and unbounded text could push the
+// object past the apiserver's size limit.
+type AttemptStatus struct {
+	// Attempt is this entry's 1-based position in the chain, matching what
+	// status.attempt read while the attempt was current.
+	Attempt int `json:"attempt"`
+
+	// StartedAt is when this attempt began: run start for attempt 1, verdict
+	// delivery for later ones.
+	// +optional
+	StartedAt *metav1.Time `json:"startedAt,omitempty"`
+
+	// CompletedAt is when the attempt parked with a result.
+	// +optional
+	CompletedAt *metav1.Time `json:"completedAt,omitempty"`
+
+	// Result is the (bounded) output this attempt produced.
+	// +optional
+	Result string `json:"result,omitempty"`
+
+	// GateVerdict is the verdict this attempt received: approved, rejected,
+	// rewritten, retried, retries-exhausted, timeout, error,
+	// allowed-by-default. Empty while the gate is still deciding.
+	// +optional
+	GateVerdict string `json:"gateVerdict,omitempty"`
+
+	// GateReason is the (bounded) reason the gate gave.
+	// +optional
+	GateReason string `json:"gateReason,omitempty"`
+
+	// TokenUsage is this attempt's own consumption. maxChainTokens sums this
+	// field across attempts.
+	// +optional
+	TokenUsage *TokenUsage `json:"tokenUsage,omitempty"`
+
+	// CostEstimate is this attempt's own estimated cost.
+	// +optional
+	CostEstimate *CostEstimate `json:"costEstimate,omitempty"`
 }
 
 // DelegateStatus tracks an in-flight delegation to another persona or ad-hoc sub-agent.
@@ -541,8 +615,16 @@ type LifecycleHookContainer struct {
 	// +optional
 	Env []EnvVar `json:"env,omitempty"`
 
-	// Timeout is the maximum duration for this hook container.
-	// Defaults to 5 minutes.
+	// Timeout is the budget for this hook container. Defaults to 5 minutes.
+	//
+	// PostRun hooks run sequentially in one Job, so their timeouts are summed
+	// into that Job's deadline; the total is never less than 10 minutes. Because
+	// Kubernetes has no per-init-container timeout, this bounds the Job as a
+	// whole rather than each container — use it to give a slow hook (or a
+	// human-in-the-loop gate) the room it needs, not to police a fast one.
+	//
+	// Not yet honoured on preRun hooks, which are bounded by the agent run's
+	// own spec.timeout.
 	// +optional
 	Timeout *metav1.Duration `json:"timeout,omitempty"`
 
@@ -584,6 +666,61 @@ type LifecycleHooks struct {
 	// +kubebuilder:default="block"
 	// +optional
 	GateDefault string `json:"gateDefault,omitempty"`
+
+	// Retry lets a response gate hand its rejection back to the agent for
+	// another attempt instead of ending the run. Absent means a gate verdict
+	// is terminal, which is the historical behaviour.
+	// +optional
+	Retry *RetrySpec `json:"retry,omitempty"`
+}
+
+// RetrySpec configures gate-driven attempt retry. When a gate hook returns
+// {"action":"retry"}, the controller creates a successor AgentRun carrying the
+// original task plus the gate's reason and output, and retires the current
+// attempt without publishing its result.
+//
+// The retry decision is not agent-controlled: the gate hook is an
+// operator-declared image in lifecycle.postRun, and the agent cannot patch the
+// gate-verdict annotation for its own run.
+type RetrySpec struct {
+	// MaxAttempts is the total number of attempts including the first, so
+	// maxAttempts: 3 permits two retries. A bound SympoziumPolicy may cap this
+	// further via lifecyclePolicy.maxRetryAttempts.
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:default=2
+	MaxAttempts int `json:"maxAttempts,omitempty"`
+
+	// Backoff delays the successor attempt. Absent means start immediately.
+	// +optional
+	Backoff *metav1.Duration `json:"backoff,omitempty"`
+
+	// MaxChainTokens caps the cumulative status.tokenUsage.totalTokens of every
+	// attempt in the chain. When the sum reaches it, the chain stops and the
+	// gate verdict resolves as retries-exhausted. 0 means unlimited.
+	// +optional
+	MaxChainTokens int64 `json:"maxChainTokens,omitempty"`
+
+	// On selects which outcomes may trigger a retry. Only "gate" is wired
+	// today; "failure" is accepted by the schema but ignored by the controller.
+	// Empty means ["gate"].
+	// +kubebuilder:validation:items:Enum=gate;failure
+	// +optional
+	On []string `json:"on,omitempty"`
+
+	// InPlace keeps the agent pod alive across the gate cycle and runs the next
+	// attempt on the same conversation, instead of cloning the spec onto a
+	// successor AgentRun. The retried attempt then still has its own reasoning,
+	// its tool results, and everything it wrote to /workspace.
+	//
+	// Requires a backend that gives the run a pod to park in — the Job and
+	// Agent Sandbox backends do; Celln dispatches to a remote executor and has
+	// no pod, so it always uses successor runs whatever this says.
+	//
+	// Defaults to true. Set false to force successor runs, for example when a
+	// gate takes long enough that holding the pod is not worth the resources.
+	// +kubebuilder:default=true
+	// +optional
+	InPlace *bool `json:"inPlace,omitempty"`
 }
 
 // +kubebuilder:object:root=true
@@ -592,6 +729,9 @@ type LifecycleHooks struct {
 // +kubebuilder:printcolumn:name="Phase",type="string",JSONPath=".status.phase"
 // +kubebuilder:printcolumn:name="Pod",type="string",JSONPath=".status.podName"
 // +kubebuilder:printcolumn:name="Age",type="date",JSONPath=".metadata.creationTimestamp"
+// +kubebuilder:printcolumn:name="Gate",type="string",JSONPath=".status.gateVerdict",priority=1
+// +kubebuilder:printcolumn:name="Attempt",type="integer",JSONPath=".status.attempt",priority=1
+// +kubebuilder:printcolumn:name="Retry Of",type="string",JSONPath=".status.retryOf",priority=1
 
 // AgentRun is the Schema for the agentruns API.
 // Each agent invocation produces an AgentRun CR that the orchestrator

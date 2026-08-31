@@ -211,6 +211,19 @@ export interface DelegateStatus {
   error?: string;
 }
 
+/** One attempt of a retry chain that lives on a single AgentRun (in-pod gate
+ *  resume). Empty for successor-clone chains, where each attempt is its own run. */
+export interface AttemptStatus {
+  attempt: number;
+  startedAt?: string;
+  completedAt?: string;
+  result?: string;
+  gateVerdict?: string;
+  gateReason?: string;
+  tokenUsage?: TokenUsage;
+  costEstimate?: CostEstimate;
+}
+
 export interface AgentRunStatus {
   phase?: string;
   podName?: string;
@@ -226,6 +239,9 @@ export interface AgentRunStatus {
   costEstimate?: CostEstimate;
   postRunJobName?: string;
   gateVerdict?: string;
+  attempt?: number;
+  retryOf?: string;
+  attempts?: AttemptStatus[];
   delegates?: DelegateStatus[];
   conditions?: Condition[];
 }

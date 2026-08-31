@@ -240,6 +240,19 @@ func (p *bedrockProvider) ReplaceToolResults(replacements map[string]string) {
 	}
 }
 
+// AddUserMessage appends a user turn so the next Converse call sees it.
+// Bedrock, like Anthropic, rejects consecutive user turns; callers only reach
+// here after a terminal assistant turn.
+func (p *bedrockProvider) AddUserMessage(text string) {
+	if text == "" {
+		return
+	}
+	p.messages = append(p.messages, types.Message{
+		Role:    types.ConversationRoleUser,
+		Content: []types.ContentBlock{&types.ContentBlockMemberText{Value: text}},
+	})
+}
+
 // ResetContext rebuilds the message slice to the seed state so
 // the next Chat or Prompt call behaves as if the conversation just began.
 func (p *bedrockProvider) ResetContext() {

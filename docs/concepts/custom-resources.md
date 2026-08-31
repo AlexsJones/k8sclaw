@@ -67,7 +67,9 @@ spec:
   timeout: "5m"
 ```
 
-Phase transitions: `Pending` → `Running` → `Succeeded` (or `Failed`). When [lifecycle hooks](lifecycle-hooks.md) with `postRun` are defined: `Pending` → `Running` → `PostRunning` → `Succeeded` (or `Failed`).
+Phase transitions: `Pending` → `Running` → `Succeeded` (or `Failed`). When [lifecycle hooks](lifecycle-hooks.md) with `postRun` are defined: `Pending` → `Running` → `PostRunning` → `Succeeded` (or `Failed`). A gate with `lifecycle.retry.inPlace` uses `AwaitingGate` in place of `PostRunning` and may loop back to `Running`.
+
+A [response gate](lifecycle-hooks.md#retrying-a-rejected-response) can retry a rejected run. With `lifecycle.retry.inPlace` (the default) the pod parks in `AwaitingGate` and continues on the same conversation, so the whole chain is one AgentRun and each attempt is an entry in `status.attempts[]`. Otherwise each attempt is its own AgentRun, linked by `status.retryOf` and `status.attempt`; a superseded attempt ends `Failed` with `status.gateVerdict: retried`.
 
 Setting `spec.backend: celln` routes the run to a hardware-isolated microVM instead of a Job — no ensembles, delegation, or shared memory, and the run's own `model:` field is ignored in favor of whatever AI provider is configured on the KVM host. See [Celln Backend](celln-backend.md).
 
