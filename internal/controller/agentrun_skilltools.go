@@ -6,7 +6,6 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
-	"k8s.io/apimachinery/pkg/util/intstr"
 
 	sympoziumv1alpha1 "github.com/sympozium-ai/sympozium/api/v1alpha1"
 	"github.com/sympozium-ai/sympozium/internal/skilltools"
@@ -150,11 +149,15 @@ func (r *AgentRunReconciler) buildSkillToolsContainer(agentRun *sympoziumv1alpha
 		Env:             env,
 		StartupProbe: &corev1.Probe{
 			ProbeHandler: corev1.ProbeHandler{
-				HTTPGet: &corev1.HTTPGetAction{
-					Path: "/readyz",
-					Port: intstr.FromInt32(skillToolsPort),
-					Host: "127.0.0.1",
-				},
+				// HTTP probes originate in the kubelet's network namespace. They
+				// cannot reach a listener deliberately bound to pod loopback: using
+				// host 127.0.0.1 probes the node loopback, while omitting it probes
+				// the pod IP. Run this probe in the sidecar instead, so the server
+				// stays unreachable outside the shared pod namespace.
+				Exec: &corev1.ExecAction{Command: []string{
+					"/bin/sh", "-c",
+					fmt.Sprintf("wget -q -O /dev/null http://127.0.0.1:%d/readyz", skillToolsPort),
+				}},
 			},
 			PeriodSeconds:    1,
 			FailureThreshold: 30,
