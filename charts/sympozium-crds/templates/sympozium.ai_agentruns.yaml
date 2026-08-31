@@ -2803,12 +2803,29 @@ spec:
                   One of: approved, rejected, rewritten, timeout, error, allowed-by-default.
                   Empty when no gate hook is configured.
                 type: string
+              harnessContractVersion:
+                description: |-
+                  HarnessContractVersion records the harness contract supplied to the
+                  adapter that executed this run.
+                type: string
               harnessImageDigest:
                 description: |-
                   HarnessImageDigest records the digest of the external harness adapter image
                   that executed this run. Populated only for `task.mode: harness` runs, and
                   only once the run has been admitted and dispatched. Empty for all other
                   modes and backends.
+                type: string
+              harnessRuntimeRef:
+                description: |-
+                  HarnessRuntimeRef records the AgentRuntime that was resolved for this
+                  harness run. It remains populated when an Agent's runtimeRef converted a
+                  normal string task into harness mode, so audit and UI do not have to infer
+                  the selected runtime from the current Agent configuration.
+                type: string
+              harnessRuntimeSource:
+                description: |-
+                  HarnessRuntimeSource records whether the resolved runtime came from the
+                  Agent default ("agent-default") or the AgentRun ("run").
                 type: string
               jobName:
                 description: JobName is the name of the Job created for this run.

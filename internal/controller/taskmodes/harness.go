@@ -315,6 +315,16 @@ func HarnessImageDigest(task *sympoziumv1alpha1.TaskSpec) string {
 	return digest
 }
 
+// HarnessRuntimeRef returns the AgentRuntime name named by a harness task, or
+// an empty string when the task uses an inline image or is not harness mode.
+// The controller records this before normalization removes the runtime name.
+func HarnessRuntimeRef(task *sympoziumv1alpha1.TaskSpec) string {
+	if task == nil || task.IsString() || task.GetMode() != Harness {
+		return ""
+	}
+	return strings.TrimSpace(task.Parameters[harnessParamRuntime])
+}
+
 // ApplyAgentRuntime applies an Agent's default runtime to a task. String-form
 // tasks are converted to harness mode while preserving their prompt; this is
 // the path used by channels, schedules, the API, the UI, and other ordinary run

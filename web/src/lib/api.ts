@@ -240,6 +240,10 @@ export interface AgentRunStatus {
   exitCode?: number;
   tokenUsage?: TokenUsage;
   costEstimate?: CostEstimate;
+  harnessImageDigest?: string;
+  harnessRuntimeRef?: string;
+  harnessContractVersion?: string;
+  harnessRuntimeSource?: "agent-default" | "run";
   postRunJobName?: string;
   gateVerdict?: string;
   delegates?: DelegateStatus[];

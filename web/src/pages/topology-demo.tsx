@@ -547,13 +547,17 @@ function buildDemoTopology(): { nodes: Node[]; edges: Edge[]; simDevices: SimDev
 
   const simDevices: SimDevice[] = [];
   for (const pn of k8sNodes) {
-    const { devices, sims } = demoAccelerators(pn.name, pn.fitness.gpuName, pn.fitness.stale);
+    // Demo inventory is intentionally heterogeneous; older fixture entries do
+    // not carry the optional fitness snapshot. Keep their declared accelerator
+    // inventory while still enriching newer entries when it is present.
+    const fitness = (pn as typeof pn & { fitness?: { gpuName: string; stale: boolean } }).fitness;
+    const { devices, sims } = demoAccelerators(pn.name, fitness?.gpuName ?? "", fitness?.stale ?? Boolean(pn.stale));
     simDevices.push(...sims);
     nodes.push({
       id: `node-${pn.name}`,
       type: "workstation",
       position: P,
-      data: { ...pn, accelerators: devices },
+      data: { ...pn, accelerators: devices.length > 0 ? devices : pn.accelerators },
     });
   }
 

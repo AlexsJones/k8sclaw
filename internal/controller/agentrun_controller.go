@@ -726,7 +726,15 @@ func (r *AgentRunReconciler) reconcilePending(ctx context.Context, log logr.Logg
 		}
 		return ctrl.Result{}, fmt.Errorf("reading Agent %q while resolving runtime: %w", agentRun.Spec.AgentRef, err)
 	}
+	// Remember the source before an Agent default converts a string task into a
+	// harness task. The normalized task is intentionally not persisted to spec;
+	// status is the immutable execution record used by run detail and audit.
+	inheritedHarnessRuntime := strings.TrimSpace(runtimeInstance.Spec.RuntimeRef) != "" &&
+		(agentRun.Spec.Task.IsString() || (agentRun.Spec.Task.GetMode() == taskmodes.Harness &&
+			strings.TrimSpace(agentRun.Spec.Task.Parameters["image"]) == "" &&
+			strings.TrimSpace(agentRun.Spec.Task.Parameters["runtime"]) == ""))
 	agentRun.Spec.Task = taskmodes.ApplyAgentRuntime(agentRun.Spec.Task, runtimeInstance.Spec.RuntimeRef)
+	harnessRuntimeRef := taskmodes.HarnessRuntimeRef(agentRun.Spec.Task)
 	if normalized, err := taskmodes.NormalizeHarnessTask(agentRun.Namespace, agentRun.Spec.Task, func(ns, name string) (*sympoziumv1alpha1.AgentRuntime, error) {
 		var rt sympoziumv1alpha1.AgentRuntime
 		if err := r.Get(ctx, client.ObjectKey{Namespace: ns, Name: name}, &rt); err != nil {
@@ -857,6 +865,13 @@ func (r *AgentRunReconciler) reconcilePending(ctx context.Context, log logr.Logg
 		// requested.
 		if d := taskmodes.HarnessImageDigest(agentRun.Spec.Task); d != "" {
 			ar.Status.HarnessImageDigest = d
+			ar.Status.HarnessRuntimeRef = harnessRuntimeRef
+			ar.Status.HarnessContractVersion = taskmodes.HarnessContractVersion
+			if inheritedHarnessRuntime {
+				ar.Status.HarnessRuntimeSource = "agent-default"
+			} else {
+				ar.Status.HarnessRuntimeSource = "run"
+			}
 		}
 
 		// Set the trace ID so operators can look up the full distributed trace.
