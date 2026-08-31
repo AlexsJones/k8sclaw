@@ -108,6 +108,8 @@ export interface ChannelStatus {
 }
 
 export interface AgentSpec {
+	/** Administrator-approved AgentRuntime inherited by this Agent's runs. */
+	runtimeRef?: string;
   channels?: ChannelSpec[];
   agents: AgentsSpec;
   skills?: SkillRef[];
@@ -1223,6 +1225,7 @@ export const api = {
         };
         lifecycle?: LifecycleHooks | null;
         requireApproval?: boolean;
+		runtimeRef?: string;
       },
     ) =>
       apiFetch<Agent>(`/api/v1/agents/${name}`, {

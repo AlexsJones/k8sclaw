@@ -453,6 +453,9 @@ type PatchInstanceRequest struct {
 	WebEndpoint     *PatchWebEndpoint                 `json:"webEndpoint,omitempty"`
 	Lifecycle       *sympoziumv1alpha1.LifecycleHooks `json:"lifecycle,omitempty"`
 	RequireApproval *bool                             `json:"requireApproval,omitempty"`
+	// RuntimeRef is administrator-owned. It is deliberately not an Ensemble
+	// persona setting, so runtime selection remains stable across reconciliation.
+	RuntimeRef *string `json:"runtimeRef,omitempty"`
 }
 
 // PatchWebEndpoint is the web endpoint patch payload.
@@ -485,6 +488,13 @@ func (s *Server) patchAgent(w http.ResponseWriter, r *http.Request) {
 		}
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
+	}
+	if req.RuntimeRef != nil {
+		inst.Spec.RuntimeRef = strings.TrimSpace(*req.RuntimeRef)
+		if err := s.client.Update(r.Context(), &inst); err != nil {
+			http.Error(w, "updating runtime reference: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
 	}
 
 	// Build the edit rather than mutating the Agent directly: agentedit routes it

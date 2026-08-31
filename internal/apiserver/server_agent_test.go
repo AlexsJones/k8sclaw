@@ -9,6 +9,7 @@ import (
 
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -70,5 +71,32 @@ func TestCreateInstance_NoHardcodedOTLPEndpoint(t *testing.T) {
 	}
 	if inst.Spec.Observability.OTLPProtocol != "" {
 		t.Errorf("expected empty OTLPProtocol (should not be hardcoded), got %q", inst.Spec.Observability.OTLPProtocol)
+	}
+}
+
+func TestPatchAgent_RuntimeRef(t *testing.T) {
+	srv, _ := newInstanceTestServer(t)
+	agent := &sympoziumv1alpha1.Agent{
+		ObjectMeta: metav1.ObjectMeta{Name: "runtime-agent", Namespace: "default"},
+		Spec: sympoziumv1alpha1.AgentSpec{Agents: sympoziumv1alpha1.AgentsSpec{
+			Default: sympoziumv1alpha1.AgentConfig{Model: "local", BaseURL: "http://llm.local/v1"},
+		}},
+	}
+	if err := srv.client.Create(t.Context(), agent); err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodPatch, "/api/v1/agents/runtime-agent", bytes.NewBufferString(`{"runtimeRef":"reference-v1"}`))
+	rec := httptest.NewRecorder()
+	srv.buildMux(nil, nil).ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var got sympoziumv1alpha1.Agent
+	if err := srv.client.Get(t.Context(), types.NamespacedName{Name: agent.Name, Namespace: agent.Namespace}, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Spec.RuntimeRef != "reference-v1" {
+		t.Errorf("runtimeRef = %q, want reference-v1", got.Spec.RuntimeRef)
 	}
 }
