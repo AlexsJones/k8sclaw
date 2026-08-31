@@ -118,6 +118,7 @@ jobs:
           - mcp-bridge
           - node-probe
           - llmfit-daemon
+          - harness-reference
     steps:
       - uses: actions/checkout@v4
 
