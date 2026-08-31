@@ -110,6 +110,17 @@ spec:
 With `runtimeRef`, the runtime is inherited by normal entrypoints. Users do
 not need to repeat an object-form harness task for every run.
 
+The web UI exposes the same administrator action on the Agent detail page:
+choose **Agent Harness Runtime**, select an approved runtime, or select
+**Built-in agent-runner** to clear it. This is distinct from persona settings
+because Ensemble reconciliation intentionally preserves an administrator-set
+runtime reference.
+
+For a one-off override, open **Runs → New Run** and choose **Harness runtime**.
+Leaving that field on **Use agent default** preserves normal AgentRun behavior
+and inherits the Agent's `runtimeRef`; choosing a runtime creates an explicit
+harness AgentRun for that invocation only.
+
 ### 4. Create a normal AgentRun
 
 ```yaml
@@ -156,7 +167,8 @@ Sympozium result protocol. The full adapter contract is documented in
 
 ## What to inspect after a run
 
-When runtime provenance surfaces in the API and UI, operators should be able to
+Run detail shows the runtime identity, executed digest, contract version,
+support owner, and adapter-claimed capabilities. Operators should be able to
 answer four questions without reading pod internals:
 
 1. Which AgentRuntime was requested or inherited?
@@ -165,8 +177,8 @@ answer four questions without reading pod internals:
 4. Did the run fail at policy, image pull, startup, MCP, result validation,
    timeout/cancellation, or metrics/accounting?
 
-Until those fields are exposed in every UI surface, `AgentRun.status` and the
-controller logs remain the source of truth.
+`AgentRun.status` and controller logs remain the source of truth for low-level
+pod and admission diagnostics.
 
 ## Support boundaries
 
