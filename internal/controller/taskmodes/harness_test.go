@@ -471,6 +471,17 @@ func TestValidateRunCompatibility_AllowsOrdinaryHarnessRun(t *testing.T) {
 	}
 }
 
+func TestValidateRunCompatibility_AllowsDefaultUseContext(t *testing.T) {
+	value := true // This is what CRD defaulting applies to omitted useContext.
+	run := &sympoziumv1alpha1.AgentRun{Spec: sympoziumv1alpha1.AgentRunSpec{
+		Task:       harnessTask(nil),
+		UseContext: &value,
+	}}
+	if err := ValidateRunCompatibility(run); err != nil {
+		t.Fatalf("default useContext=true rejected: %v", err)
+	}
+}
+
 func TestOverrideFor_NilForStringAndOtherModes(t *testing.T) {
 	stringTask := sympoziumv1alpha1.NewStringTask("do the thing")
 	if override, err := OverrideFor(stringTask); err != nil || override != nil {

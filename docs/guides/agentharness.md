@@ -24,9 +24,10 @@ drives the agent loop; the surrounding AgentRun machinery remains the same.
 
 Persistent Agent memory remains platform-managed: Sympozium mounts and updates
 it through its normal result-extraction path. An adapter must not assume the
-`agent-runner` conversation-memory or thinking controls apply; explicit
-`useContext` and `model.thinking` are rejected for harness runs until the
-adapter contract defines mediated equivalents.
+`agent-runner` conversation-memory or thinking controls apply; `useContext:
+false` and `model.thinking` are rejected for harness runs until the adapter
+contract defines mediated equivalents. The historical/default
+`useContext: true` remains accepted because it requests no adapter behavior.
 
 !!! warning "This is an adapter boundary, not arbitrary image execution"
     An operator approves a contract-compatible adapter image, normally by

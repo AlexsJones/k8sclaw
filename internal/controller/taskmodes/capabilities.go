@@ -250,7 +250,10 @@ func ValidateRunCompatibility(run *sympoziumv1alpha1.AgentRun) error {
 	if run.Spec.CanaryMode {
 		unsupported = append(unsupported, "canaryMode")
 	}
-	if run.Spec.UseContext != nil {
+	// The CRD defaults UseContext to true. That historical/default value has no
+	// effect on an external adapter, so accept it; only false requests the
+	// agent-runner-specific "forget context" behaviour we cannot honour.
+	if run.Spec.UseContext != nil && !*run.Spec.UseContext {
 		unsupported = append(unsupported, "useContext")
 	}
 	if run.Spec.Model.Thinking != "" {
