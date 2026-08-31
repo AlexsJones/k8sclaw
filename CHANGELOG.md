@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.10.50](https://github.com/sympozium-ai/sympozium/compare/v0.10.49...v0.10.50) (2026-08-31)
+
+
+### Features
+
+* **harness:** expose runtime selection in new run flow ([#369](https://github.com/sympozium-ai/sympozium/issues/369)) ([2745414](https://github.com/sympozium-ai/sympozium/commit/27454144c5f31350b6458fda3937d0069b196f4e))
+* **harness:** manage agent runtime from UI ([#376](https://github.com/sympozium-ai/sympozium/issues/376)) ([5b9c67d](https://github.com/sympozium-ai/sympozium/commit/5b9c67d4624bcfb2c88c6c876a6a9480b7129cbf))
+* **harness:** show runtime provenance and reject unsupported settings ([#371](https://github.com/sympozium-ai/sympozium/issues/371)) ([8c2e8e6](https://github.com/sympozium-ai/sympozium/commit/8c2e8e6ff8007ef0b4dcc5222b3e2f459bb139fa))
+* **web:** add approved harness registry ([9eedf0c](https://github.com/sympozium-ai/sympozium/commit/9eedf0c855136c2ff0df79720a3bec2cc08f096d))
+* **web:** add harness trust detail view ([43d7625](https://github.com/sympozium-ai/sympozium/commit/43d762507a9c15102bb00bb8fec482a4da008cc4))
+* **web:** organize agent detail around harness and ensemble ([a6b4c64](https://github.com/sympozium-ai/sympozium/commit/a6b4c641793955b105e75ac87b5875d534e6fba7))
+
+
+### Bug Fixes
+
+* **api:** retain harness prompt for runtime runs ([#373](https://github.com/sympozium-ai/sympozium/issues/373)) ([efe766e](https://github.com/sympozium-ai/sympozium/commit/efe766e9e6ec6cbdb66a20c61cbfb65311fcc9ed))
+* **harness:** allow default use context setting ([#374](https://github.com/sympozium-ai/sympozium/issues/374)) ([4b6733f](https://github.com/sympozium-ai/sympozium/commit/4b6733f89d15a4c85287bfc02b6c0df8f74fcf94))
+* **harness:** preserve inherited runtime provenance ([#380](https://github.com/sympozium-ai/sympozium/issues/380)) ([f79f2f1](https://github.com/sympozium-ai/sympozium/commit/f79f2f15ffbce465c21131881ad18f1a67e386b1))
+* **harness:** probe loopback skill tool server in-container ([#381](https://github.com/sympozium-ai/sympozium/issues/381)) ([e87ae07](https://github.com/sympozium-ai/sympozium/commit/e87ae07549c52b9de157f676fd84912dc7592f3e))
+
 ## [0.10.49](https://github.com/sympozium-ai/sympozium/compare/v0.10.48...v0.10.49) (2026-08-30)
 
 
