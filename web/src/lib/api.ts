@@ -139,6 +139,11 @@ export interface AgentRuntime {
     contractVersion?: string;
     capabilities?: string[];
     supportOwner?: string;
+    conformance?: {
+      status?: string;
+      owner?: string;
+      url?: string;
+    };
   };
   status?: {
     resolvedImageDigest?: string;

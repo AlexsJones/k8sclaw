@@ -57,6 +57,7 @@ const navSections: NavSection[] = [
     items: [
       { to: "/agents", label: "Agents", icon: Server },
       { to: "/ensembles", label: "Ensembles", icon: Users, indent: 1 },
+      { to: "/harnesses", label: "Harnesses", icon: Shield, indent: 1 },
       { to: "/runs", label: "Runs", icon: Play, indent: 1, badgeKey: "runs" },
       { to: "/schedules", label: "Schedules", icon: Clock, indent: 1 },
     ],
