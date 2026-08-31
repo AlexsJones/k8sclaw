@@ -143,6 +143,13 @@ export const PROVIDERS = [
     icon: AWSIcon,
   },
   {
+    value: "databricks",
+    label: "Databricks AI Gateway",
+    defaultModel: "databricks-claude-sonnet-4-6",
+    defaultBaseURL: "",
+    icon: Cloud,
+  },
+  {
     value: "custom",
     label: "Custom",
     defaultModel: "",
@@ -949,6 +956,7 @@ export function OnboardingWizard({
 
             {/* In-cluster service: manual Base URL input */}
             {(form.provider === "azure-openai" ||
+              form.provider === "databricks" ||
               (isLocalProvider && inferenceMode === "workload")) && (
               <div className="space-y-2">
                 <Label>Base URL</Label>
@@ -958,7 +966,9 @@ export function OnboardingWizard({
                     setForm({ ...form, baseURL: e.target.value })
                   }
                   placeholder={
-                    form.provider === "ollama"
+                    form.provider === "databricks"
+                      ? "https://workspace.cloud.databricks.com/ai-gateway/mlflow/v1"
+                      : form.provider === "ollama"
                       ? "http://ollama.default.svc:11434/v1"
                       : form.provider === "lm-studio"
                         ? "http://localhost:1234/v1"

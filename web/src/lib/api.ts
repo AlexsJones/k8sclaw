@@ -84,6 +84,8 @@ export interface GateVerdictRequest {
 export interface AgentConfig {
   model: string;
   baseURL?: string;
+  providerHeaders?: Record<string, string>;
+  providerHeadersSecretRef?: string;
   thinking?: string;
   nodeSelector?: Record<string, string>;
   agentSandbox?: AgentSandboxInstanceSpec;
@@ -1632,11 +1634,20 @@ export const api = {
 
   providers: {
     nodes: () => apiFetch<ProviderNode[]>("/api/v1/providers/nodes"),
-    models: (baseURL: string, apiKey?: string) =>
-      apiFetch<ProviderModelsResponse>(
-        `/api/v1/providers/models?baseURL=${encodeURIComponent(baseURL)}`,
+    models: (
+      baseURL: string,
+      apiKey?: string,
+      provider?: string,
+      agentRef?: string,
+    ) => {
+      const params = new URLSearchParams({ baseURL });
+      if (provider) params.set("provider", provider);
+      if (agentRef) params.set("agentRef", agentRef);
+      return apiFetch<ProviderModelsResponse>(
+        `/api/v1/providers/models?${params.toString()}`,
         apiKey ? { headers: { "X-Provider-Api-Key": apiKey } } : undefined,
-      ),
+      );
+    },
     bedrockModels: (data: {
       region: string;
       accessKeyId: string;

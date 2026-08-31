@@ -47,6 +47,7 @@ import {
   Check,
   X,
   AlertTriangle,
+  Loader2,
 } from "lucide-react";
 import {
   costTooltip,
@@ -59,6 +60,7 @@ import {
 } from "@/lib/utils";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useRunsSeen } from "@/hooks/use-runs-seen";
+import { useModelList } from "@/hooks/use-model-list";
 import type { AgentRun } from "@/lib/api";
 
 /** Returns true when a run is in PostRunning with a gate hook awaiting a verdict. */
@@ -89,6 +91,27 @@ export function RunsPage() {
     backend: "job",
     runtimeRef: "",
   });
+  const selectedAgent = (instances.data || []).find(
+    (agent) => agent.metadata.name === form.agentRef,
+  );
+  const selectedBaseURL = selectedAgent?.spec.agents.default.baseURL || "";
+  const selectedAuthRef = selectedAgent?.spec.authRefs?.find(
+    (ref) => ref.provider,
+  );
+  const selectedProvider = selectedBaseURL.includes("databricks.com")
+    ? "databricks"
+    : selectedAuthRef?.provider || "";
+  const {
+    models: availableModels,
+    isLoading: modelsLoading,
+    isLive: modelsLive,
+  } = useModelList(
+    selectedProvider,
+    "",
+    selectedBaseURL || undefined,
+    undefined,
+    selectedAgent?.metadata.name,
+  );
 
   // Mark all runs as seen after a short delay so "new" dots are visible briefly.
   useEffect(() => {
@@ -156,7 +179,9 @@ export function RunsPage() {
                 <Label>Instance</Label>
                 <Select
                   value={form.agentRef}
-                  onValueChange={(v) => setForm({ ...form, agentRef: v })}
+                  onValueChange={(v) =>
+                    setForm({ ...form, agentRef: v, model: "" })
+                  }
                 >
                   <SelectTrigger>
                     <SelectValue placeholder="Select agent" />
@@ -207,13 +232,55 @@ export function RunsPage() {
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-2">
                   <Label>Model (optional)</Label>
+                  <Select
+                    value={form.model || "__agent_default__"}
+                    onValueChange={(value) =>
+                      setForm({
+                        ...form,
+                        model: value === "__agent_default__" ? "" : value,
+                      })
+                    }
+                    disabled={!selectedAgent || modelsLoading}
+                  >
+                    <SelectTrigger>
+                      <SelectValue
+                        placeholder={
+                          modelsLoading ? "Loading models…" : "Agent default"
+                        }
+                      />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="__agent_default__">
+                        Agent default
+                        {selectedAgent?.spec.agents.default.model
+                          ? ` (${selectedAgent.spec.agents.default.model})`
+                          : ""}
+                      </SelectItem>
+                      {availableModels.map((model) => (
+                        <SelectItem key={model} value={model}>
+                          {model}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  {modelsLoading && (
+                    <p className="flex items-center gap-1 text-xs text-muted-foreground">
+                      <Loader2 className="h-3 w-3 animate-spin" /> Loading
+                      gateway models…
+                    </p>
+                  )}
                   <Input
                     value={form.model}
                     onChange={(e) =>
                       setForm({ ...form, model: e.target.value })
                     }
-                    placeholder="gpt-4o"
+                    placeholder="Or enter a custom model"
                   />
+                  {modelsLive && (
+                    <p className="text-[10px] text-emerald-400/70">
+                      ✓ Live models fetched from {selectedProvider}
+                    </p>
+                  )}
                 </div>
                 <div className="space-y-2">
                   <Label>Timeout</Label>

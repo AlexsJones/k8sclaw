@@ -11,6 +11,7 @@ import (
 	"io/fs"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"os"
 	"sort"
@@ -42,6 +43,20 @@ import (
 )
 
 const systemNamespace = "sympozium-system"
+
+var disallowedProviderPrefixes = []netip.Prefix{
+	netip.MustParsePrefix("100.64.0.0/10"),
+	netip.MustParsePrefix("192.0.0.0/24"),
+	netip.MustParsePrefix("192.0.2.0/24"),
+	netip.MustParsePrefix("192.88.99.0/24"),
+	netip.MustParsePrefix("198.18.0.0/15"),
+	netip.MustParsePrefix("198.51.100.0/24"),
+	netip.MustParsePrefix("203.0.113.0/24"),
+	netip.MustParsePrefix("64:ff9b::/96"),
+	netip.MustParsePrefix("64:ff9b:1::/48"),
+	netip.MustParsePrefix("100::/64"),
+	netip.MustParsePrefix("2001:db8::/32"),
+}
 
 // memoryProxyClient is used when the apiserver proxies UI/API requests to a
 // per-Ensemble shared memory server (/list, /provenance). The otelhttp
@@ -3832,9 +3847,45 @@ func (s *Server) listProviderNodes(w http.ResponseWriter, r *http.Request) {
 
 // proxyProviderModels proxies a model listing request to an in-cluster or node-based inference provider.
 func (s *Server) proxyProviderModels(w http.ResponseWriter, r *http.Request) {
-	baseURL := r.URL.Query().Get("baseURL")
+	baseURL := strings.TrimSpace(r.URL.Query().Get("baseURL"))
+	provider := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("provider")))
+	agentRef := strings.TrimSpace(r.URL.Query().Get("agentRef"))
+	providerSecretName := ""
+	providerSecretNamespace := ""
+
+	if agentRef != "" {
+		if !s.authEnabled {
+			http.Error(w, "Secret-backed model discovery requires API authentication", http.StatusForbidden)
+			return
+		}
+		if provider != "databricks" {
+			http.Error(w, "agentRef model discovery is only supported for Databricks", http.StatusBadRequest)
+			return
+		}
+		ns := r.URL.Query().Get("namespace")
+		if ns == "" {
+			ns = "default"
+		}
+		var agent sympoziumv1alpha1.Agent
+		if err := s.client.Get(r.Context(), types.NamespacedName{Name: agentRef, Namespace: ns}, &agent); err != nil {
+			if k8serrors.IsNotFound(err) {
+				http.Error(w, fmt.Sprintf("agent %q not found in namespace %q", agentRef, ns), http.StatusNotFound)
+				return
+			}
+			http.Error(w, "failed to read agent: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		baseURL = strings.TrimSpace(agent.Spec.Agents.Default.BaseURL)
+		providerSecretName = providerSecretRef(&agent, provider)
+		if providerSecretName == "" {
+			http.Error(w, fmt.Sprintf("agent %q has no %s authRef", agentRef, provider), http.StatusBadRequest)
+			return
+		}
+		providerSecretNamespace = agent.Namespace
+	}
+
 	if baseURL == "" {
-		http.Error(w, "baseURL query parameter is required", http.StatusBadRequest)
+		http.Error(w, "baseURL query parameter is required when agentRef is not set", http.StatusBadRequest)
 		return
 	}
 
@@ -3844,8 +3895,8 @@ func (s *Server) proxyProviderModels(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid baseURL", http.StatusBadRequest)
 		return
 	}
-	if parsed.Scheme != "http" && parsed.Scheme != "https" {
-		http.Error(w, "baseURL must use http or https scheme", http.StatusBadRequest)
+	if err := validateProviderURL(parsed, provider); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
@@ -3861,24 +3912,22 @@ func (s *Server) proxyProviderModels(w http.ResponseWriter, r *http.Request) {
 		if ip == nil {
 			continue
 		}
-		// Block SSRF targets: link-local (cloud metadata), loopback, private,
-		// and unspecified ranges — otherwise this handler can be steered at the
-		// kube-apiserver or any in-cluster service. This is a best-effort check;
-		// a DNS-rebinding name can still change between resolution here and the
-		// client's own re-resolution below.
-		if ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() ||
-			ip.IsLoopback() || ip.IsPrivate() || ip.IsUnspecified() {
+		// Block SSRF targets before constructing the outbound request. The HTTP
+		// client's dialer repeats this check against the actual connected peer,
+		// so a DNS change between lookup and connection is also rejected.
+		if isDisallowedProviderIP(ip) {
 			http.Error(w, "baseURL resolves to a disallowed address", http.StatusForbidden)
 			return
 		}
 	}
 
-	provider := r.URL.Query().Get("provider")
 	apiKey := r.Header.Get("X-Provider-Api-Key")
 
 	// Determine the models endpoint URL.
 	modelsURL := ""
-	if provider == "ollama" || strings.Contains(baseURL, ":11434") {
+	if provider == "databricks" {
+		modelsURL = databricksWorkspaceRoot(parsed) + "/api/2.0/serving-endpoints"
+	} else if provider == "ollama" || strings.Contains(baseURL, ":11434") {
 		// Ollama uses /api/tags.
 		modelsURL = strings.TrimRight(baseURL, "/")
 		// If baseURL ends with /v1, strip it for the Ollama native API.
@@ -3893,7 +3942,7 @@ func (s *Server) proxyProviderModels(w http.ResponseWriter, r *http.Request) {
 		modelsURL += "/models"
 	}
 
-	client := &http.Client{Timeout: 5 * time.Second}
+	client := newProviderHTTPClient()
 	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, modelsURL, nil)
 	if err != nil {
 		http.Error(w, "failed to build request: "+err.Error(), http.StatusInternalServerError)
@@ -3901,6 +3950,23 @@ func (s *Server) proxyProviderModels(w http.ResponseWriter, r *http.Request) {
 	}
 	if apiKey != "" {
 		req.Header.Set("Authorization", "Bearer "+apiKey)
+	}
+	if provider == "databricks" && providerSecretName != "" {
+		var secret corev1.Secret
+		if err := s.client.Get(r.Context(), types.NamespacedName{Name: providerSecretName, Namespace: providerSecretNamespace}, &secret); err != nil {
+			if k8serrors.IsNotFound(err) {
+				http.Error(w, fmt.Sprintf("agent %q auth secret not found", agentRef), http.StatusBadRequest)
+				return
+			}
+			http.Error(w, "failed to read provider secret: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		auth := databricksAuthorization(&secret)
+		if auth == "" {
+			http.Error(w, fmt.Sprintf("agent %q auth secret has no Databricks token", agentRef), http.StatusBadRequest)
+			return
+		}
+		req.Header.Set("Authorization", auth)
 	}
 	resp, err := client.Do(req)
 	if err != nil {
@@ -3920,8 +3986,12 @@ func (s *Server) proxyProviderModels(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Parse models from response.
-	models := parseProviderModels(body)
+	var models []string
+	if provider == "databricks" {
+		models = parseDatabricksServingEndpoints(body)
+	} else {
+		models = parseProviderModels(body)
+	}
 
 	writeJSON(w, ProviderModelsResponse{
 		Models: models,
@@ -3994,6 +4064,173 @@ func (s *Server) listBedrockModels(w http.ResponseWriter, r *http.Request) {
 		Models: models,
 		Source: "live",
 	})
+}
+
+func isDatabricksHostname(hostname string) bool {
+	hostname = strings.ToLower(strings.TrimSuffix(strings.TrimSpace(hostname), "."))
+	return hostname == "databricks.com" || strings.HasSuffix(hostname, ".databricks.com")
+}
+
+func validateProviderURL(parsed *url.URL, provider string) error {
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return fmt.Errorf("baseURL must use http or https scheme")
+	}
+	if parsed.Hostname() == "" {
+		return fmt.Errorf("baseURL must include a hostname")
+	}
+	if parsed.User != nil {
+		return fmt.Errorf("baseURL must not include credentials")
+	}
+	if parsed.Fragment != "" {
+		return fmt.Errorf("baseURL must not include a fragment")
+	}
+	if provider == "databricks" {
+		if parsed.Scheme != "https" {
+			return fmt.Errorf("Databricks baseURL must use https")
+		}
+		if !isDatabricksHostname(parsed.Hostname()) {
+			return fmt.Errorf("Databricks provider requires a databricks.com baseURL")
+		}
+		if port := parsed.Port(); port != "" && port != "443" {
+			return fmt.Errorf("Databricks baseURL must use port 443")
+		}
+	}
+	return nil
+}
+
+func isDisallowedProviderIP(ip net.IP) bool {
+	addr, ok := netip.AddrFromSlice(ip)
+	if !ok {
+		return true
+	}
+	addr = addr.Unmap()
+	if !addr.IsGlobalUnicast() || addr.IsPrivate() || addr.IsLoopback() || addr.IsLinkLocalUnicast() {
+		return true
+	}
+	for _, prefix := range disallowedProviderPrefixes {
+		if prefix.Contains(addr) {
+			return true
+		}
+	}
+	return false
+}
+
+func newProviderHTTPClient() *http.Client {
+	dialer := &net.Dialer{Timeout: 5 * time.Second, KeepAlive: 30 * time.Second}
+	transport := &http.Transport{
+		Proxy:                  nil,
+		ForceAttemptHTTP2:      true,
+		DisableKeepAlives:      true,
+		TLSHandshakeTimeout:    5 * time.Second,
+		ResponseHeaderTimeout:  5 * time.Second,
+		ExpectContinueTimeout:  time.Second,
+		MaxResponseHeaderBytes: 64 << 10,
+	}
+	transport.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
+		conn, err := dialer.DialContext(ctx, network, address)
+		if err != nil {
+			return nil, err
+		}
+		remote, ok := conn.RemoteAddr().(*net.TCPAddr)
+		if !ok || isDisallowedProviderIP(remote.IP) {
+			_ = conn.Close()
+			return nil, fmt.Errorf("provider connection resolved to a disallowed address")
+		}
+		return conn, nil
+	}
+	return &http.Client{
+		Timeout:   5 * time.Second,
+		Transport: transport,
+		CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+}
+
+func databricksWorkspaceRoot(parsed *url.URL) string {
+	return parsed.Scheme + "://" + parsed.Host
+}
+
+func providerSecretRef(agent *sympoziumv1alpha1.Agent, provider string) string {
+	for _, ref := range agent.Spec.AuthRefs {
+		if strings.EqualFold(strings.TrimSpace(ref.Provider), provider) {
+			return strings.TrimSpace(ref.Secret)
+		}
+	}
+	return ""
+}
+
+func databricksAuthorization(secret *corev1.Secret) string {
+	for key, value := range secret.Data {
+		if strings.EqualFold(key, "Authorization") {
+			auth := strings.TrimSpace(string(value))
+			if len(auth) <= len("Bearer ") || !strings.EqualFold(auth[:len("Bearer ")], "Bearer ") {
+				return ""
+			}
+			token := strings.TrimSpace(auth[len("Bearer "):])
+			if token == "" || strings.ContainsAny(token, "\r\n") {
+				return ""
+			}
+			return "Bearer " + token
+		}
+	}
+	for _, key := range []string{"DATABRICKS_TOKEN", "PROVIDER_API_KEY"} {
+		if value := strings.TrimSpace(string(secret.Data[key])); value != "" {
+			if strings.ContainsAny(value, "\r\n") {
+				return ""
+			}
+			return "Bearer " + value
+		}
+	}
+	return ""
+}
+
+func parseDatabricksServingEndpoints(body []byte) []string {
+	var response struct {
+		Endpoints []struct {
+			Name  string `json:"name"`
+			State struct {
+				Ready string `json:"ready"`
+			} `json:"state"`
+			Config struct {
+				ServedEntities []struct {
+					EntityName    string `json:"entity_name"`
+					ExternalModel *struct {
+						Task string `json:"task"`
+					} `json:"external_model"`
+				} `json:"served_entities"`
+			} `json:"config"`
+		} `json:"endpoints"`
+	}
+	if err := json.Unmarshal(body, &response); err != nil {
+		return nil
+	}
+
+	seen := make(map[string]struct{})
+	models := make([]string, 0, len(response.Endpoints))
+	for _, endpoint := range response.Endpoints {
+		if endpoint.Name == "" || (endpoint.State.Ready != "" && endpoint.State.Ready != "READY") {
+			continue
+		}
+		embeddingOnly := false
+		for _, entity := range endpoint.Config.ServedEntities {
+			if entity.ExternalModel != nil && entity.ExternalModel.Task == "llm/v1/embeddings" {
+				embeddingOnly = true
+				break
+			}
+		}
+		lowerName := strings.ToLower(endpoint.Name)
+		if embeddingOnly || strings.Contains(lowerName, "embedding") || strings.Contains(lowerName, "embed-") {
+			continue
+		}
+		if _, exists := seen[endpoint.Name]; exists {
+			continue
+		}
+		seen[endpoint.Name] = struct{}{}
+		models = append(models, endpoint.Name)
+	}
+	sort.Strings(models)
+	return models
 }
 
 // parseProviderModels extracts model names from a JSON response.

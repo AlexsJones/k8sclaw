@@ -87,8 +87,15 @@ async function fetchProviderModelsDirect(baseURL: string): Promise<string[]> {
 async function fetchProviderModelsViaProxy(
   baseURL: string,
   apiKey?: string,
+  provider?: string,
+  agentRef?: string,
 ): Promise<string[]> {
-  const res = await api.providers.models(baseURL, apiKey);
+  const res = await api.providers.models(
+    baseURL,
+    apiKey,
+    provider,
+    agentRef,
+  );
   return res.models;
 }
 
@@ -139,6 +146,7 @@ export function useModelList(
   apiKey: string,
   baseURL?: string,
   bedrockCredentials?: BedrockCredentials,
+  agentRef?: string,
 ) {
   const isLocalProvider =
     provider === "ollama" ||
@@ -154,6 +162,8 @@ export function useModelList(
     !!bedrockCredentials?.region &&
     !!bedrockCredentials?.accessKeyId &&
     !!bedrockCredentials?.secretAccessKey;
+  const canFetchDatabricks =
+    provider === "databricks" && !!baseURL && (!!apiKey || !!agentRef);
 
   const query = useQuery<string[]>({
     queryKey: [
@@ -163,8 +173,16 @@ export function useModelList(
       baseURL,
       bedrockCredentials?.region,
       bedrockCredentials?.accessKeyId,
+      agentRef,
     ],
     queryFn: async () => {
+      if (canFetchDatabricks)
+        return fetchProviderModelsViaProxy(
+          baseURL!,
+          apiKey || undefined,
+          provider,
+          agentRef,
+        );
       if (canFetchLocal)
         return fetchLocalProviderModels(baseURL!, apiKey || undefined);
       if (canFetchBedrock) return fetchBedrockModels(bedrockCredentials!);
@@ -173,7 +191,8 @@ export function useModelList(
         return fetchAnthropicModels(apiKey);
       throw new Error("no-fetch");
     },
-    enabled: canFetchLocal || canFetchCloud || canFetchBedrock,
+    enabled:
+      canFetchLocal || canFetchCloud || canFetchBedrock || canFetchDatabricks,
     staleTime: 5 * 60 * 1000, // cache 5 min
     retry: false,
   });
