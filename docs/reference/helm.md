@@ -41,6 +41,32 @@ router schedule only on nodes explicitly labelled `celln.dev/kvm=true`; label
 KVM-capable hosts deliberately before they receive host setup. Disable all
 Celln resources with `--set celln.enabled=false`. See [Celln Backend](../concepts/celln-backend.md).
 
+### AgentHarness examples
+
+The chart installs the maintained, experimental Pi and Hermes adapter catalog
+entries by default, alongside the built-in Ensemble catalog. They appear in
+**Agents → Harnesses** when the UI is set to the chart namespace (normally
+`sympozium-system`). Each is pinned to an immutable digest and carries its
+conformance reference.
+
+The chart also creates a `harness-examples` policy that permits only these two
+images. It does **not** create or modify an Agent, so no external harness runs
+until an operator explicitly selects both that policy and a runtime on an
+Agent. The examples are stateless and currently unmetered; they do not support
+MCP/SkillPack tools, native tool filtering, personas, resume, or subagents.
+
+Disable the catalog, or select only one adapter, with values such as:
+
+```yaml
+harnessExamples:
+  enabled: false
+  # Or retain the catalog but install Pi only:
+  pi:
+    enabled: true
+  hermes:
+    enabled: false
+```
+
 ## Observability
 
 The Helm chart deploys a built-in OpenTelemetry collector by default:

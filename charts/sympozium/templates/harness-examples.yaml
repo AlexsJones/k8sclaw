@@ -1,0 +1,93 @@
+{{- /*
+Existing Helm releases upgraded with --reuse-values do not contain this new
+value block. Keep defaults here as well as values.yaml so those upgrades gain
+the catalog instead of failing on a nil map.
+*/}}
+{{- $defaults := dict
+  "enabled" true
+  "policy" (dict "name" "harness-examples")
+  "pi" (dict
+    "enabled" true
+    "name" "pi-v0-84-4"
+    "image" "ghcr.io/sympozium-ai/harness-adapters/pi@sha256:b0d50402dc0a25b2c46f86dbd6b5de963487fa0ffa44058cb324ab2c68934f3b")
+  "hermes" (dict
+    "enabled" true
+    "name" "hermes-v0-20-6"
+    "image" "ghcr.io/sympozium-ai/harness-adapters/hermes@sha256:df66d30c56e7a82c74b9df1d8ef4034127f017640f460c0d3aa7c15f28550ab4")
+}}
+{{- $examples := mergeOverwrite $defaults (default (dict) .Values.harnessExamples) }}
+{{- if $examples.enabled }}
+{{- if not (or $examples.pi.enabled $examples.hermes.enabled) }}
+{{- fail "harnessExamples.enabled requires pi.enabled or hermes.enabled" }}
+{{- end }}
+{{- if and $examples.pi.enabled (not (regexMatch "@sha256:[a-f0-9]{64}$" $examples.pi.image)) }}
+{{- fail "harnessExamples.pi.image must be a digest-pinned OCI reference" }}
+{{- end }}
+{{- if and $examples.hermes.enabled (not (regexMatch "@sha256:[a-f0-9]{64}$" $examples.hermes.image)) }}
+{{- fail "harnessExamples.hermes.image must be a digest-pinned OCI reference" }}
+{{- end }}
+---
+# The chart registers examples but does not bind this policy to any Agent.
+# An operator selects it explicitly along with one of the runtimes below.
+apiVersion: sympozium.ai/v1alpha1
+kind: SympoziumPolicy
+metadata:
+  name: {{ $examples.policy.name }}
+  labels:
+    sympozium.ai/builtin: "true"
+    sympozium.ai/harness-example: "true"
+    {{- include "sympozium.labels" . | nindent 4 }}
+spec:
+  harnessPolicy:
+    enabled: true
+    # Pi and Hermes are intentionally stateless examples and do not currently
+    # provide usage metrics. The policy scopes this exception to their exact
+    # digest-pinned images below.
+    allowUnmetered: true
+  imagePolicy:
+    allowedRegistries:
+    {{- if $examples.pi.enabled }}
+      - {{ $examples.pi.image | quote }}
+    {{- end }}
+    {{- if $examples.hermes.enabled }}
+      - {{ $examples.hermes.image | quote }}
+    {{- end }}
+{{- if $examples.pi.enabled }}
+---
+apiVersion: sympozium.ai/v1alpha1
+kind: AgentRuntime
+metadata:
+  name: {{ $examples.pi.name }}
+  labels:
+    sympozium.ai/builtin: "true"
+    sympozium.ai/harness-example: "true"
+    {{- include "sympozium.labels" . | nindent 4 }}
+spec:
+  image: {{ $examples.pi.image | quote }}
+  contractVersion: v1alpha1
+  supportOwner: sympozium-maintainers
+  conformance:
+    status: conformant
+    owner: sympozium-maintainers
+    reference: https://github.com/sympozium-ai/harness-adapters/blob/main/docs/conformance.md
+{{- end }}
+{{- if $examples.hermes.enabled }}
+---
+apiVersion: sympozium.ai/v1alpha1
+kind: AgentRuntime
+metadata:
+  name: {{ $examples.hermes.name }}
+  labels:
+    sympozium.ai/builtin: "true"
+    sympozium.ai/harness-example: "true"
+    {{- include "sympozium.labels" . | nindent 4 }}
+spec:
+  image: {{ $examples.hermes.image | quote }}
+  contractVersion: v1alpha1
+  supportOwner: sympozium-maintainers
+  conformance:
+    status: conformant
+    owner: sympozium-maintainers
+    reference: https://github.com/sympozium-ai/harness-adapters/blob/main/docs/conformance.md
+{{- end }}
+{{- end }}

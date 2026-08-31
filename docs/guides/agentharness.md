@@ -71,6 +71,22 @@ contract defines mediated equivalents. The historical/default
 
 ## Quickstart
 
+### Built-in Pi and Hermes catalog
+
+The Helm chart installs the maintained experimental Pi and Hermes runtimes in
+the chart namespace by default, just as it installs the Ensemble catalog. In
+the web UI, switch to that namespace (normally `sympozium-system`) and open
+**Agents → Harnesses**. The `harness-examples` policy permits only those exact
+digest-pinned images; select that policy and either runtime explicitly on an
+Agent before running it. No Agent or credential is created by the catalog.
+
+These examples are stateless model-call adapters. They deliberately provide no
+MCP/SkillPack tools, native tools, persona mapping, resume, subagents, or
+usage metrics. See the [adapter conformance report](https://github.com/sympozium-ai/harness-adapters/blob/main/docs/conformance.md)
+before enabling them.
+
+### Bring your own adapter
+
 The checked-in examples use placeholder image digests and credentials. Replace
 those values with an adapter image and Secret that your operator has approved.
 
