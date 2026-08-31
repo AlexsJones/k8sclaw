@@ -24,6 +24,7 @@ import { TopologyDemoPage } from "@/pages/topology-demo";
 import { SyntheticMembranePage } from "@/pages/synthetic-membrane";
 import { ModelDensityPage } from "@/pages/model-density";
 import { HarnessesPage } from "@/pages/harnesses";
+import { HarnessDetailPage } from "@/pages/harness-detail";
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { isAuthenticated } = useAuth();
@@ -59,6 +60,7 @@ export default function App() {
         <Route path="/agents" element={<AgentsPage />} />
         <Route path="/agents/:name" element={<AgentDetailPage />} />
         <Route path="/harnesses" element={<HarnessesPage />} />
+        <Route path="/harnesses/:name" element={<HarnessDetailPage />} />
         <Route path="/runs" element={<RunsPage />} />
         <Route path="/runs/:name" element={<RunDetailPage />} />
         <Route path="/policies" element={<PoliciesPage />} />

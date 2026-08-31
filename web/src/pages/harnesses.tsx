@@ -78,9 +78,14 @@ export function HarnessesPage() {
                     Policy, per-run identity, mounts, NATS, and lifecycle are platform-enforced.
                     Adapter capabilities above are claims, not verified platform behavior.
                   </p>
-                  <Link to="/agents" className="inline-flex items-center gap-1 text-xs text-blue-400 hover:text-blue-300">
-                    Select from an Agent <ExternalLink className="h-3 w-3" />
-                  </Link>
+                  <div className="flex gap-4 text-xs">
+                    <Link to={`/harnesses/${runtime.metadata.name}`} className="inline-flex items-center gap-1 text-blue-400 hover:text-blue-300">
+                      Inspect harness <ExternalLink className="h-3 w-3" />
+                    </Link>
+                    <Link to="/agents" className="inline-flex items-center gap-1 text-blue-400 hover:text-blue-300">
+                      Select from an Agent <ExternalLink className="h-3 w-3" />
+                    </Link>
+                  </div>
                 </CardContent>
               </Card>
             );
