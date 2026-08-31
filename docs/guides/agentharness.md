@@ -1,0 +1,180 @@
+# AgentHarness: bring your agent into Sympozium
+
+## The problem
+
+Sympozium already runs agents as isolated Kubernetes Jobs, but the agent loop
+was traditionally tied to Sympozium's built-in `agent-runner`. If your team
+already uses Codex, Claude Code, Goose, DSH, or another harness, you had to
+choose between that harness and Sympozium's policy, memory, skills, MCP,
+observability, and AgentRun lifecycle.
+
+## What AgentHarness unlocks
+
+AgentHarness lets an approved external adapter become the primary process in a
+normal AgentRun. You can bring an existing harness into Sympozium while the
+platform still controls:
+
+- admission policy and approved runtime selection;
+- per-run Kubernetes identity, token, filesystem, and NATS boundaries;
+- SkillPack sidecars, MCP servers, memory, channels, schedules, and ensembles;
+- result reporting, timeouts, accounting, and observability.
+
+Normal AgentRuns are not replaced. Harness mode changes only the process that
+drives the agent loop; the surrounding AgentRun machinery remains the same.
+
+!!! warning "This is an adapter boundary, not arbitrary image execution"
+    An operator approves a contract-compatible adapter image, normally by
+    immutable digest. Sympozium does not bless or maintain every upstream
+    harness image, and a user cannot bypass policy by naming an arbitrary
+    upstream image in an AgentRun.
+
+## Who does what
+
+| Role | Responsibility |
+|---|---|
+| Platform operator | Approves `AgentRuntime` resources, image digests, policies, credentials, resource limits, and support status. |
+| Agent author | Selects an approved runtime on the `Agent`; configures the model, skills, and policy. |
+| Adapter maintainer | Wraps a harness, implements the versioned contract, publishes images, and runs conformance tests. |
+| End user | Creates a normal AgentRun and inspects the resolved runtime and result. |
+
+## Quickstart
+
+The checked-in examples use placeholder image digests and credentials. Replace
+those values with an adapter image and Secret that your operator has approved.
+
+### 1. Enable the policy
+
+```yaml
+apiVersion: sympozium.ai/v1alpha1
+kind: SympoziumPolicy
+metadata:
+  name: harness-enabled
+  namespace: default
+spec:
+  harnessPolicy:
+    enabled: true
+  imagePolicy:
+    allowedRegistries:
+      - ghcr.io/acme/codex-adapter@sha256:<64-hex-digest>
+```
+
+Apply it with `kubectl apply -f policy.yaml`. Harness execution is denied when
+the backing Agent has no policy or the policy does not explicitly enable it.
+
+### 2. Register an approved runtime
+
+```yaml
+apiVersion: sympozium.ai/v1alpha1
+kind: AgentRuntime
+metadata:
+  name: codex-v1
+  namespace: default
+spec:
+  image: ghcr.io/acme/codex-adapter@sha256:<64-hex-digest>
+  contractVersion: v1alpha1
+  capabilities:
+    - persona
+  supportOwner: platform-ai@example.com
+  conformance:
+    status: conformant
+    owner: platform-ai
+```
+
+An `AgentRuntime` is administrator-owned. Its digest, contract version,
+capabilities, support owner, conformance state, model mapping, and resource
+settings describe what the platform is willing to run.
+
+### 3. Select it on an Agent
+
+```yaml
+apiVersion: sympozium.ai/v1alpha1
+kind: Agent
+metadata:
+  name: review-agent
+  namespace: default
+spec:
+  policyRef: harness-enabled
+  runtimeRef: codex-v1
+  agents:
+    primary:
+      model: claude-sonnet
+```
+
+With `runtimeRef`, the runtime is inherited by normal entrypoints. Users do
+not need to repeat an object-form harness task for every run.
+
+### 4. Create a normal AgentRun
+
+```yaml
+apiVersion: sympozium.ai/v1alpha1
+kind: AgentRun
+metadata:
+  name: review-example
+  namespace: default
+spec:
+  agentRef: review-agent
+  agentId: primary
+  task: Review the latest pull request and report actionable findings.
+```
+
+The controller resolves the Agent's runtime, creates the ordinary isolated
+AgentRun Job, and records the result. Inspect it with:
+
+```bash
+kubectl -n default get agentrun review-example -o yaml
+kubectl -n default get job -l sympozium.ai/agent-run=review-example
+```
+
+For inline object-form authoring, see
+[`config/samples/agentrun_harness.yaml`](../../config/samples/agentrun_harness.yaml).
+For the complete runtime resource, see
+[`config/samples/agentruntime_sample.yaml`](../../config/samples/agentruntime_sample.yaml).
+
+## Trust and capability language
+
+AgentRuntime capabilities are declarations by the adapter maintainer. They are
+not proof that an image implements a behavior. Documentation and UI should
+always distinguish:
+
+- **Platform-enforced:** policy, digest admission, run identity, NATS subjects,
+  mounts, SkillPack permissions, and lifecycle behavior.
+- **Adapter-claimed:** persona translation, native tool filtering, model
+  configuration, or other behavior declared by the runtime.
+- **Unavailable:** a capability that the current adapter or platform cannot
+  mediate, such as unsupported subagents or resume semantics.
+
+The adapter receives the versioned contract and must emit the structured
+Sympozium result protocol. The full adapter contract is documented in
+[`Writing a Harness Adapter`](../modes/harness-adapters.md).
+
+## What to inspect after a run
+
+When runtime provenance surfaces in the API and UI, operators should be able to
+answer four questions without reading pod internals:
+
+1. Which AgentRuntime was requested or inherited?
+2. Which immutable image digest actually ran?
+3. Which capabilities were platform-enforced versus adapter-claimed?
+4. Did the run fail at policy, image pull, startup, MCP, result validation,
+   timeout/cancellation, or metrics/accounting?
+
+Until those fields are exposed in every UI surface, `AgentRun.status` and the
+controller logs remain the source of truth.
+
+## Support boundaries
+
+Sympozium maintains the contract, platform integration, security boundary, and
+reference/conformance tooling. Adapter maintainers maintain their harness
+integration, upstream compatibility, image vulnerabilities, and support tier.
+An operator should record the owner and conformance URL on `AgentRuntime` and
+should pin production runs to a reviewed digest.
+
+## Current status and feedback
+
+The security and execution foundation is tracked in
+[#349](https://github.com/sympozium-ai/sympozium/issues/349). UX, API, and docs
+work is tracked in [#360](https://github.com/sympozium-ai/sympozium/issues/360).
+See the [AgentHarness discussion](https://github.com/sympozium-ai/sympozium/discussions/366)
+for the current merged state and open design questions. Adapter maintainers
+and operators are invited to share use cases, contract proposals, and failure
+diagnostics there.
