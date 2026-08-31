@@ -92,6 +92,7 @@ Running without a subcommand launches the interactive TUI.`,
 		newInstallCmd(),
 		newUninstallCmd(),
 		newOnboardCmd(),
+		newTokenCmd(),
 		newAgentsCmd(),
 		newRunsCmd(),
 		newPoliciesCmd(),
@@ -106,6 +107,53 @@ Running without a subcommand launches the interactive TUI.`,
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)
 	}
+}
+
+// uiToken reads the dashboard bearer token from the control-plane Secret.
+// Keep this separate from the Cobra command so the Secret contract is easy to
+// test without printing a credential.
+func uiToken(ctx context.Context, reader client.Reader, systemNamespace string) (string, error) {
+	secret := &corev1.Secret{}
+	if err := reader.Get(ctx, types.NamespacedName{Name: "sympozium-ui-token", Namespace: systemNamespace}, secret); err != nil {
+		if k8serr.IsNotFound(err) {
+			return "", fmt.Errorf("UI token Secret %q was not found in namespace %q; is Sympozium installed there?", "sympozium-ui-token", systemNamespace)
+		}
+		return "", fmt.Errorf("read UI token Secret in namespace %q: %w", systemNamespace, err)
+	}
+
+	token := strings.TrimSpace(string(secret.Data["token"]))
+	if token == "" {
+		return "", fmt.Errorf("UI token Secret %q in namespace %q has no non-empty %q key", "sympozium-ui-token", systemNamespace, "token")
+	}
+	return token, nil
+}
+
+func newTokenCmd() *cobra.Command {
+	var systemNamespace string
+
+	cmd := &cobra.Command{
+		Use:   "token",
+		Short: "Print the web dashboard authentication token",
+		Long: `Print the Sympozium web dashboard bearer token to standard output.
+
+Use this after a manual port-forward, for example:
+  sympozium token | pbcopy
+
+The command requires permission to read the sympozium-ui-token Secret. Treat
+the output as a credential and do not paste it into logs or shell history.`,
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			token, err := uiToken(cmd.Context(), k8sClient, systemNamespace)
+			if err != nil {
+				return err
+			}
+			_, err = fmt.Fprintln(cmd.OutOrStdout(), token)
+			return err
+		},
+	}
+
+	cmd.Flags().StringVar(&systemNamespace, "service-namespace", "sympozium-system", "Namespace containing the sympozium-ui-token Secret")
+	return cmd
 }
 
 func initClient() error {
