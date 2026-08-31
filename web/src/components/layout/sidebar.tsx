@@ -55,10 +55,10 @@ const navSections: NavSection[] = [
   {
     label: "Agents",
     items: [
-      { to: "/ensembles", label: "Ensembles", icon: Users },
-      { to: "/agents", label: "Agents", icon: Server, indent: 1 },
-      { to: "/runs", label: "Runs", icon: Play, indent: 2, badgeKey: "runs" },
-      { to: "/schedules", label: "Schedules", icon: Clock, indent: 2 },
+      { to: "/agents", label: "Agents", icon: Server },
+      { to: "/ensembles", label: "Ensembles", icon: Users, indent: 1 },
+      { to: "/runs", label: "Runs", icon: Play, indent: 1, badgeKey: "runs" },
+      { to: "/schedules", label: "Schedules", icon: Clock, indent: 1 },
     ],
   },
   {

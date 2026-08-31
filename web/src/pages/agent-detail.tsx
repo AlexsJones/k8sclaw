@@ -68,6 +68,8 @@ export function AgentDetailPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const allowedTabs = new Set([
     "overview",
+    "harness",
+    "ensemble",
     "runs",
     "channels",
     "skills",
@@ -128,7 +130,6 @@ export function AgentDetailPage() {
       <div className="space-y-1">
         <Breadcrumbs
           items={[
-            { label: "Ensembles", to: "/ensembles" },
             { label: "Agents", to: "/agents" },
             { label: inst.metadata.name },
           ]}
@@ -143,6 +144,8 @@ export function AgentDetailPage() {
       <Tabs value={activeTab} onValueChange={setActiveTab}>
         <TabsList>
           <TabsTrigger value="overview">Overview</TabsTrigger>
+          <TabsTrigger value="harness">Harness</TabsTrigger>
+          <TabsTrigger value="ensemble">Ensemble</TabsTrigger>
           <TabsTrigger value="runs">
             Runs{instanceRuns.length > 0 ? ` (${instanceRuns.length})` : ""}
           </TabsTrigger>
@@ -217,9 +220,29 @@ export function AgentDetailPage() {
             />
 
             <ResponseGateCard inst={inst} />
+          </div>
+        </TabsContent>
 
+        <TabsContent value="harness">
+          <div className="space-y-4">
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-base">How this Agent executes</CardTitle>
+              </CardHeader>
+              <CardContent className="text-sm text-muted-foreground">
+                A harness supplies the agent loop. Sympozium still owns the
+                AgentRun lifecycle, policy, per-run identity, skills, memory,
+                MCP integrations, and execution audit. Leave the runtime on
+                <span className="font-medium text-foreground"> Built-in agent-runner</span>
+                to preserve the native execution path.
+              </CardContent>
+            </Card>
             <AgentRuntimeCard inst={inst} runtimes={runtimes || []} />
           </div>
+        </TabsContent>
+
+        <TabsContent value="ensemble">
+          <AgentEnsembleCard inst={inst} />
         </TabsContent>
 
         <TabsContent value="runs">
@@ -466,6 +489,44 @@ function AgentRuntimeCard({ inst, runtimes }: { inst: Agent; runtimes: import("@
             ))}
           </SelectContent>
         </Select>
+      </CardContent>
+    </Card>
+  );
+}
+
+function AgentEnsembleCard({ inst }: { inst: Agent }) {
+  const ensembleName = inst.metadata.labels?.["sympozium.ai/ensemble"];
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-base">Ensemble membership</CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-3 text-sm">
+        {ensembleName ? (
+          <>
+            <p className="text-muted-foreground">
+              This Agent was created and is coordinated by the following Ensemble.
+              Its runtime remains a separate administrator-owned execution choice.
+            </p>
+            <Link
+              to={`/ensembles/${ensembleName}`}
+              className="inline-flex items-center gap-2 rounded-md border px-3 py-2 font-mono text-blue-400 hover:bg-white/5"
+            >
+              {ensembleName}
+              <ExternalLink className="h-3.5 w-3.5" />
+            </Link>
+          </>
+        ) : (
+          <>
+            <p className="text-muted-foreground">
+              This is a standalone Agent. It is not currently managed by an Ensemble.
+            </p>
+            <Link to="/ensembles" className="text-blue-400 hover:text-blue-300">
+              Browse Ensembles
+            </Link>
+          </>
+        )}
       </CardContent>
     </Card>
   );
