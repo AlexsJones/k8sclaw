@@ -102,6 +102,7 @@ nav:
     - Writing Orchestrator Sidecars: sidecars/writing-orchestrator-sidecars.md
   - Guides:
     - Your First AgentRun: guides/first-agentrun.md
+    - AgentHarness: guides/agentharness.md
     - Using Ollama: guides/ollama.md
     - LM Studio & Local Inference: guides/lm-studio.md
     - Unsloth: guides/unsloth.md
