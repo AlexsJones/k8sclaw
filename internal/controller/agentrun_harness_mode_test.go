@@ -570,6 +570,15 @@ func TestBuildContainers_HarnessGetsTheSkillToolServer(t *testing.T) {
 	if srv.StartupProbe == nil {
 		t.Error("without a startup probe the kubelet does not wait for it, and the harness can race it")
 	}
+	if srv.StartupProbe == nil || srv.StartupProbe.Exec == nil {
+		t.Fatal("skill-tools must use an in-container exec probe so its loopback-only listener is reachable")
+	}
+	if srv.StartupProbe.HTTPGet != nil {
+		t.Error("skill-tools must not use an HTTP probe: kubelet probes from outside the pod network namespace")
+	}
+	if got := strings.Join(srv.StartupProbe.Exec.Command, " "); !strings.Contains(got, "127.0.0.1:8771/readyz") {
+		t.Errorf("startup probe = %q, want loopback readiness endpoint", got)
+	}
 	if v, ok := envValueLocal(srv.Env, "MCP_SERVE_SKILL_TOOLS"); !ok || v != "true" {
 		t.Errorf("MCP_SERVE_SKILL_TOOLS = (%q, %v), want true", v, ok)
 	}
