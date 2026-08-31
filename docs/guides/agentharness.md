@@ -150,6 +150,8 @@ For inline object-form authoring, see
 [`config/samples/agentrun_harness.yaml`](../../config/samples/agentrun_harness.yaml).
 For the complete runtime resource, see
 [`config/samples/agentruntime_sample.yaml`](../../config/samples/agentruntime_sample.yaml).
+For the user journey, control meanings, proof shown after a run, and UX
+delivery criteria, see [AgentHarness user experience](agentharness-ux.md).
 
 ## Trust and capability language
 

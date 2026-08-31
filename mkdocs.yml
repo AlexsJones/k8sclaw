@@ -103,6 +103,7 @@ nav:
   - Guides:
     - Your First AgentRun: guides/first-agentrun.md
     - AgentHarness: guides/agentharness.md
+    - AgentHarness UX: guides/agentharness-ux.md
     - Using Ollama: guides/ollama.md
     - LM Studio & Local Inference: guides/lm-studio.md
     - Unsloth: guides/unsloth.md
