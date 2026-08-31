@@ -130,6 +130,20 @@ export interface Agent {
   status?: AgentStatus;
 }
 
+export interface AgentRuntime {
+  metadata: ObjectMeta;
+  spec: {
+    image: string;
+    contractVersion?: string;
+    capabilities?: string[];
+    supportOwner?: string;
+  };
+  status?: {
+    resolvedImageDigest?: string;
+    conditions?: Condition[];
+  };
+}
+
 // ── AgentRun ─────────────────────────────────────────────────────────────────
 
 export interface ModelSpec {
@@ -1250,6 +1264,7 @@ export const api = {
       model?: string;
       timeout?: string;
       backend?: string;
+      runtimeRef?: string;
     }) =>
       apiFetch<AgentRun>("/api/v1/runs", {
         method: "POST",
@@ -1261,7 +1276,11 @@ export const api = {
       apiFetch<AgentRun>(`/api/v1/runs/${name}/gate-verdict`, {
         method: "POST",
         body: JSON.stringify(data),
-      }),
+    }),
+  },
+
+  runtimes: {
+    list: () => apiFetch<AgentRuntime[]>("/api/v1/runtimes"),
   },
 
   policies: {

@@ -65,6 +65,10 @@ export function useAgents() {
   return useQuery({ queryKey: ["agents"], queryFn: api.agents.list });
 }
 
+export function useRuntimes() {
+  return useQuery({ queryKey: ["runtimes"], queryFn: api.runtimes.list });
+}
+
 export function useAgent(name: string) {
   return useQuery({
     queryKey: ["agents", name],
