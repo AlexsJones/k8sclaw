@@ -1041,6 +1041,9 @@ func (s *Server) createRun(w http.ResponseWriter, r *http.Request) {
 			Mode: "harness",
 			Parameters: map[string]string{
 				"runtime": strings.TrimSpace(req.RuntimeRef),
+				// Harness object-form tasks carry their prompt in parameters;
+				// without this admission correctly rejects the run as incomplete.
+				"prompt": req.Task,
 			},
 		}
 	}
