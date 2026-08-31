@@ -7,7 +7,9 @@
 #
 # BYO means a contract-compatible adapter image, not an arbitrary upstream
 # harness image. External runtimes are disabled unless the backing Agent's
-# policy explicitly opts in. Replace the example image and secret before use.
+# policy explicitly opts in. This sample uses Sympozium's published,
+# deterministic reference adapter; production users should register their own
+# reviewed adapter digest as an AgentRuntime.
 apiVersion: sympozium.ai/v1alpha1
 kind: SympoziumPolicy
 metadata:
@@ -21,7 +23,7 @@ spec:
   imagePolicy:
     allowedRegistries:
       # Digest-pinned: harness images must be pinned, never a mutable tag.
-      - ghcr.io/acme/my-harness@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      - ghcr.io/sympozium-ai/sympozium/harness-reference@sha256:84a025be02de2be67f8d6c7430664819c59c2d0c59aae5dc9fadcaf98c7a598d
 ---
 apiVersion: sympozium.ai/v1alpha1
 kind: Agent
@@ -52,7 +54,7 @@ spec:
       # Required. The adapter image that becomes the pod's primary process.
       # It keeps its own ENTRYPOINT — Sympozium imposes no argv on a binary it
       # did not build. Digest-pinned (@sha256:…): a mutable tag is rejected.
-      image: ghcr.io/acme/my-harness@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      image: ghcr.io/sympozium-ai/sympozium/harness-reference@sha256:84a025be02de2be67f8d6c7430664819c59c2d0c59aae5dc9fadcaf98c7a598d
       # Required. The task text. Object-form tasks have no top-level prompt
       # field, so harness mode takes it from here and sets TASK from it.
       prompt: "Review the latest pull request and provide feedback on code quality"
