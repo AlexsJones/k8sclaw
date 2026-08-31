@@ -2,7 +2,7 @@ import { useEffect } from "react";
 import { useParams, Link } from "react-router-dom";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { useRun, useGateVerdict } from "@/hooks/use-api";
+import { useRun, useGateVerdict, useRuntimes } from "@/hooks/use-api";
 import { StatusBadge } from "@/components/status-badge";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -31,6 +31,7 @@ export function RunDetailPage() {
   const { name } = useParams<{ name: string }>();
   const { data: run, isLoading } = useRun(name || "");
   const gateVerdict = useGateVerdict();
+  const runtimes = useRuntimes();
   const { markSeenUpTo } = useRunsSeen();
 
   const isAwaitingGate =
@@ -63,6 +64,9 @@ export function RunDetailPage() {
     ? `${(usage.durationMs / 1000).toFixed(1)}s`
     : "—";
   const est = effectiveCost(run);
+  const taskMode = typeof run.spec.task === "object" ? run.spec.task : undefined;
+  const runtimeName = taskMode?.mode === "harness" ? taskMode.parameters?.runtime : undefined;
+  const runtime = runtimeName ? runtimes.data?.find((item) => item.metadata.name === runtimeName) : undefined;
 
   return (
     <div className="space-y-6">
@@ -277,6 +281,24 @@ export function RunDetailPage() {
             Response gate: {run.status.gateVerdict}
           </span>
         </div>
+      )}
+
+      {runtimeName && (
+        <Card>
+          <CardHeader className="pb-3">
+            <CardTitle className="flex items-center gap-2 text-base">
+              <ShieldCheck className="h-4 w-4 text-cyan-400" />
+              External runtime provenance
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="grid gap-3 text-sm sm:grid-cols-2">
+            <div><span className="text-muted-foreground">Runtime</span><p className="font-mono">{runtimeName}</p></div>
+            <div><span className="text-muted-foreground">Image digest</span><p className="font-mono break-all">{run.status?.harnessImageDigest || runtime?.status?.resolvedImageDigest || "pending"}</p></div>
+            <div><span className="text-muted-foreground">Contract</span><p>{runtime?.spec.contractVersion || "not declared"}</p></div>
+            <div><span className="text-muted-foreground">Support owner</span><p>{runtime?.spec.supportOwner || "not declared"}</p></div>
+            <div className="sm:col-span-2"><span className="text-muted-foreground">Capability provenance</span><p>{runtime?.spec.capabilities?.length ? runtime.spec.capabilities.join(", ") + " (runtime claim; platform policy still enforced)" : "No runtime capabilities claimed"}</p></div>
+          </CardContent>
+        </Card>
       )}
 
       <Tabs defaultValue="task">
