@@ -141,6 +141,9 @@ func (s *Server) buildMux(frontendFS fs.FS, expected *tokenReader) http.Handler 
 	mux.HandleFunc("PATCH /api/v1/agents/{name}", s.patchAgent)
 	mux.HandleFunc("GET /api/v1/agents/{name}/web-endpoint", s.getWebEndpointStatus)
 
+	// Administrator-approved harness runtimes
+	mux.HandleFunc("GET /api/v1/runtimes", s.listRuntimes)
+
 	// Run endpoints
 	mux.HandleFunc("GET /api/v1/runs", s.listRuns)
 	mux.HandleFunc("GET /api/v1/runs/{name}", s.getRun)
@@ -393,6 +396,21 @@ func (s *Server) listAgents(w http.ResponseWriter, r *http.Request) {
 	sort.Slice(list.Items, func(i, j int) bool {
 		return list.Items[i].Name < list.Items[j].Name
 	})
+	writeJSON(w, list.Items)
+}
+
+func (s *Server) listRuntimes(w http.ResponseWriter, r *http.Request) {
+	ns := r.URL.Query().Get("namespace")
+	if ns == "" {
+		ns = "default"
+	}
+
+	var list sympoziumv1alpha1.AgentRuntimeList
+	if err := s.client.List(r.Context(), &list, client.InNamespace(ns)); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	sort.Slice(list.Items, func(i, j int) bool { return list.Items[i].Name < list.Items[j].Name })
 	writeJSON(w, list.Items)
 }
 
@@ -902,6 +920,9 @@ type CreateRunRequest struct {
 	Model      string `json:"model,omitempty"`
 	Timeout    string `json:"timeout,omitempty"`
 	Backend    string `json:"backend,omitempty"`
+	// RuntimeRef selects an administrator-approved AgentRuntime. When omitted,
+	// the Agent's runtimeRef inheritance and legacy string-task behaviour apply.
+	RuntimeRef string `json:"runtimeRef,omitempty"`
 }
 
 func (s *Server) createRun(w http.ResponseWriter, r *http.Request) {
@@ -1014,6 +1035,14 @@ func (s *Server) createRun(w http.ResponseWriter, r *http.Request) {
 			Env:              inst.Spec.Agents.Default.Env,
 			Timeout:          timeout,
 		},
+	}
+	if strings.TrimSpace(req.RuntimeRef) != "" {
+		run.Spec.Task = &sympoziumv1alpha1.TaskSpec{
+			Mode: "harness",
+			Parameters: map[string]string{
+				"runtime": strings.TrimSpace(req.RuntimeRef),
+			},
+		}
 	}
 
 	if err := s.client.Create(r.Context(), run); err != nil {

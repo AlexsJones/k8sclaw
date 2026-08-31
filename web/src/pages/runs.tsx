@@ -8,6 +8,7 @@ import {
   useObservabilityMetrics,
   useGateVerdict,
   useCapabilities,
+  useRuntimes,
 } from "@/hooks/use-api";
 import { StatusBadge } from "@/components/status-badge";
 import {
@@ -72,6 +73,7 @@ export function RunsPage() {
   const instances = useAgents();
   const observability = useObservabilityMetrics();
   const capabilities = useCapabilities();
+  const runtimes = useRuntimes();
   const deleteRun = useDeleteRun();
   const createRun = useCreateRun();
   const gateVerdict = useGateVerdict();
@@ -85,6 +87,7 @@ export function RunsPage() {
     model: "",
     timeout: "5m",
     backend: "job",
+    runtimeRef: "",
   });
 
   // Mark all runs as seen after a short delay so "new" dots are visible briefly.
@@ -118,7 +121,7 @@ export function RunsPage() {
     createRun.mutate(form, {
       onSuccess: () => {
         setOpen(false);
-        setForm({ agentRef: "", task: "", model: "", timeout: "5m", backend: "job" });
+        setForm({ agentRef: "", task: "", model: "", timeout: "5m", backend: "job", runtimeRef: "" });
       },
     });
   };
@@ -178,6 +181,28 @@ export function RunsPage() {
                   placeholder="Describe the task for the agent…"
                   rows={4}
                 />
+              </div>
+              <div className="space-y-2">
+                <Label>Harness runtime (optional)</Label>
+                <Select
+                  value={form.runtimeRef || "inherit"}
+                  onValueChange={(v) => setForm({ ...form, runtimeRef: v === "inherit" ? "" : v })}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Use agent default" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="inherit">Use agent default</SelectItem>
+                    {(runtimes.data || []).map((runtime) => (
+                      <SelectItem key={runtime.metadata.name} value={runtime.metadata.name}>
+                        {runtime.metadata.name}{runtime.spec.supportOwner ? ` — ${runtime.spec.supportOwner}` : ""}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-muted-foreground">
+                  Choose an administrator-approved adapter. Leaving this empty preserves the agent’s configured runtime and normal AgentRun behaviour.
+                </p>
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-2">
