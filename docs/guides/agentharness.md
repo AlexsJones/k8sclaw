@@ -60,6 +60,9 @@ metadata:
 spec:
   harnessPolicy:
     enabled: true
+    # The reference adapter reports no token usage. Production adapters should
+    # emit real metrics instead of enabling this exception.
+    allowUnmetered: true
   imagePolicy:
     allowedRegistries:
       - ghcr.io/acme/codex-adapter@sha256:<64-hex-digest>

@@ -24,7 +24,7 @@ func policyWithRegistries(name string, registries ...string) *sympoziumv1alpha1.
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"},
 		Spec: sympoziumv1alpha1.SympoziumPolicySpec{
 			ImagePolicy:   &sympoziumv1alpha1.ImagePolicySpec{AllowedRegistries: registries},
-			HarnessPolicy: &sympoziumv1alpha1.HarnessPolicySpec{Enabled: true},
+			HarnessPolicy: &sympoziumv1alpha1.HarnessPolicySpec{Enabled: true, AllowUnmetered: true},
 		},
 	}
 }

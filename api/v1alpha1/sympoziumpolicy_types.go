@@ -56,6 +56,13 @@ type HarnessPolicySpec struct {
 	// primary process and receives the run's model and MCP credentials.
 	// +kubebuilder:default=false
 	Enabled bool `json:"enabled,omitempty"`
+
+	// AllowUnmetered permits a harness adapter that does not report token usage.
+	// External adapters own their model loop, so Sympozium cannot infer usage;
+	// without this opt-in, an ensemble token budget could appear enforced while
+	// silently receiving no accounting data. Defaults to false.
+	// +optional
+	AllowUnmetered bool `json:"allowUnmetered,omitempty"`
 }
 
 // ModelPolicySpec defines model access restrictions.

@@ -16,6 +16,8 @@ metadata:
 spec:
   harnessPolicy:
     enabled: true
+    # Set only for adapters that do not emit usable token metrics.
+    allowUnmetered: true
   imagePolicy:
     allowedRegistries:
       # Digest-pinned: harness images must be pinned, never a mutable tag.
