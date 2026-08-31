@@ -2403,6 +2403,9 @@ func (r *AgentRunReconciler) validatePolicy(ctx context.Context, agentRun *sympo
 		(policy.Spec.HarnessPolicy == nil || !policy.Spec.HarnessPolicy.Enabled) {
 		return fmt.Errorf("task.mode %q is disabled by policy; set spec.harnessPolicy.enabled: true to opt in", taskmodes.Harness)
 	}
+	if taskmodes.HarnessImage(agentRun.Spec.Task) != "" && !policy.Spec.HarnessPolicy.AllowUnmetered {
+		return fmt.Errorf("task.mode %q may not run unmetered under this policy; set spec.harnessPolicy.allowUnmetered: true only for an adapter whose accounting risk you accept", taskmodes.Harness)
+	}
 
 	// Validate the harness image against the registry allowlist.
 	//

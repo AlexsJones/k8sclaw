@@ -63,6 +63,13 @@ spec:
                   Sympozium's trusted agent-runner with an external harness adapter image.
                   External harnesses are disabled unless this field is present and enabled.
                 properties:
+                  allowUnmetered:
+                    description: |-
+                      AllowUnmetered permits a harness adapter that does not report token usage.
+                      External adapters own their model loop, so Sympozium cannot infer usage;
+                      without this opt-in, an ensemble token budget could appear enforced while
+                      silently receiving no accounting data. Defaults to false.
+                    type: boolean
                   enabled:
                     default: false
                     description: |-

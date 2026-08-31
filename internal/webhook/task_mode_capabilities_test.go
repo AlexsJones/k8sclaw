@@ -36,7 +36,7 @@ func capabilityEnforcer(t *testing.T) *PolicyEnforcer {
 	policy := &sympoziumv1alpha1.SympoziumPolicy{
 		ObjectMeta: metav1.ObjectMeta{Name: "harness-enabled", Namespace: "default"},
 		Spec: sympoziumv1alpha1.SympoziumPolicySpec{
-			HarnessPolicy: &sympoziumv1alpha1.HarnessPolicySpec{Enabled: true},
+			HarnessPolicy: &sympoziumv1alpha1.HarnessPolicySpec{Enabled: true, AllowUnmetered: true},
 		},
 	}
 	cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(agent, policy).Build()
@@ -104,6 +104,29 @@ func TestPolicyEnforcer_HarnessRequiresExplicitPolicyOptIn(t *testing.T) {
 	}
 }
 
+func TestPolicyEnforcer_HarnessRequiresUnmeteredOptIn(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := sympoziumv1alpha1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	agent := &sympoziumv1alpha1.Agent{
+		ObjectMeta: metav1.ObjectMeta{Name: "inst", Namespace: "default"},
+		Spec:       sympoziumv1alpha1.AgentSpec{PolicyRef: "harness-enabled"},
+	}
+	policy := &sympoziumv1alpha1.SympoziumPolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: "harness-enabled", Namespace: "default"},
+		Spec: sympoziumv1alpha1.SympoziumPolicySpec{
+			HarnessPolicy: &sympoziumv1alpha1.HarnessPolicySpec{Enabled: true},
+		},
+	}
+	cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(agent, policy).Build()
+	pe := &PolicyEnforcer{Client: cl, Log: logr.Discard(), Decoder: decoderFor(t, scheme)}
+	resp := pe.Handle(context.Background(), admissionRequestFor(t, capabilityRun(harnessTaskSpec(nil))))
+	if resp.Allowed || !strings.Contains(resp.Result.Message, "allowUnmetered") {
+		t.Fatalf("expected unmetered opt-in denial, got allowed=%t message=%q", resp.Allowed, resp.Result.Message)
+	}
+}
+
 func TestPolicyEnforcer_RejectsUnmediatedHarnessCapabilityClaim(t *testing.T) {
 	pe := capabilityEnforcer(t)
 	run := capabilityRun(harnessTaskSpec(map[string]string{
@@ -146,7 +169,7 @@ func TestPolicyEnforcer_ResolvesRuntimeReference(t *testing.T) {
 	policy := &sympoziumv1alpha1.SympoziumPolicy{
 		ObjectMeta: metav1.ObjectMeta{Name: "harness-enabled", Namespace: "default"},
 		Spec: sympoziumv1alpha1.SympoziumPolicySpec{
-			HarnessPolicy: &sympoziumv1alpha1.HarnessPolicySpec{Enabled: true},
+			HarnessPolicy: &sympoziumv1alpha1.HarnessPolicySpec{Enabled: true, AllowUnmetered: true},
 		},
 	}
 	runtimeObj := &sympoziumv1alpha1.AgentRuntime{
@@ -205,7 +228,7 @@ func TestPolicyEnforcer_InheritsAgentRuntimeRef(t *testing.T) {
 	policy := &sympoziumv1alpha1.SympoziumPolicy{
 		ObjectMeta: metav1.ObjectMeta{Name: "harness-enabled", Namespace: "default"},
 		Spec: sympoziumv1alpha1.SympoziumPolicySpec{
-			HarnessPolicy: &sympoziumv1alpha1.HarnessPolicySpec{Enabled: true},
+			HarnessPolicy: &sympoziumv1alpha1.HarnessPolicySpec{Enabled: true, AllowUnmetered: true},
 		},
 	}
 	runtimeObj := &sympoziumv1alpha1.AgentRuntime{
@@ -406,7 +429,7 @@ func TestPolicyEnforcer_DeniesHarnessImageOutsideAllowedRegistries(t *testing.T)
 			ImagePolicy: &sympoziumv1alpha1.ImagePolicySpec{
 				AllowedRegistries: []string{"ghcr.io/sympozium-ai/"},
 			},
-			HarnessPolicy: &sympoziumv1alpha1.HarnessPolicySpec{Enabled: true},
+			HarnessPolicy: &sympoziumv1alpha1.HarnessPolicySpec{Enabled: true, AllowUnmetered: true},
 		},
 	}
 	agent := &sympoziumv1alpha1.Agent{
@@ -441,7 +464,7 @@ func TestPolicyEnforcer_AllowsHarnessImageInsideAllowedRegistries(t *testing.T) 
 			ImagePolicy: &sympoziumv1alpha1.ImagePolicySpec{
 				AllowedRegistries: []string{"ghcr.io/acme/"},
 			},
-			HarnessPolicy: &sympoziumv1alpha1.HarnessPolicySpec{Enabled: true},
+			HarnessPolicy: &sympoziumv1alpha1.HarnessPolicySpec{Enabled: true, AllowUnmetered: true},
 		},
 	}
 	agent := &sympoziumv1alpha1.Agent{
@@ -507,7 +530,7 @@ func TestPolicyEnforcer_AllowsOrdinaryMCPServerName(t *testing.T) {
 	policy := &sympoziumv1alpha1.SympoziumPolicy{
 		ObjectMeta: metav1.ObjectMeta{Name: "harness-enabled", Namespace: "default"},
 		Spec: sympoziumv1alpha1.SympoziumPolicySpec{
-			HarnessPolicy: &sympoziumv1alpha1.HarnessPolicySpec{Enabled: true},
+			HarnessPolicy: &sympoziumv1alpha1.HarnessPolicySpec{Enabled: true, AllowUnmetered: true},
 		},
 	}
 	cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(agent, policy).Build()

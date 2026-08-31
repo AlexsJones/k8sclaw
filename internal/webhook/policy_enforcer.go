@@ -196,6 +196,9 @@ func (pe *PolicyEnforcer) Handle(ctx context.Context, req admission.Request) adm
 		(policy.Spec.HarnessPolicy == nil || !policy.Spec.HarnessPolicy.Enabled) {
 		return admission.Denied("task.mode \"harness\" is disabled by policy; set spec.harnessPolicy.enabled: true to opt in")
 	}
+	if taskmodes.HarnessImage(run.Spec.Task) != "" && !policy.Spec.HarnessPolicy.AllowUnmetered {
+		return admission.Denied("task.mode \"harness\" may not run unmetered under this policy; set spec.harnessPolicy.allowUnmetered: true only for an adapter whose accounting risk you accept")
+	}
 
 	// Validate sandbox policy
 	if policy.Spec.SandboxPolicy != nil && policy.Spec.SandboxPolicy.Required {

@@ -23,6 +23,7 @@ metadata:
 spec:
   harnessPolicy:
     enabled: true
+    allowUnmetered: true
   imagePolicy:
     allowedRegistries:
       - ghcr.io/sympozium-ai/sympozium/harness-reference@sha256:84a025be02de2be67f8d6c7430664819c59c2d0c59aae5dc9fadcaf98c7a598d

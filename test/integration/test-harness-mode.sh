@@ -90,6 +90,7 @@ metadata:
 spec:
   harnessPolicy:
     enabled: true
+    allowUnmetered: true
 ---
 apiVersion: sympozium.ai/v1alpha1
 kind: Agent

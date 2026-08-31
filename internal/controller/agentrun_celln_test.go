@@ -313,7 +313,7 @@ func TestReconcilePending_CellnAndAgentContainerOverride_Rejected(t *testing.T) 
 	policy := &sympoziumv1alpha1.SympoziumPolicy{
 		ObjectMeta: metav1.ObjectMeta{Name: "harness-enabled", Namespace: run.Namespace},
 		Spec: sympoziumv1alpha1.SympoziumPolicySpec{
-			HarnessPolicy: &sympoziumv1alpha1.HarnessPolicySpec{Enabled: true},
+			HarnessPolicy: &sympoziumv1alpha1.HarnessPolicySpec{Enabled: true, AllowUnmetered: true},
 		},
 	}
 	r := newAgentRunTestReconciler(t, run, agent, policy)
