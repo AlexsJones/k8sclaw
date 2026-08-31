@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.10.51](https://github.com/sympozium-ai/sympozium/compare/v0.10.50...v0.10.51) (2026-08-31)
+
+
+### Features
+
+* **celln:** enable labelled KVM hosts by default ([#385](https://github.com/sympozium-ai/sympozium/issues/385)) ([af3f0bb](https://github.com/sympozium-ai/sympozium/commit/af3f0bb9284da54094a58cb0ca6de83fea730df9))
+* **harness:** select runtime while creating an agent ([#384](https://github.com/sympozium-ai/sympozium/issues/384)) ([bb9baf7](https://github.com/sympozium-ai/sympozium/commit/bb9baf7bd7960de5cc30de0c3b2b7166813eaf62))
+
 ## [0.10.50](https://github.com/sympozium-ai/sympozium/compare/v0.10.49...v0.10.50) (2026-08-31)
 
 
