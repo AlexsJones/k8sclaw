@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 620" role="img" aria-labelledby="title desc">
+  <title id="title">AgentHarness preserves the Sympozium control plane around an external agent harness</title>
+  <desc id="desc">An approved AgentRuntime starts an external harness inside an isolated AgentRun pod. Policy, identity, skills, MCP, memory, events, results, and observability remain under Sympozium control.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto"><path d="M0,0 L10,3 L0,6Z" fill="#e8562a"/></marker>
+    <style>
+      .bg{fill:#111110}.panel{fill:#1a1a18;stroke:#484841;stroke-width:2}.pod{fill:#151d24;stroke:#4c9cff;stroke-width:2}.node{fill:#22221f;stroke:#73736a;stroke-width:1.5}.accent{fill:#352019;stroke:#e8562a;stroke-width:2}.line{stroke:#e8562a;stroke-width:3;fill:none;marker-end:url(#arrow)}.muted{stroke:#77776f;stroke-width:2;stroke-dasharray:7 6;fill:none}.h1{fill:#f0ece4;font:700 30px Inter,Arial,sans-serif}.h2{fill:#f0ece4;font:700 18px Inter,Arial,sans-serif}.t{fill:#c9c5bb;font:15px Inter,Arial,sans-serif}.small{fill:#8a8c82;font:13px Inter,Arial,sans-serif}.tag{fill:#e8562a;font:700 12px Inter,Arial,sans-serif;letter-spacing:1.2px}
+    </style>
+  </defs>
+  <rect class="bg" width="1200" height="620" rx="18"/>
+  <text x="60" y="64" class="h1">AgentHarness: bring your agent loop, retain the platform boundary</text>
+  <text x="60" y="92" class="t">Only the primary process changes. Sympozium still governs the run around it.</text>
+  <rect class="panel" x="50" y="132" width="230" height="400" rx="12"/>
+  <text x="76" y="170" class="tag">OPERATOR CONTROL</text>
+  <rect class="node" x="76" y="196" width="178" height="70" rx="8"/><text x="94" y="226" class="h2">AgentRuntime</text><text x="94" y="249" class="small">pinned image + contract</text>
+  <rect class="accent" x="76" y="290" width="178" height="88" rx="8"/><text x="94" y="321" class="h2">SympoziumPolicy</text><text x="94" y="345" class="small">admission · allowlist</text><text x="94" y="365" class="small">identity · boundaries</text>
+  <rect class="node" x="76" y="402" width="178" height="90" rx="8"/><text x="94" y="434" class="h2">Agent + AgentRun</text><text x="94" y="458" class="small">task · model · skills</text><text x="94" y="478" class="small">runtime selected here</text>
+  <rect class="panel" x="330" y="132" width="570" height="400" rx="12"/>
+  <text x="356" y="170" class="tag">ISOLATED AGENTRUN POD</text>
+  <rect class="pod" x="365" y="200" width="310" height="250" rx="10"/><text x="390" y="234" class="h2">Approved adapter</text><text x="390" y="258" class="t">external agent harness</text><text x="390" y="280" class="small">Codex · Claude Code · Goose · your own</text><line x1="390" y1="296" x2="648" y2="296" stroke="#4c9cff"/><text x="390" y="326" class="small">Reads the versioned task contract</text><text x="390" y="354" class="small">Runs its own agent loop</text><text x="390" y="382" class="small">Emits a structured result</text><text x="390" y="418" class="tag">NO KUBERNETES CREDENTIAL</text>
+  <rect class="node" x="710" y="200" width="155" height="74" rx="8"/><text x="728" y="230" class="h2">Skill sidecars</text><text x="728" y="252" class="small">least privilege</text>
+  <rect class="node" x="710" y="291" width="155" height="74" rx="8"/><text x="728" y="321" class="h2">MCP + tools</text><text x="728" y="343" class="small">policy-gated</text>
+  <rect class="node" x="710" y="382" width="155" height="74" rx="8"/><text x="728" y="412" class="h2">IPC bridge</text><text x="728" y="434" class="small">narrowed mounts</text>
+  <rect class="panel" x="950" y="132" width="200" height="400" rx="12"/>
+  <text x="976" y="170" class="tag">PLATFORM OUTPUTS</text>
+  <rect class="node" x="976" y="202" width="148" height="76" rx="8"/><text x="994" y="232" class="h2">Memory</text><text x="994" y="254" class="small">managed + updated</text>
+  <rect class="node" x="976" y="296" width="148" height="76" rx="8"/><text x="994" y="326" class="h2">Events</text><text x="994" y="348" class="small">NATS lifecycle</text>
+  <rect class="node" x="976" y="390" width="148" height="104" rx="8"/><text x="994" y="420" class="h2">Run record</text><text x="994" y="443" class="small">result · timeout</text><text x="994" y="463" class="small">cost · provenance</text><text x="994" y="483" class="small">observability</text>
+  <path class="line" d="M280 240 H350"/><path class="line" d="M280 334 H350"/><path class="line" d="M280 448 H350"/>
+  <path class="line" d="M675 238 H700"/><path class="line" d="M675 328 H700"/><path class="line" d="M675 418 H700"/>
+  <path class="line" d="M865 328 H964"/><path class="line" d="M865 418 C915 418 915 447 964 447"/>
+  <path class="muted" d="M675 260 C770 110 1030 110 1050 200"/><text x="720" y="120" class="small">the controller retains lifecycle and audit authority</text>
+  <text x="60" y="575" class="small">The harness is an adapter-compatible process—not an escape hatch around policy.</text>
+</svg>

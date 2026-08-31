@@ -8,6 +8,11 @@ already uses Codex, Claude Code, Goose, DSH, or another harness, you had to
 choose between that harness and Sympozium's policy, memory, skills, MCP,
 observability, and AgentRun lifecycle.
 
+<figure markdown="span">
+  <img src="../assets/agentharness/overview.svg" alt="AgentHarness overview: an approved external harness runs inside an isolated AgentRun pod while Sympozium retains policy, identity, gated skills and MCP, memory, events, results, and observability." width="1200">
+  <figcaption>AgentHarness changes the agent loop, not the platform boundary around the run.</figcaption>
+</figure>
+
 ## What AgentHarness unlocks
 
 AgentHarness lets an approved external adapter become the primary process in a
@@ -21,6 +26,26 @@ platform still controls:
 
 Normal AgentRuns are not replaced. Harness mode changes only the process that
 drives the agent loop; the surrounding AgentRun machinery remains the same.
+
+<figure markdown="span">
+  <img src="../assets/agentharness/lifecycle.svg" alt="AgentHarness lifecycle: approve a digest-pinned AgentRuntime, select it on an AgentRun, execute it in an isolated pod, then validate and record the result." width="1200">
+  <figcaption>Approval precedes selection; every run still finishes through the normal AgentRun record.</figcaption>
+</figure>
+
+<details>
+<summary>Animated walkthroughs</summary>
+
+<figure markdown="span">
+  <img src="../assets/agentharness/boundary-focus.gif" alt="Animated AgentHarness trust-boundary diagram highlighting operator control, the isolated external harness, and the platform-managed outputs." width="1200">
+  <figcaption>Focus on the three ownership zones: operator approval, adapter execution, and platform-managed outputs.</figcaption>
+</figure>
+
+<figure markdown="span">
+  <img src="../assets/agentharness/lifecycle-focus.gif" alt="Animated four-stage AgentHarness lifecycle, highlighting approval, selection, execution, and recorded result in sequence." width="1200">
+  <figcaption>The lifecycle animation follows the order in which a harness run is made safe and auditable.</figcaption>
+</figure>
+
+</details>
 
 Persistent Agent memory remains platform-managed: Sympozium mounts and updates
 it through its normal result-extraction path. An adapter must not assume the
