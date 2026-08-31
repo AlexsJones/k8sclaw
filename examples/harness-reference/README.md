@@ -7,6 +7,12 @@ It proves that a contract-compatible image can run as UID 1000 with a
 read-only root filesystem, use the writable HOME supplied by Sympozium, read
 `TASK`, check the contract version, and write both required result channels.
 
+In the web UI, this fixture should appear as the `reference-v1` runtime. Set it
+as an Agent's **Agent Harness Runtime**, or select it as a one-run **Harness
+runtime** override. The resulting Run detail records the `AgentRuntime`,
+contract, and immutable image digest. See the [AgentHarness UX guide](../../docs/guides/agentharness-ux.md)
+for the complete operator and run-user flow.
+
 Build it locally:
 
 ```bash
