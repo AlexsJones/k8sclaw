@@ -2,8 +2,8 @@ apiVersion: v2
 name: sympozium
 description: Sympozium — run a fleet of AI agents on Kubernetes
 type: application
-version: 0.10.49
-appVersion: 0.10.49
+version: 0.10.50
+appVersion: 0.10.50
 home: https://github.com/sympozium-ai/sympozium
 sources:
   - https://github.com/sympozium-ai/sympozium
