@@ -250,6 +250,12 @@ func ValidateRunCompatibility(run *sympoziumv1alpha1.AgentRun) error {
 	if run.Spec.CanaryMode {
 		unsupported = append(unsupported, "canaryMode")
 	}
+	if run.Spec.UseContext != nil {
+		unsupported = append(unsupported, "useContext")
+	}
+	if run.Spec.Model.Thinking != "" {
+		unsupported = append(unsupported, "model.thinking")
+	}
 	if run.Spec.AgentSandbox != nil && run.Spec.AgentSandbox.WarmPoolRef != "" {
 		unsupported = append(unsupported, "agentSandbox.warmPoolRef")
 	}

@@ -22,6 +22,12 @@ platform still controls:
 Normal AgentRuns are not replaced. Harness mode changes only the process that
 drives the agent loop; the surrounding AgentRun machinery remains the same.
 
+Persistent Agent memory remains platform-managed: Sympozium mounts and updates
+it through its normal result-extraction path. An adapter must not assume the
+`agent-runner` conversation-memory or thinking controls apply; explicit
+`useContext` and `model.thinking` are rejected for harness runs until the
+adapter contract defines mediated equivalents.
+
 !!! warning "This is an adapter boundary, not arbitrary image execution"
     An operator approves a contract-compatible adapter image, normally by
     immutable digest. Sympozium does not bless or maintain every upstream
