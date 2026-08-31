@@ -87,9 +87,10 @@ func TestCreateInstance_NoHardcodedOTLPEndpoint(t *testing.T) {
 	srv, _ := newInstanceTestServer(t)
 
 	body, _ := json.Marshal(CreateInstanceRequest{
-		Name:     "test-adhoc",
-		Provider: "lm-studio",
-		Model:    "qwen/qwen3.5-35b-a3b",
+		Name:       "test-adhoc",
+		Provider:   "lm-studio",
+		Model:      "qwen/qwen3.5-35b-a3b",
+		RuntimeRef: "pi-v0-84-4",
 	})
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/agents?namespace=default", bytes.NewReader(body))
@@ -118,6 +119,9 @@ func TestCreateInstance_NoHardcodedOTLPEndpoint(t *testing.T) {
 	}
 	if inst.Spec.Observability.OTLPProtocol != "" {
 		t.Errorf("expected empty OTLPProtocol (should not be hardcoded), got %q", inst.Spec.Observability.OTLPProtocol)
+	}
+	if inst.Spec.RuntimeRef != "pi-v0-84-4" {
+		t.Errorf("RuntimeRef = %q, want Agent-level harness selection preserved", inst.Spec.RuntimeRef)
 	}
 }
 
