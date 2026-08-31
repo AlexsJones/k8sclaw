@@ -36,6 +36,16 @@
 
 ---
 
+> [!IMPORTANT]
+> **AgentHarness support is landing now.** Run an administrator-approved external
+> agent adapter inside a normal Sympozium AgentRun while keeping Kubernetes
+> policy, per-run identity, skills, memory, MCP, observability, and audit under
+> platform control. Start with the [AgentHarness guide](https://deploy.sympozium.ai/docs/guides/agentharness/)
+> and the digest-pinned [reference adapter](examples/harness-reference/). This
+> is an adapter boundary—not permission to run arbitrary upstream images.
+
+---
+
 ### Quick Install (macOS / Linux)
 
 **Homebrew:**
