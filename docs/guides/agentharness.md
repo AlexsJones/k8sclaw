@@ -185,7 +185,9 @@ always distinguish:
 
 The adapter receives the versioned contract and must emit the structured
 Sympozium result protocol. The full adapter contract is documented in
-[`Writing a Harness Adapter`](../modes/harness-adapters.md).
+[`Writing a Harness Adapter`](../modes/harness-adapters.md). The maintained
+adapter program, conformance expectations, and experimental Pi/Hermes plans
+live in [sympozium-ai/harness-adapters](https://github.com/sympozium-ai/harness-adapters).
 
 ## What to inspect after a run
 
