@@ -4,6 +4,7 @@ import {
   useAgent,
   useCapabilities,
   usePatchAgent,
+  useRuntimes,
   useRuns,
 } from "@/hooks/use-api";
 import { StatusBadge } from "@/components/status-badge";
@@ -29,6 +30,13 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import {
   Dialog,
   DialogContent,
@@ -75,6 +83,7 @@ export function AgentDetailPage() {
   const connectGithub = searchParams.get("connect") === "github";
   const { data: inst, isLoading } = useAgent(name || "");
   const { data: capabilities } = useCapabilities();
+  const { data: runtimes } = useRuntimes();
   const { data: allRuns } = useRuns();
   const { isUnseen } = useRunsSeen();
   const instanceRuns = (allRuns || [])
@@ -208,6 +217,8 @@ export function AgentDetailPage() {
             />
 
             <ResponseGateCard inst={inst} />
+
+            <AgentRuntimeCard inst={inst} runtimes={runtimes || []} />
           </div>
         </TabsContent>
 
@@ -419,6 +430,44 @@ export function AgentDetailPage() {
         </TabsContent>
       </Tabs>
     </div>
+  );
+}
+
+function AgentRuntimeCard({ inst, runtimes }: { inst: Agent; runtimes: import("@/lib/api").AgentRuntime[] }) {
+  const patchAgent = usePatchAgent();
+  const selected = inst.spec.runtimeRef || "none";
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-base">Agent Harness Runtime</CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <p className="text-sm text-muted-foreground">
+          Administrator-approved runtime inherited by channels, schedules, and ordinary AgentRuns. A New Run choice can override it once.
+        </p>
+        <Select
+          value={selected}
+          onValueChange={(value) => patchAgent.mutate({
+            name: inst.metadata.name,
+            data: { runtimeRef: value === "none" ? "" : value },
+          })}
+          disabled={patchAgent.isPending}
+        >
+          <SelectTrigger>
+            <SelectValue placeholder="Built-in agent-runner" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="none">Built-in agent-runner</SelectItem>
+            {runtimes.map((runtime) => (
+              <SelectItem key={runtime.metadata.name} value={runtime.metadata.name}>
+                {runtime.metadata.name}{runtime.spec.supportOwner ? ` — ${runtime.spec.supportOwner}` : ""}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </CardContent>
+    </Card>
   );
 }
 
