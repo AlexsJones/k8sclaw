@@ -1,0 +1,79 @@
+# End-to-end conformance smoke for the deterministic v1alpha1 reference adapter.
+# It makes no model call. The placeholder credential exists because AgentRun's
+# model shape is required by the CRD and exercises the normal credential path.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: sympozium-harness-reference
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: reference-model-key
+  namespace: sympozium-harness-reference
+type: Opaque
+stringData:
+  OPENAI_API_KEY: reference-adapter-does-not-call-a-model
+---
+apiVersion: sympozium.ai/v1alpha1
+kind: SympoziumPolicy
+metadata:
+  name: reference-harness
+  namespace: sympozium-harness-reference
+spec:
+  harnessPolicy:
+    enabled: true
+  imagePolicy:
+    allowedRegistries:
+      - ghcr.io/sympozium-ai/sympozium/harness-reference@sha256:84a025be02de2be67f8d6c7430664819c59c2d0c59aae5dc9fadcaf98c7a598d
+---
+apiVersion: sympozium.ai/v1alpha1
+kind: AgentRuntime
+metadata:
+  name: reference-v1
+  namespace: sympozium-harness-reference
+spec:
+  image: ghcr.io/sympozium-ai/sympozium/harness-reference@sha256:84a025be02de2be67f8d6c7430664819c59c2d0c59aae5dc9fadcaf98c7a598d
+  contractVersion: v1alpha1
+  supportOwner: sympozium-maintainers
+  conformance:
+    status: conformant
+    owner: sympozium-maintainers
+    reference: https://github.com/sympozium-ai/sympozium/tree/main/examples/harness-reference
+---
+apiVersion: sympozium.ai/v1alpha1
+kind: Agent
+metadata:
+  name: reference-harness
+  namespace: sympozium-harness-reference
+spec:
+  policyRef: reference-harness
+  authRefs:
+    - provider: custom
+      secret: reference-model-key
+  agents:
+    default:
+      # Required by AgentRun; unused by this deterministic adapter.
+      model: reference-unused
+      baseURL: http://example.invalid/v1
+---
+apiVersion: sympozium.ai/v1alpha1
+kind: AgentRun
+metadata:
+  name: reference-harness-smoke
+  namespace: sympozium-harness-reference
+spec:
+  agentRef: reference-harness
+  agentId: primary
+  sessionKey: reference-harness-smoke
+  task:
+    mode: harness
+    parameters:
+      runtime: reference-v1
+      prompt: prove the Sympozium harness contract
+  model:
+    provider: custom
+    model: reference-unused
+    baseURL: http://example.invalid/v1
+    authSecretRef: reference-model-key
+  timeout: 2m

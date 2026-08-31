@@ -16,3 +16,14 @@ docker build -f examples/harness-reference/Dockerfile -t sympozium-reference-ada
 For a cluster test, publish it to an operator-approved registry and use its
 digest in an `AgentRuntime`. The policy must explicitly allow that exact image
 prefix and enable `harnessPolicy`.
+
+The published Sympozium fixture already has a digest-pinned, complete smoke
+manifest. Run it against a cluster with Sympozium installed:
+
+```bash
+kubectl apply -f examples/harness-reference/manifests.yaml
+kubectl wait --for=jsonpath='{.status.phase}'=Succeeded \
+  agentrun/reference-harness-smoke -n sympozium-harness-reference --timeout=2m
+kubectl get agentrun/reference-harness-smoke -n sympozium-harness-reference \
+  -o jsonpath='{.status.result}{"\n"}'
+```
