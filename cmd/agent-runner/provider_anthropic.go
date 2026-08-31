@@ -53,16 +53,21 @@ func newAnthropicProvider(apiKey, baseURL, model, systemPrompt, task string, too
 		anthropicTools = append(anthropicTools, tool)
 	}
 
+	var seed []anthropic.MessageParam
+	if task != "" {
+		seed = []anthropic.MessageParam{
+			anthropic.NewUserMessage(anthropic.NewTextBlock(task)),
+		}
+	}
+
 	return &anthropicProvider{
 		client:      anthropic.NewClient(opts...),
 		model:       model,
 		system:      systemPrompt,
 		initialTask: task,
-		messages: []anthropic.MessageParam{
-			anthropic.NewUserMessage(anthropic.NewTextBlock(task)),
-		},
-		tools:      anthropicTools,
-		toolsBytes: jsonBytes(anthropicTools),
+		messages:    seed,
+		tools:       anthropicTools,
+		toolsBytes:  jsonBytes(anthropicTools),
 	}
 }
 
@@ -197,8 +202,12 @@ func (p *anthropicProvider) ReplaceToolResults(replacements map[string]string) {
 // ResetContext rebuilds the message slice to the seed state so
 // the next Chat or Prompt call behaves as if the conversation just began.
 func (p *anthropicProvider) ResetContext() {
-	p.messages = []anthropic.MessageParam{
-		anthropic.NewUserMessage(anthropic.NewTextBlock(p.initialTask)),
+	if p.initialTask != "" {
+		p.messages = []anthropic.MessageParam{
+			anthropic.NewUserMessage(anthropic.NewTextBlock(p.initialTask)),
+		}
+	} else {
+		p.messages = nil
 	}
 }
 
