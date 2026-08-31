@@ -553,6 +553,16 @@ func TestHarnessImageDigest(t *testing.T) {
 	}
 }
 
+func TestHarnessRuntimeRef(t *testing.T) {
+	task := &sympoziumv1alpha1.TaskSpec{Mode: Harness, Parameters: map[string]string{harnessParamRuntime: " reference-v1 "}}
+	if got := HarnessRuntimeRef(task); got != "reference-v1" {
+		t.Errorf("HarnessRuntimeRef = %q, want reference-v1", got)
+	}
+	if got := HarnessRuntimeRef(sympoziumv1alpha1.NewStringTask("normal task")); got != "" {
+		t.Errorf("HarnessRuntimeRef(string task) = %q, want empty", got)
+	}
+}
+
 // readyRuntime returns an AgentRuntime whose Ready condition is true, so
 // NormalizeHarnessTask accepts it.
 func readyRuntime(name string, capabilities ...string) *sympoziumv1alpha1.AgentRuntime {

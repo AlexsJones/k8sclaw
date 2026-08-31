@@ -401,6 +401,23 @@ type AgentRunStatus struct {
 	// +optional
 	HarnessImageDigest string `json:"harnessImageDigest,omitempty"`
 
+	// HarnessRuntimeRef records the AgentRuntime that was resolved for this
+	// harness run. It remains populated when an Agent's runtimeRef converted a
+	// normal string task into harness mode, so audit and UI do not have to infer
+	// the selected runtime from the current Agent configuration.
+	// +optional
+	HarnessRuntimeRef string `json:"harnessRuntimeRef,omitempty"`
+
+	// HarnessContractVersion records the harness contract supplied to the
+	// adapter that executed this run.
+	// +optional
+	HarnessContractVersion string `json:"harnessContractVersion,omitempty"`
+
+	// HarnessRuntimeSource records whether the resolved runtime came from the
+	// Agent default ("agent-default") or the AgentRun ("run").
+	// +optional
+	HarnessRuntimeSource string `json:"harnessRuntimeSource,omitempty"`
+
 	// PostRunJobName is the name of the Job created for postRun lifecycle hooks.
 	// +optional
 	PostRunJobName string `json:"postRunJobName,omitempty"`

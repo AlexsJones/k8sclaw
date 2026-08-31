@@ -65,8 +65,9 @@ export function RunDetailPage() {
     : "—";
   const est = effectiveCost(run);
   const taskMode = typeof run.spec.task === "object" ? run.spec.task : undefined;
-  const runtimeName = taskMode?.mode === "harness" ? taskMode.parameters?.runtime : undefined;
+  const runtimeName = (taskMode?.mode === "harness" ? taskMode.parameters?.runtime : undefined) || run.status?.harnessRuntimeRef;
   const runtime = runtimeName ? runtimes.data?.find((item) => item.metadata.name === runtimeName) : undefined;
+  const isHarnessRun = Boolean(runtimeName || run.status?.harnessImageDigest);
 
   return (
     <div className="space-y-6">
@@ -283,7 +284,7 @@ export function RunDetailPage() {
         </div>
       )}
 
-      {runtimeName && (
+      {isHarnessRun && (
         <Card>
           <CardHeader className="pb-3">
             <CardTitle className="flex items-center gap-2 text-base">
@@ -292,9 +293,10 @@ export function RunDetailPage() {
             </CardTitle>
           </CardHeader>
           <CardContent className="grid gap-3 text-sm sm:grid-cols-2">
-            <div><span className="text-muted-foreground">Runtime</span><p className="font-mono">{runtimeName}</p></div>
+            <div><span className="text-muted-foreground">Runtime</span><p className="font-mono">{runtimeName || "inline image"}</p></div>
+            <div><span className="text-muted-foreground">Selection</span><p>{run.status?.harnessRuntimeSource === "agent-default" ? "Agent default" : "Run override"}</p></div>
             <div><span className="text-muted-foreground">Image digest</span><p className="font-mono break-all">{run.status?.harnessImageDigest || runtime?.status?.resolvedImageDigest || "pending"}</p></div>
-            <div><span className="text-muted-foreground">Contract</span><p>{runtime?.spec.contractVersion || "not declared"}</p></div>
+            <div><span className="text-muted-foreground">Contract</span><p>{run.status?.harnessContractVersion || runtime?.spec.contractVersion || "not declared"}</p></div>
             <div><span className="text-muted-foreground">Support owner</span><p>{runtime?.spec.supportOwner || "not declared"}</p></div>
             <div className="sm:col-span-2"><span className="text-muted-foreground">Capability provenance</span><p>{runtime?.spec.capabilities?.length ? runtime.spec.capabilities.join(", ") + " (runtime claim; platform policy still enforced)" : "No runtime capabilities claimed"}</p></div>
           </CardContent>
