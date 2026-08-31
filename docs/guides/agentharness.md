@@ -94,6 +94,23 @@ An `AgentRuntime` is administrator-owned. Its digest, contract version,
 capabilities, support owner, conformance state, model mapping, and resource
 settings describe what the platform is willing to run.
 
+### 2a. Verify it in the Harnesses registry
+
+After applying the runtime and policy, wait for the runtime to become ready:
+
+```bash
+kubectl -n default get agentruntime codex-v1 \
+  -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}{"\\n"}'
+```
+
+It must report `True` before it can be bound to a run. In the web UI, open
+**Agents → Harnesses**. This is the administrator-facing inventory of approved
+adapters: confirm the runtime is ready, inspect the resolved immutable digest,
+contract, support owner, and conformance status, then select it from the
+Agent's **Harness** tab. The registry is deliberately read-only; approval is
+made by applying or updating the `AgentRuntime` and `SympoziumPolicy`, not by
+pasting an image into the UI.
+
 ### 3. Select it on an Agent
 
 ```yaml
