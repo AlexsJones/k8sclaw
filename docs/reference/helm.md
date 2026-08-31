@@ -35,7 +35,11 @@ See [`charts/sympozium/values.yaml`](https://github.com/sympozium-ai/sympozium/b
 
 ### Celln (hermetic execution)
 
-Off by default (`celln.enabled: false`) — opt in with `--set celln.enabled=true`, or via the CLI's `sympozium install --enable-hermetic-workloads`. It deploys a **privileged**, `hostPID` DaemonSet with a read-write mount of the host root filesystem to set up KVM host-side, so treat it as a deliberate opt-in rather than a routine flag. See [Celln Backend](../concepts/celln-backend.md) before enabling it.
+Enabled by default (`celln.enabled: true`) so a standard installation includes
+the Celln router and controller configuration. The privileged installer and
+router schedule only on nodes explicitly labelled `celln.dev/kvm=true`; label
+KVM-capable hosts deliberately before they receive host setup. Disable all
+Celln resources with `--set celln.enabled=false`. See [Celln Backend](../concepts/celln-backend.md).
 
 ## Observability
 

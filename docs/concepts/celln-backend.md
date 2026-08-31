@@ -2,7 +2,14 @@
 
 Sympozium optionally integrates with [Celln](https://github.com/sympozium-ai/celln) to run a single bounded, high-risk, or sensitive computation in a hardware-isolated microVM instead of a Kubernetes Job. It is selected per run with `spec.backend: "celln"` on an `AgentRun`.
 
-Celln is **opt-in**: `celln.enabled=false` by default in the Helm chart, because the installer DaemonSet it deploys runs privileged, with `hostPID`, and a read-write mount of the host root filesystem — necessary to set up KVM on the host, but a materially different trust boundary than the rest of Sympozium's pods. Enable it explicitly with `sympozium install --enable-hermetic-workloads` (or `helm upgrade --set celln.enabled=true`). This page covers what that turns on, and the one requirement that's easy to miss: Celln needs its own AI provider access on the host, separate from whatever provider your `Agent`/`AgentRun` is configured with.
+Celln is enabled by default: `celln.enabled=true` installs the router and
+controller configuration with Sympozium. Its installer DaemonSet runs
+privileged, with `hostPID`, and a read-write mount of the host root filesystem
+to set up KVM; it and the router schedule only on nodes explicitly labelled
+`celln.dev/kvm=true`. That label is the deliberate host-setup boundary. Disable
+Celln entirely with `helm upgrade --set celln.enabled=false`. This page covers
+the one requirement that's easy to miss: Celln needs its own AI provider access
+on the host, separate from whatever provider your `Agent`/`AgentRun` is configured with.
 
 The web UI's Runs page shows a live banner if any listed run uses `backend: celln` while the router is unreachable, and the New Run dialog checks live reachability when you select the Celln backend — both backed by `GET /api/v1/capabilities`.
 

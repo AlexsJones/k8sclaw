@@ -393,7 +393,7 @@ GATEWAY_API_CRDS_URL ?= https://github.com/kubernetes-sigs/gateway-api/releases/
 # runs privileged with hostPID and a read-write host-root mount to perform
 # KVM host setup. `make install ENABLE_HERMETIC_WORKLOADS=true` opts in;
 # the plain CLI equivalent is `sympozium install --enable-hermetic-workloads`.
-ENABLE_HERMETIC_WORKLOADS ?= false
+ENABLE_HERMETIC_WORKLOADS ?= true
 
 install: manifests ## Install Sympozium via Helm chart (CRDs, control plane, built-ins)
 	kubectl apply --server-side --force-conflicts -f charts/sympozium/crds/

@@ -413,15 +413,12 @@ agentSandbox:
 # Requires: Celln router deployed (see celln repo integrations/kubernetes/)
 # and celln host dispatcher installed on each KVM node (scripts/setup-host.sh).
 celln:
-  # -- Enable the Celln backend. Opt-in and OFF by default: the installer
-  # DaemonSet runs privileged with hostPID and a read-write mount of the
-  # host root filesystem to perform KVM host setup, so turning this on is a
-  # deliberate choice, not a side effect of a routine install. When true,
-  # deploys the installer DaemonSet, router DaemonSet, and configures the
-  # controller for celln dispatch. The router forwards to the host
-  # dispatcher on localhost — no IP needed.
-  # `sympozium install --enable-hermetic-workloads` sets this for you.
-  enabled: false
+  # -- Enable the Celln backend. Enabled by default so every standard install
+  # has the router and controller configuration needed for Celln-backed runs.
+  # The privileged installer and router still schedule only on nodes explicitly
+  # labelled celln.dev/kvm=true; label KVM-capable hosts deliberately before
+  # they receive host setup. Set false to omit all Celln resources.
+  enabled: true
   # -- URL of the celln-router Service. The controller POSTs here.
   routerUrl: "http://celln-router.celln-system.svc.cluster.local:8787"
   # -- API key for your chosen LLM provider. Set ONE of these.
