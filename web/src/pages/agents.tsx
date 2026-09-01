@@ -26,7 +26,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Plus, Trash2, ExternalLink, ShieldAlert, MessageSquare } from "lucide-react";
+import { Trash2, ExternalLink, ShieldAlert, MessageSquare } from "lucide-react";
 import { formatAge } from "@/lib/utils";
 
 export function AgentsPage() {
@@ -118,20 +118,11 @@ export function AgentsPage() {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold">Agents</h1>
-          <p className="text-sm text-muted-foreground">
-            Manage agents — each represents an agent identity
-          </p>
-        </div>
-        <Button
-          size="sm"
-          className="bg-primary hover:bg-primary/90 text-primary-foreground border-0"
-          onClick={() => setWizardOpen(true)}
-        >
-          <Plus className="mr-2 h-4 w-4" /> Create Agent
-        </Button>
+      <div>
+        <h1 className="text-2xl font-bold">Agents</h1>
+        <p className="text-sm text-muted-foreground">
+          Manage agents — each represents an agent identity
+        </p>
       </div>
 
       <Input
@@ -160,14 +151,7 @@ export function AgentsPage() {
               >
                 Enable an ensemble
               </Link>{" "}
-              to create agents automatically, or{" "}
-              <button
-                onClick={() => setWizardOpen(true)}
-                className="text-blue-400 hover:text-blue-300"
-              >
-                create one manually
-              </button>
-              .
+              to create agents automatically, or use Create in the header.
             </p>
           )}
         </div>

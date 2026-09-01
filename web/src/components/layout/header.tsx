@@ -16,7 +16,7 @@ import { formatAge } from "@/lib/utils";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { useNavigate } from "react-router-dom";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Bot, Play, Plus, Shield } from "lucide-react";
+import { Bot, Plus, Shield } from "lucide-react";
 
 export function Header() {
   const { logout } = useAuth();
@@ -115,8 +115,8 @@ export function Header() {
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>
         <DialogContent className="sm:max-w-lg">
           <DialogHeader>
-            <DialogTitle>{choosingHarness ? "Create Agent with a Harness" : "Create"}</DialogTitle>
-            <DialogDescription>{choosingHarness ? "Choose the persistent execution runtime to bind to the new Agent." : <>Choose the resource you want to create in namespace <span className="font-mono">{ns}</span>.</>}</DialogDescription>
+            <DialogTitle>{choosingHarness ? "Choose a Harness" : "Create"}</DialogTitle>
+            <DialogDescription>{choosingHarness ? "Choose an approved runtime. Session-capable harnesses start a persistent session; one-shot harnesses configure a new Agent." : <>Choose what you want to create in namespace <span className="font-mono">{ns}</span>.</>}</DialogDescription>
           </DialogHeader>
           {choosingHarness ? (
             <div className="space-y-3">
@@ -128,32 +128,36 @@ export function Header() {
                 </div>
               ) : (
                 <div className="space-y-2">
-                  {(runtimes || []).map((runtime) => (
-                    <button key={runtime.metadata.name} className="w-full rounded-lg border border-border p-3 text-left transition-colors hover:border-amber-500/60 hover:bg-amber-500/5" onClick={() => { setCreateOpen(false); setChoosingHarness(false); navigate(`/agents?create=1&runtime=${encodeURIComponent(runtime.metadata.name)}&policy=harness-examples`); }}>
+                  {(runtimes || []).map((runtime) => {
+                    const persistent = runtime.spec.contractVersion === "v1alpha2" && runtime.spec.session?.protocol === "openai-chat";
+                    return <button key={runtime.metadata.name} className="w-full rounded-lg border border-border p-3 text-left transition-colors hover:border-amber-500/60 hover:bg-amber-500/5" onClick={() => {
+                      setCreateOpen(false);
+                      setChoosingHarness(false);
+                      navigate(persistent
+                        ? `/harnesses?start=${encodeURIComponent(runtime.metadata.name)}`
+                        : `/agents?create=1&runtime=${encodeURIComponent(runtime.metadata.name)}&policy=harness-examples`);
+                    }}>
                       <div className="flex items-center gap-2"><Shield className="h-4 w-4 text-amber-500" /><span className="font-medium">{runtime.metadata.name}</span></div>
-                      <p className="mt-1 text-xs text-muted-foreground">Creates an Agent persistently bound to this harness. Provider, model, and credentials are configured on the Agent.</p>
-                    </button>
-                  ))}
+                      <p className="mt-1 text-xs text-muted-foreground">{persistent ? "Start a persistent session for an existing Agent." : "Create an Agent that uses this harness for one-shot runs."}</p>
+                    </button>;
+                  })}
                 </div>
               )}
               <Button variant="ghost" size="sm" onClick={() => setChoosingHarness(false)}>Back</Button>
             </div>
           ) : <>
           <div className="grid gap-3 sm:grid-cols-2">
-            <button className="rounded-lg border border-border p-4 text-left transition-colors hover:border-primary/60 hover:bg-primary/5" onClick={() => { setCreateOpen(false); navigate("/runs?create=1"); }}>
-              <Play className="mb-3 h-5 w-5 text-primary" />
-              <p className="font-medium">AgentRun</p>
-              <p className="mt-1 text-xs text-muted-foreground">Run an existing Agent once. It inherits that Agent’s configured harness by default.</p>
+            <button className="rounded-lg border border-border p-4 text-left transition-colors hover:border-primary/60 hover:bg-primary/5" onClick={() => { setCreateOpen(false); navigate("/agents?create=1"); }}>
+              <Bot className="mb-3 h-5 w-5 text-primary" />
+              <p className="font-medium">Agent</p>
+              <p className="mt-1 text-xs text-muted-foreground">Create an Agent using Sympozium’s built-in runner.</p>
             </button>
             <button className="rounded-lg border border-border p-4 text-left transition-colors hover:border-primary/60 hover:bg-primary/5" onClick={() => setChoosingHarness(true)}>
               <Shield className="mb-3 h-5 w-5 text-amber-500" />
-              <p className="font-medium">Agent Harness</p>
-              <p className="mt-1 text-xs text-muted-foreground">Install or choose a trusted external execution adapter, then create an Agent bound to it.</p>
+              <p className="font-medium">Harness</p>
+              <p className="mt-1 text-xs text-muted-foreground">Choose a trusted external runtime for one-shot or persistent execution.</p>
             </button>
           </div>
-          <button className="text-left text-xs text-muted-foreground hover:text-foreground" onClick={() => { setCreateOpen(false); navigate("/agents"); }}>
-            <Bot className="mr-1 inline h-3 w-3" /> Or create a standard Agent with the built-in runner.
-          </button>
           </>}
         </DialogContent>
       </Dialog>
