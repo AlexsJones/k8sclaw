@@ -26,7 +26,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Plus, Trash2, ExternalLink, ShieldAlert } from "lucide-react";
+import { Plus, Trash2, ExternalLink, ShieldAlert, MessageSquare } from "lucide-react";
 import { formatAge } from "@/lib/utils";
 
 export function AgentsPage() {
@@ -257,7 +257,12 @@ export function AgentsPage() {
                 <TableCell className="text-sm text-muted-foreground">
                   {formatAge(inst.metadata.creationTimestamp)}
                 </TableCell>
-                <TableCell>
+                <TableCell><div className="flex items-center gap-1">
+                  {(() => {
+                    const runtime = runtimes?.find((candidate) => candidate.metadata.name === inst.spec.runtimeRef);
+                    const persistent = runtime?.spec.contractVersion === "v1alpha2" && runtime.spec.session?.protocol === "openai-chat";
+                    return persistent ? <Button asChild variant="ghost" size="icon" title="Open persistent chat"><Link to={`/agents/${inst.metadata.name}?tab=chat`}><MessageSquare className="h-4 w-4" /></Link></Button> : null;
+                  })()}
                   <Button
                     variant="ghost"
                     size="icon"
@@ -267,7 +272,7 @@ export function AgentsPage() {
                   >
                     <Trash2 className="h-4 w-4 text-destructive" />
                   </Button>
-                </TableCell>
+                </div></TableCell>
               </TableRow>
             ))}
           </TableBody>

@@ -34,6 +34,13 @@ type CreateHarnessSessionRequest struct {
 	IdleTimeout string `json:"idleTimeout,omitempty"`
 }
 
+// PatchHarnessSessionRequest intentionally exposes only lifecycle control. The
+// Agent and runtime binding are immutable for a session: changing either would
+// make the recorded adapter provenance misleading.
+type PatchHarnessSessionRequest struct {
+	DesiredState string `json:"desiredState"`
+}
+
 func requestNamespace(r *http.Request) string {
 	if ns := r.URL.Query().Get("namespace"); ns != "" {
 		return ns
@@ -78,6 +85,34 @@ func (s *Server) createHarnessSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusCreated)
+	writeJSON(w, session)
+}
+
+func (s *Server) patchHarnessSession(w http.ResponseWriter, r *http.Request) {
+	var request PatchHarnessSessionRequest
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4*1024)).Decode(&request); err != nil {
+		http.Error(w, "invalid session patch: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if request.DesiredState != "running" && request.DesiredState != "stopped" {
+		http.Error(w, "desiredState must be running or stopped", http.StatusBadRequest)
+		return
+	}
+	session := &sympoziumv1alpha1.HarnessSession{}
+	key := types.NamespacedName{Name: r.PathValue("name"), Namespace: requestNamespace(r)}
+	if err := s.client.Get(r.Context(), key, session); err != nil {
+		if k8serrors.IsNotFound(err) {
+			http.Error(w, "HarnessSession not found", http.StatusNotFound)
+		} else {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		}
+		return
+	}
+	session.Spec.DesiredState = request.DesiredState
+	if err := s.client.Update(r.Context(), session); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 	writeJSON(w, session)
 }
 
