@@ -175,8 +175,9 @@ func TestPolicyEnforcer_ResolvesRuntimeReference(t *testing.T) {
 	runtimeObj := &sympoziumv1alpha1.AgentRuntime{
 		ObjectMeta: metav1.ObjectMeta{Name: "codex-v1", Namespace: "default"},
 		Spec: sympoziumv1alpha1.AgentRuntimeSpec{
-			Image:        "ghcr.io/acme/codex-adapter@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-			Capabilities: []string{taskmodes.CapabilityPersona},
+			Image:           "ghcr.io/acme/codex-adapter@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			ContractVersion: taskmodes.HarnessContractVersion,
+			Capabilities:    []string{taskmodes.CapabilityPersona},
 		},
 		Status: sympoziumv1alpha1.AgentRuntimeStatus{
 			Conditions: []metav1.Condition{{Type: sympoziumv1alpha1.AgentRuntimeReadyCondition, Status: metav1.ConditionTrue, Reason: "Validated"}},
@@ -234,7 +235,8 @@ func TestPolicyEnforcer_InheritsAgentRuntimeRef(t *testing.T) {
 	runtimeObj := &sympoziumv1alpha1.AgentRuntime{
 		ObjectMeta: metav1.ObjectMeta{Name: "codex-v1", Namespace: "default"},
 		Spec: sympoziumv1alpha1.AgentRuntimeSpec{
-			Image: "ghcr.io/acme/codex-adapter@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			Image:           "ghcr.io/acme/codex-adapter@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			ContractVersion: taskmodes.HarnessContractVersion,
 		},
 		Status: sympoziumv1alpha1.AgentRuntimeStatus{
 			Conditions: []metav1.Condition{{Type: sympoziumv1alpha1.AgentRuntimeReadyCondition, Status: metav1.ConditionTrue, Reason: "Validated"}},

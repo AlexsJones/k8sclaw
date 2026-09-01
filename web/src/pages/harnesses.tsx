@@ -1,10 +1,10 @@
-import { Link } from "react-router-dom";
-import { useState } from "react";
+import { Link, useSearchParams } from "react-router-dom";
+import { useEffect, useRef, useState } from "react";
 import { useAgents, useDeleteHarnessSession, useHarnessSessions, useRuntimes, useInstallDefaultRuntimes } from "@/hooks/use-api";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { ShieldCheck, ShieldX, ExternalLink, Download, Plus, MessageSquare, Square } from "lucide-react";
+import { ShieldCheck, ShieldX, ExternalLink, Download, MessageSquare, Square } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { HarnessSessionChatDialog, StartHarnessSessionDialog } from "@/components/harness-session-dialog";
 
@@ -22,6 +22,17 @@ export function HarnessesPage() {
   const stopSession = useDeleteHarnessSession();
   const [startingRuntime, setStartingRuntime] = useState<import("@/lib/api").AgentRuntime | null>(null);
   const [chattingSession, setChattingSession] = useState<import("@/lib/api").HarnessSession | null>(null);
+  const [searchParams] = useSearchParams();
+  const autoStartConsumed = useRef(false);
+
+  useEffect(() => {
+    const runtimeName = searchParams.get("start");
+    if (!runtimeName || autoStartConsumed.current || !runtimes) return;
+    const runtime = runtimes.find((candidate) => candidate.metadata.name === runtimeName);
+    if (!runtime) return;
+    autoStartConsumed.current = true;
+    setStartingRuntime(runtime);
+  }, [runtimes, searchParams]);
 
   if (isLoading) {
     return <Skeleton className="h-64 w-full" />;
@@ -97,9 +108,6 @@ export function HarnessesPage() {
                   <div className="flex gap-4 text-xs">
                     <Link to={`/harnesses/${runtime.metadata.name}`} className="inline-flex items-center gap-1 text-blue-400 hover:text-blue-300">
                       Inspect harness <ExternalLink className="h-3 w-3" />
-                    </Link>
-                    <Link to={`/agents?runtime=${encodeURIComponent(runtime.metadata.name)}&policy=harness-examples`} className="inline-flex items-center gap-1 text-blue-400 hover:text-blue-300">
-                      <Plus className="h-3 w-3" /> Create Agent using this harness
                     </Link>
                     {runtime.spec.contractVersion === "v1alpha2" && runtime.spec.session?.protocol === "openai-chat" && <Button variant="link" className="h-auto p-0 text-xs text-blue-400 hover:text-blue-300" onClick={() => setStartingRuntime(runtime)}><MessageSquare className="mr-1 h-3 w-3" /> Start interactive session</Button>}
                   </div>

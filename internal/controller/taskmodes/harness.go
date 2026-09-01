@@ -385,6 +385,16 @@ func NormalizeHarnessTask(namespace string, task *sympoziumv1alpha1.TaskSpec, ge
 	if !meta.IsStatusConditionTrue(rt.Status.Conditions, sympoziumv1alpha1.AgentRuntimeReadyCondition) {
 		return nil, fmt.Errorf("harness: runtime %q is not Ready; fix the AgentRuntime or choose another", runtimeName)
 	}
+	// AgentRuns implement the v1alpha1 one-shot contract. A persistent
+	// v1alpha2 runtime is started by HarnessSession as a Deployment and Service;
+	// treating it as an AgentRun would silently select the image's one-shot
+	// entrypoint and discard the session lifecycle the operator selected.
+	if rt.Spec.Session != nil {
+		return nil, fmt.Errorf("harness: runtime %q is session-only (%s); start it as a HarnessSession instead of an AgentRun", runtimeName, rt.Spec.ContractVersion)
+	}
+	if rt.Spec.ContractVersion != HarnessContractVersion {
+		return nil, fmt.Errorf("harness: runtime %q uses contract %q, but AgentRuns require %q", runtimeName, rt.Spec.ContractVersion, HarnessContractVersion)
+	}
 
 	normalized := *task
 	params := make(map[string]string, len(task.Parameters)+2)
