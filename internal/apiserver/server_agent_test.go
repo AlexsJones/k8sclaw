@@ -130,7 +130,13 @@ func TestCreateInstance_NoHardcodedOTLPEndpoint(t *testing.T) {
 	if err := srv.client.Get(req.Context(), types.NamespacedName{Name: inst.Spec.AuthRefs[0].Secret, Namespace: "default"}, &secret); err != nil {
 		t.Fatalf("get harness compatibility secret: %v", err)
 	}
-	if got := string(secret.Data["OPENAI_API_KEY"]); got != "local-no-key" {
+	got := string(secret.Data["OPENAI_API_KEY"])
+	if got == "" {
+		// The controller-runtime fake client does not perform the API server's
+		// normal stringData-to-data conversion when a Secret is persisted.
+		got = secret.StringData["OPENAI_API_KEY"]
+	}
+	if got != "local-no-key" {
 		t.Errorf("OPENAI_API_KEY = %q, want compatibility value", got)
 	}
 	if got := secret.Labels["sympozium.ai/credential-kind"]; got != "harness-local-compatibility" {

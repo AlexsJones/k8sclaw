@@ -12,6 +12,7 @@ import (
 	networkingv1 "k8s.io/api/networking/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -40,6 +41,7 @@ const harnessSessionSystemNamespace = "sympozium-system"
 // +kubebuilder:rbac:groups=sympozium.ai,resources=agents;agentruntimes,verbs=get;list;watch
 // +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups="",resources=persistentvolumeclaims,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=networking.k8s.io,resources=networkpolicies,verbs=get;list;watch;create;update;patch;delete
 
 func (r *HarnessSessionReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -65,6 +67,9 @@ func (r *HarnessSessionReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		return r.setStatus(ctx, &session, "Failed", "Invalid", reason, "", "", "")
 	}
 
+	if err := r.reconcileStateClaim(ctx, &session, agent); err != nil {
+		return ctrl.Result{}, err
+	}
 	if err := r.reconcileDeployment(ctx, &session, agent, runtime); err != nil {
 		return ctrl.Result{}, err
 	}
@@ -161,6 +166,30 @@ func sessionWorkloadName(session *sympoziumv1alpha1.HarnessSession) string {
 	return session.Name
 }
 
+// reconcileStateClaim gives a HarnessSession durable adapter state. The Pi
+// v1alpha2 adapter stores its named sessions under /tmp/pi-sessions and its
+// generated provider config beneath HOME, so the claim is mounted over /tmp.
+// Stopping a session deliberately removes only compute/network resources; the
+// claim remains owned by the HarnessSession and is deleted only with the CR.
+func (r *HarnessSessionReconciler) reconcileStateClaim(ctx context.Context, session *sympoziumv1alpha1.HarnessSession, agent *sympoziumv1alpha1.Agent) error {
+	claim := &corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{Name: sessionWorkloadName(session), Namespace: session.Namespace}}
+	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, claim, func() error {
+		if err := controllerutil.SetControllerReference(session, claim, r.Scheme); err != nil {
+			return err
+		}
+		claim.Labels = map[string]string{
+			"app.kubernetes.io/name":       "harness-session",
+			"app.kubernetes.io/instance":   session.Name,
+			"app.kubernetes.io/managed-by": "sympozium",
+			"sympozium.ai/agent":           agent.Name,
+		}
+		claim.Spec.AccessModes = []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce}
+		claim.Spec.Resources.Requests = corev1.ResourceList{corev1.ResourceStorage: resource.MustParse("1Gi")}
+		return nil
+	})
+	return err
+}
+
 func (r *HarnessSessionReconciler) reconcileDeployment(ctx context.Context, session *sympoziumv1alpha1.HarnessSession, agent *sympoziumv1alpha1.Agent, runtime *sympoziumv1alpha1.AgentRuntime) error {
 	deployment := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: sessionWorkloadName(session), Namespace: session.Namespace}}
 	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, deployment, func() error {
@@ -200,7 +229,9 @@ func (r *HarnessSessionReconciler) reconcileDeployment(ctx context.Context, sess
 				container.Env = append(container.Env, corev1.EnvVar{Name: key, ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: runtime.Spec.Model.AuthSecretRef}, Key: key, Optional: &optional}}})
 			}
 		}
-		deployment.Spec.Template.Spec = corev1.PodSpec{AutomountServiceAccountToken: boolPtr(false), EnableServiceLinks: boolPtr(false), SecurityContext: &corev1.PodSecurityContext{RunAsNonRoot: boolPtr(true), SeccompProfile: &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault}}, Containers: []corev1.Container{container}, Volumes: []corev1.Volume{{Name: "tmp", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}}}, ImagePullSecrets: agent.Spec.ImagePullSecrets}
+		fsGroup := int64(1000)
+		fsGroupPolicy := corev1.FSGroupChangeOnRootMismatch
+		deployment.Spec.Template.Spec = corev1.PodSpec{AutomountServiceAccountToken: boolPtr(false), EnableServiceLinks: boolPtr(false), SecurityContext: &corev1.PodSecurityContext{RunAsNonRoot: boolPtr(true), FSGroup: &fsGroup, FSGroupChangePolicy: &fsGroupPolicy, SeccompProfile: &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault}}, Containers: []corev1.Container{container}, Volumes: []corev1.Volume{{Name: "tmp", VolumeSource: corev1.VolumeSource{PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: sessionWorkloadName(session)}}}}, ImagePullSecrets: agent.Spec.ImagePullSecrets}
 		return nil
 	})
 	return err
@@ -269,7 +300,7 @@ func (r *HarnessSessionReconciler) setStatusWithCondition(ctx context.Context, s
 }
 
 func (r *HarnessSessionReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	return ctrl.NewControllerManagedBy(mgr).For(&sympoziumv1alpha1.HarnessSession{}).Owns(&appsv1.Deployment{}).Owns(&corev1.Service{}).Owns(&networkingv1.NetworkPolicy{}).Complete(r)
+	return ctrl.NewControllerManagedBy(mgr).For(&sympoziumv1alpha1.HarnessSession{}).Owns(&appsv1.Deployment{}).Owns(&corev1.PersistentVolumeClaim{}).Owns(&corev1.Service{}).Owns(&networkingv1.NetworkPolicy{}).Complete(r)
 }
 
 func protocolPtr(protocol corev1.Protocol) *corev1.Protocol { return &protocol }
