@@ -259,14 +259,16 @@ type WizardStep =
   | "confirm"
   | "channelAction";
 
-function stepsForMode(mode: "agent" | "persona" | "canary"): WizardStep[] {
+function stepsForMode(
+  mode: "agent" | "persona" | "canary",
+  runtimePreselected = false,
+): WizardStep[] {
   if (mode === "canary") {
     return ["provider", "apikey", "model"];
   }
   if (mode === "agent") {
-    return [
+    const steps: WizardStep[] = [
       "name",
-      "runtime",
       "provider",
       "apikey",
       "model",
@@ -276,6 +278,10 @@ function stepsForMode(mode: "agent" | "persona" | "canary"): WizardStep[] {
       "confirm",
       "channelAction",
     ];
+    // The dedicated Create → Agent Harness flow has already selected a
+    // persistent runtime. Do not make the user confirm the same decision.
+    if (!runtimePreselected) steps.splice(1, 0, "runtime");
+    return steps;
   }
   return [
     "provider",
@@ -536,7 +542,7 @@ export function OnboardingWizard({
   onComplete,
   isPending,
 }: OnboardingWizardProps) {
-  const steps = stepsForMode(mode);
+  const steps = stepsForMode(mode, !!defaults?.runtimeRef);
   const [step, setStep] = useState<WizardStep>(steps[0]);
   const [form, setForm] = useState<WizardResult>({
     name: defaults?.name || "",
