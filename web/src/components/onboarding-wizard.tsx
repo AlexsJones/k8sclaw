@@ -236,6 +236,8 @@ interface OnboardingWizardProps {
   availableRuntimes?: AgentRuntime[];
   /** Policies available in the current namespace. */
   availablePolicies?: SympoziumPolicy[];
+  /** SkillPacks that harness isolation cannot safely combine with. */
+  harnessIncompatibleSkills?: string[];
   /** Pre-fill form values */
   defaults?: Partial<WizardResult>;
   /** Called when the user clicks Activate / Create */
@@ -529,6 +531,7 @@ export function OnboardingWizard({
   availableSkills = [],
   availableRuntimes = [],
   availablePolicies = [],
+  harnessIncompatibleSkills = [],
   defaults,
   onComplete,
   isPending,
@@ -542,7 +545,9 @@ export function OnboardingWizard({
     secretName: defaults?.secretName || "",
     model: defaults?.model || "",
     baseURL: defaults?.baseURL || "",
-    skills: Array.from(new Set([...(defaults?.skills || []), "memory"])),
+    skills: Array.from(new Set([...(defaults?.skills || []), "memory"])).filter(
+      (skill) => !defaults?.runtimeRef || !harnessIncompatibleSkills.includes(skill),
+    ),
     channels: defaults?.channels || Object.keys(defaults?.channelConfigs || {}),
     channelConfigs: defaults?.channelConfigs || {},
     heartbeatInterval: defaults?.heartbeatInterval || "",
@@ -748,7 +753,9 @@ export function OnboardingWizard({
       secretName: d.secretName || "",
       model: d.model || "",
       baseURL: d.baseURL || "",
-      skills: d.skills || [],
+      skills: (d.skills || []).filter(
+        (skill) => !d.runtimeRef || !harnessIncompatibleSkills.includes(skill),
+      ),
       channels: d.channels || Object.keys(d.channelConfigs || {}),
       channelConfigs: d.channelConfigs || {},
       heartbeatInterval: d.heartbeatInterval || "",
@@ -868,7 +875,14 @@ export function OnboardingWizard({
               onValueChange={(value) => {
                 const runtimeRef = value === "builtin" ? "" : value;
                 const isDefaultCatalog = availableRuntimes.some((runtime) => runtime.metadata.name === runtimeRef && runtime.metadata.labels?.["sympozium.ai/harness-example"] === "true");
-                setForm({ ...form, runtimeRef, policyRef: runtimeRef && isDefaultCatalog ? "harness-examples" : runtimeRef ? form.policyRef : "" });
+                setForm({
+                  ...form,
+                  runtimeRef,
+                  policyRef: runtimeRef && isDefaultCatalog ? "harness-examples" : runtimeRef ? form.policyRef : "",
+                  skills: runtimeRef
+                    ? form.skills.filter((skill) => !harnessIncompatibleSkills.includes(skill))
+                    : form.skills,
+                });
               }}
             >
               <SelectTrigger><SelectValue /></SelectTrigger>
@@ -1300,13 +1314,14 @@ export function OnboardingWizard({
                       .map((skill) => {
                         const selected = form.skills.includes(skill);
                         const locked = skill === "memory";
+                        const incompatible = !!form.runtimeRef && harnessIncompatibleSkills.includes(skill);
                         return (
                           <button
                             key={skill}
                             type="button"
-                            disabled={locked}
+                            disabled={locked || incompatible}
                             onClick={() => {
-                              if (locked) return;
+                              if (locked || incompatible) return;
                               const next = selected
                                 ? form.skills.filter((s) => s !== skill)
                                 : [...form.skills, skill];
@@ -1314,7 +1329,7 @@ export function OnboardingWizard({
                             }}
                             className={cn(
                               "flex w-full items-center justify-between rounded-md border px-2.5 py-2 text-left text-xs transition-colors",
-                              locked
+                              locked || incompatible
                                 ? "border-blue-500/40 bg-blue-500/15 text-blue-300 opacity-70 cursor-not-allowed"
                                 : selected
                                   ? "border-blue-500/40 bg-blue-500/15 text-blue-300"
@@ -1325,6 +1340,8 @@ export function OnboardingWizard({
                             <span className="text-[10px]">
                               {locked
                                 ? "Required"
+                                : incompatible
+                                  ? "Not compatible with harnesses"
                                 : selected
                                   ? "Selected"
                                   : "Select"}

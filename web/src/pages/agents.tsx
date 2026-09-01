@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import {
   useAgents,
@@ -40,6 +40,17 @@ export function AgentsPage() {
   const [wizardOpen, setWizardOpen] = useState(false);
   const [search, setSearch] = useState("");
   const [whatsAppInstance, setWhatsAppInstance] = useState<string | null>(null);
+  const autoOpenConsumed = useRef(false);
+  const harnessIncompatibleSkills = (skillPacks || [])
+    .filter((skill) => skill.spec.sidecar?.hostAccess?.enabled)
+    .map((skill) => skill.metadata.name);
+
+  useEffect(() => {
+    if (searchParams.get("create") === "1" && !autoOpenConsumed.current) {
+      autoOpenConsumed.current = true;
+      setWizardOpen(true);
+    }
+  }, [searchParams]);
 
   const filtered = (data || [])
     .filter((inst) =>
@@ -271,6 +282,7 @@ export function AgentsPage() {
         availableSkills={(skillPacks || []).map((s) => s.metadata.name)}
         availableRuntimes={runtimes || []}
         availablePolicies={policies || []}
+        harnessIncompatibleSkills={harnessIncompatibleSkills}
         defaults={{
           provider: "openai",
           model: "gpt-4o",
