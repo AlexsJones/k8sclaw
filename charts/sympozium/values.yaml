@@ -222,6 +222,10 @@ harnessExamples:
     enabled: true
     name: pi-v0-84-4
     image: ghcr.io/sympozium-ai/harness-adapters/pi@sha256:b0d50402dc0a25b2c46f86dbd6b5de963487fa0ffa44058cb324ab2c68934f3b
+  piSession:
+    enabled: true
+    name: pi-session-v0-84-4
+    image: ghcr.io/sympozium-ai/harness-adapters/pi@sha256:cb35578a1f1ace8870a2a9c08e9efe7cf720bfd938cec503d24a4eda10384141
   hermes:
     enabled: true
     name: hermes-v0-20-6

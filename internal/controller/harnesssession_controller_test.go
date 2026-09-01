@@ -114,3 +114,21 @@ func TestHarnessSessionFailsClosedForOneShotRuntime(t *testing.T) {
 		t.Fatalf("unexpected failed status: %#v", got.Status)
 	}
 }
+
+func TestResolveSessionModelInheritsSingleAgentCredential(t *testing.T) {
+	agent := &sympoziumv1alpha1.Agent{
+		Spec: sympoziumv1alpha1.AgentSpec{
+			Agents:   sympoziumv1alpha1.AgentsSpec{Default: sympoziumv1alpha1.AgentConfig{Model: "qwen", BaseURL: "http://model:9473/v1"}},
+			AuthRefs: []sympoziumv1alpha1.SecretRef{{Provider: "openai-compatible", Secret: "model-key"}},
+		},
+	}
+	runtime := readySessionRuntime()
+	runtime.Spec.Model = nil
+	model, reason := resolveSessionModel(agent, runtime)
+	if reason != "" {
+		t.Fatalf("resolveSessionModel returned %q", reason)
+	}
+	if model.Provider != "openai-compatible" || model.Model != "qwen" || model.AuthSecretRef != "model-key" {
+		t.Fatalf("unexpected inherited model: %#v", model)
+	}
+}

@@ -10,6 +10,10 @@ the catalog instead of failing on a nil map.
     "enabled" true
     "name" "pi-v0-84-4"
     "image" "ghcr.io/sympozium-ai/harness-adapters/pi@sha256:b0d50402dc0a25b2c46f86dbd6b5de963487fa0ffa44058cb324ab2c68934f3b")
+  "piSession" (dict
+    "enabled" true
+    "name" "pi-session-v0-84-4"
+    "image" "ghcr.io/sympozium-ai/harness-adapters/pi@sha256:cb35578a1f1ace8870a2a9c08e9efe7cf720bfd938cec503d24a4eda10384141")
   "hermes" (dict
     "enabled" true
     "name" "hermes-v0-20-6"
@@ -17,11 +21,14 @@ the catalog instead of failing on a nil map.
 }}
 {{- $examples := mergeOverwrite $defaults (default (dict) .Values.harnessExamples) }}
 {{- if $examples.enabled }}
-{{- if not (or $examples.pi.enabled $examples.hermes.enabled) }}
-{{- fail "harnessExamples.enabled requires pi.enabled or hermes.enabled" }}
+{{- if not (or $examples.pi.enabled $examples.piSession.enabled $examples.hermes.enabled) }}
+{{- fail "harnessExamples.enabled requires pi.enabled, piSession.enabled, or hermes.enabled" }}
 {{- end }}
 {{- if and $examples.pi.enabled (not (regexMatch "@sha256:[a-f0-9]{64}$" $examples.pi.image)) }}
 {{- fail "harnessExamples.pi.image must be a digest-pinned OCI reference" }}
+{{- end }}
+{{- if and $examples.piSession.enabled (not (regexMatch "@sha256:[a-f0-9]{64}$" $examples.piSession.image)) }}
+{{- fail "harnessExamples.piSession.image must be a digest-pinned OCI reference" }}
 {{- end }}
 {{- if and $examples.hermes.enabled (not (regexMatch "@sha256:[a-f0-9]{64}$" $examples.hermes.image)) }}
 {{- fail "harnessExamples.hermes.image must be a digest-pinned OCI reference" }}
@@ -49,6 +56,9 @@ spec:
     {{- if $examples.pi.enabled }}
       - {{ $examples.pi.image | quote }}
     {{- end }}
+    {{- if $examples.piSession.enabled }}
+      - {{ $examples.piSession.image | quote }}
+    {{- end }}
     {{- if $examples.hermes.enabled }}
       - {{ $examples.hermes.image | quote }}
     {{- end }}
@@ -70,6 +80,28 @@ spec:
     status: conformant
     owner: sympozium-maintainers
     reference: https://github.com/sympozium-ai/harness-adapters/blob/main/docs/conformance.md
+{{- end }}
+{{- if $examples.piSession.enabled }}
+---
+apiVersion: sympozium.ai/v1alpha1
+kind: AgentRuntime
+metadata:
+  name: {{ $examples.piSession.name }}
+  labels:
+    sympozium.ai/builtin: "true"
+    sympozium.ai/harness-example: "true"
+    {{- include "sympozium.labels" . | nindent 4 }}
+spec:
+  image: {{ $examples.piSession.image | quote }}
+  contractVersion: v1alpha2
+  session:
+    protocol: openai-chat
+    port: 8080
+  supportOwner: sympozium-maintainers
+  conformance:
+    status: pending
+    owner: sympozium-maintainers
+    reference: https://github.com/sympozium-ai/harness-adapters/blob/main/docs/adapter-contract.md
 {{- end }}
 {{- if $examples.hermes.enabled }}
 ---
