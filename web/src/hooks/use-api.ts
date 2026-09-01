@@ -105,6 +105,18 @@ export function useDeleteHarnessSession() {
   });
 }
 
+export function useSetHarnessSessionState() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ name, desiredState }: { name: string; desiredState: "running" | "stopped" }) => api.harnessSessions.setDesiredState(name, desiredState),
+    onSuccess: (_data, variables) => {
+      qc.invalidateQueries({ queryKey: ["harness-sessions"] });
+      toast.success(variables.desiredState === "running" ? "Persistent chat is starting" : "Persistent chat stopped");
+    },
+    onError: toastError,
+  });
+}
+
 export function useHarnessSessionChat() {
   return useMutation({ mutationFn: ({ name, message }: { name: string; message: string }) => api.harnessSessions.chat(name, message), onError: toastError });
 }

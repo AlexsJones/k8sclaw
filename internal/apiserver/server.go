@@ -148,6 +148,7 @@ func (s *Server) buildMux(frontendFS fs.FS, expected *tokenReader) http.Handler 
 	// route to a session's private in-cluster Service.
 	mux.HandleFunc("GET /api/v1/harness-sessions", s.listHarnessSessions)
 	mux.HandleFunc("POST /api/v1/harness-sessions", s.createHarnessSession)
+	mux.HandleFunc("PATCH /api/v1/harness-sessions/{name}", s.patchHarnessSession)
 	mux.HandleFunc("DELETE /api/v1/harness-sessions/{name}", s.deleteHarnessSession)
 	mux.HandleFunc("POST /api/v1/harness-sessions/{name}/chat", s.chatHarnessSession)
 

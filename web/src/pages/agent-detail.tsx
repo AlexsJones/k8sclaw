@@ -6,6 +6,7 @@ import {
   usePatchAgent,
 	useCreateHarnessSession,
 	useHarnessSessions,
+	useSetHarnessSessionState,
   useRuntimes,
   useRuns,
 } from "@/hooks/use-api";
@@ -93,6 +94,7 @@ export function AgentDetailPage() {
   const { data: runtimes } = useRuntimes();
   const { data: harnessSessions } = useHarnessSessions();
   const createHarnessSession = useCreateHarnessSession();
+  const setHarnessSessionState = useSetHarnessSessionState();
   const [chatOpen, setChatOpen] = useState(false);
   const { data: allRuns } = useRuns();
   const { isUnseen } = useRunsSeen();
@@ -246,7 +248,7 @@ export function AgentDetailPage() {
             <CardHeader><CardTitle className="flex items-center gap-2 text-base"><MessageSquare className="h-4 w-4" />Persistent chat</CardTitle></CardHeader>
             <CardContent className="space-y-4 text-sm">
               <p className="text-muted-foreground">This Agent’s harness is a durable conversation pod. Chat turns stay in that harness; use the Runs tab only for explicit one-shot or workflow executions.</p>
-              {!chatSession ? <Button onClick={startChat} disabled={createHarnessSession.isPending}>{createHarnessSession.isPending ? "Starting chat…" : "Start chat"}</Button> : chatSession.status?.phase === "Ready" ? <div className="flex items-center justify-between rounded border p-3"><div><p className="font-mono text-xs">{chatSession.metadata.name}</p><p className="text-xs text-muted-foreground">Ready · persistent {selectedRuntime.metadata.name} session</p></div><Button onClick={() => setChatOpen(true)}><MessageSquare className="mr-2 h-4 w-4" />Open chat</Button></div> : <div className="rounded border p-3 text-muted-foreground">Starting persistent chat session… <span className="font-mono">{chatSession.status?.phase || "Pending"}</span></div>}
+              {!chatSession ? <Button onClick={startChat} disabled={createHarnessSession.isPending}>{createHarnessSession.isPending ? "Starting chat…" : "Start chat"}</Button> : chatSession.status?.phase === "Ready" ? <div className="flex items-center justify-between rounded border p-3"><div><p className="font-mono text-xs">{chatSession.metadata.name}</p><p className="text-xs text-muted-foreground">Ready · durable {selectedRuntime.metadata.name} conversation</p></div><div className="flex gap-2"><Button variant="outline" onClick={() => setHarnessSessionState.mutate({ name: chatSession.metadata.name, desiredState: "stopped" })} disabled={setHarnessSessionState.isPending}>Stop</Button><Button onClick={() => setChatOpen(true)}><MessageSquare className="mr-2 h-4 w-4" />Open chat</Button></div></div> : chatSession.spec.desiredState === "stopped" || chatSession.status?.phase === "Draining" ? <div className="flex items-center justify-between rounded border p-3"><div><p className="font-mono text-xs">{chatSession.metadata.name}</p><p className="text-xs text-muted-foreground">Chat is stopped. Resume it when you want to continue.</p></div><Button onClick={() => setHarnessSessionState.mutate({ name: chatSession.metadata.name, desiredState: "running" })} disabled={setHarnessSessionState.isPending}>Resume chat</Button></div> : <div className="rounded border p-3 text-muted-foreground">Starting persistent chat session… <span className="font-mono">{chatSession.status?.phase || "Pending"}</span></div>}
             </CardContent>
           </Card>
         </TabsContent>}

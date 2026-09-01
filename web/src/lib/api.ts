@@ -1336,6 +1336,8 @@ export const api = {
     list: () => apiFetch<HarnessSession[]>("/api/v1/harness-sessions"),
     create: (data: { name: string; agentRef: string; runtimeRef: string; idleTimeout?: string }) =>
       apiFetch<HarnessSession>("/api/v1/harness-sessions", { method: "POST", body: JSON.stringify(data) }),
+    setDesiredState: (name: string, desiredState: "running" | "stopped") =>
+      apiFetch<HarnessSession>(`/api/v1/harness-sessions/${name}`, { method: "PATCH", body: JSON.stringify({ desiredState }) }),
     delete: (name: string) => apiFetch<void>(`/api/v1/harness-sessions/${name}`, { method: "DELETE" }),
     chat: (name: string, message: string) => apiFetch<HarnessSessionChatResponse>(`/api/v1/harness-sessions/${name}/chat`, {
       method: "POST", body: JSON.stringify({ messages: [{ role: "user", content: message }] }),
