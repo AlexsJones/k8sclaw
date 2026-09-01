@@ -66,6 +66,9 @@ func TestHarnessSessionCreatesPrivateHardenedWorkload(t *testing.T) {
 	if pod.Containers[0].Image != readySessionRuntime().Spec.Image {
 		t.Fatalf("image = %q", pod.Containers[0].Image)
 	}
+	if pod.Containers[0].ReadinessProbe == nil || pod.Containers[0].ReadinessProbe.HTTPGet == nil || pod.Containers[0].ReadinessProbe.HTTPGet.Path != "/healthz" {
+		t.Fatal("session container must wait for the adapter health endpoint before becoming Ready")
+	}
 	if got := len(pod.Containers[0].Env); got < len(allowedAuthSecretKeys) {
 		t.Fatalf("got %d env vars, want allowlisted credential env vars", got)
 	}

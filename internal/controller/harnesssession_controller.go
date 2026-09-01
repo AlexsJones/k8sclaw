@@ -147,7 +147,9 @@ func (r *HarnessSessionReconciler) reconcileDeployment(ctx context.Context, sess
 				{Name: "MODEL_PROVIDER", Value: runtime.Spec.Model.Provider}, {Name: "MODEL_NAME", Value: runtime.Spec.Model.Model}, {Name: "MODEL_BASE_URL", Value: runtime.Spec.Model.BaseURL},
 				{Name: "HOME", Value: "/tmp/home"}, {Name: "XDG_CONFIG_HOME", Value: "/tmp/config"}, {Name: "XDG_CACHE_HOME", Value: "/tmp/cache"},
 			},
-			VolumeMounts: []corev1.VolumeMount{{Name: "tmp", MountPath: "/tmp"}},
+			VolumeMounts:   []corev1.VolumeMount{{Name: "tmp", MountPath: "/tmp"}},
+			ReadinessProbe: &corev1.Probe{ProbeHandler: corev1.ProbeHandler{HTTPGet: &corev1.HTTPGetAction{Path: "/healthz", Port: intstr.FromInt32(runtime.Spec.Session.Port)}}, InitialDelaySeconds: 1, PeriodSeconds: 2, FailureThreshold: 15},
+			LivenessProbe:  &corev1.Probe{ProbeHandler: corev1.ProbeHandler{HTTPGet: &corev1.HTTPGetAction{Path: "/healthz", Port: intstr.FromInt32(runtime.Spec.Session.Port)}}, InitialDelaySeconds: 10, PeriodSeconds: 10, FailureThreshold: 3},
 		}
 		if runtime.Spec.Resources != nil {
 			container.Resources = *runtime.Spec.Resources
