@@ -53,18 +53,28 @@ spec:
   desiredState: running
 ```
 
-In the UI, open **Agents → Harnesses**, select a session-capable runtime, then
-choose **Start interactive session**. Select the Agent whose credential
-allowlist should apply and give the session a name. Once its phase is `Ready`,
-choose **Open** to use the proxied chat panel. **Stop** deletes the private
-workload while retaining no browser-to-pod connection.
+For a person using the Agent, the primary route is **Agents → _your Agent_ →
+Chat**. If its selected runtime supports persistent chat, **Start chat** creates
+one deterministic session for that Agent; when it reaches `Ready`, **Open chat**
+resumes the private conversation. The **Harnesses** page is the operator-facing
+inventory for inspecting approved runtimes and managing additional sessions,
+not the normal way to begin a conversation.
+
+The Chat panel reports whether the session is connected, starting, or stopped.
+Stopping removes the private workload while preserving the `HarnessSession`
+record; **Resume chat** starts a new private workload using the same approved
+runtime and Agent credential allowlist. The visible transcript is retained on
+the current browser/device (bounded to the latest 200 turns) so a refresh does
+not make the conversation appear empty. It is deliberately **not** copied into
+CR status, ConfigMaps, or the browser-to-pod API.
 
 The first reference adapter is Pi's experimental `v1alpha2` mode. It keeps
-Pi's own conversation file inside the session pod and serializes turns; it
+Pi's own conversation state inside the session pod and serializes turns; it
 continues to disable tools, skills, and prompt templates. If the pod restarts,
-its ephemeral adapter conversation state is lost. Treat a session as a
-bounded interactive workspace, not durable Agent memory or a general exposed
-OpenAI gateway.
+its ephemeral adapter conversation state is lost even though this browser can
+still display the previous local transcript. Treat a session as a bounded
+interactive workspace, not durable Agent memory or a general exposed OpenAI
+gateway.
 
 For operators, the trust boundary is unchanged:
 

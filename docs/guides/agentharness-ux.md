@@ -18,6 +18,39 @@ The harness is only the process that drives the agent loop. An AgentRun is
 still the unit of execution, lifecycle, scheduling, access control, result,
 and audit. Choosing no harness preserves the built-in `agent-runner` path.
 
+## Choose the right interaction
+
+AgentHarness deliberately has two execution experiences. They are complementary
+and must not be blended in the UI.
+
+| Need | Use | What happens |
+|---|---|---|
+| A normal, continuing conversation | **Agent → Chat** with a session-capable runtime | Sympozium creates or resumes one private `HarnessSession` Deployment. The harness owns live conversation context. |
+| A bounded task, automation, schedule, or auditable batch outcome | **AgentRun** | Sympozium creates an isolated Job, injects the normal run inputs/memory, records a terminal result, then the pod exits. |
+
+For a persistent-capable Agent, **Chat** is the primary affordance. Selecting a
+runtime does not silently consume a pod forever: the first **Start chat**
+action creates the durable session, and subsequent visits resume it. The
+**Harnesses** page remains an operator inventory and an advanced way to manage
+additional sessions; it is not the required first click for ordinary chat.
+
+The chat panel makes lifecycle visible:
+
+- **Connected** — the controller has marked the private session ready and the
+  API proxy can deliver a turn.
+- **Starting** — the controller is creating or resuming the Deployment; input
+  remains disabled until it is ready.
+- **Stop session** — removes the private workload without deleting its
+  `HarnessSession` audit record.
+- **Resume chat** — requests the same approved runtime and Agent binding again.
+
+The browser retains the latest 200 visible turns per namespace/session, so a
+refresh does not look like a new conversation. This is a presentation aid on
+that device, not platform memory: the private adapter owns live context and a
+pod restart can lose it. Sympozium intentionally does not write message bodies
+to CRDs or ConfigMaps. Cross-device/history retention needs a separately
+designed, access-controlled transcript store.
+
 ## The three decisions
 
 ### 1. Approve a runtime (platform operator)
@@ -211,6 +244,11 @@ decisions without knowing Kubernetes internals:
 - [x] Choose an approved one-run override from New Run.
 - [x] Leave the selector at a safe, compatibility-preserving default.
 - [x] Inspect the resolved runtime and executed digest on Run detail.
+- [x] Start or resume a private persistent chat from a session-capable Agent.
+- [x] Display persistent-session connection state and provide stop/resume
+  controls without turning it into an AgentRun.
+- [x] Retain a bounded visible transcript on the current browser/device without
+  copying message content into Kubernetes objects.
 - [ ] See runtime readiness and policy eligibility before submitting.
 - [ ] Distinguish requested routing, platform enforcement, and adapter claims.
 - [ ] See accounting state and the reason an unmetered exception was allowed.
