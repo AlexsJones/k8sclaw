@@ -9,6 +9,7 @@ import (
 	"github.com/go-logr/logr"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -32,11 +33,14 @@ type HarnessSessionReconciler struct {
 	Log    logr.Logger
 }
 
+const harnessSessionSystemNamespace = "sympozium-system"
+
 // +kubebuilder:rbac:groups=sympozium.ai,resources=harnesssessions,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=sympozium.ai,resources=harnesssessions/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=sympozium.ai,resources=agents;agentruntimes,verbs=get;list;watch
 // +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=networking.k8s.io,resources=networkpolicies,verbs=get;list;watch;create;update;patch;delete
 
 func (r *HarnessSessionReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := r.Log.WithValues("harnesssession", req.NamespacedName)
@@ -65,6 +69,9 @@ func (r *HarnessSessionReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		return ctrl.Result{}, err
 	}
 	if err := r.reconcileService(ctx, &session, runtime.Spec.Session.Port); err != nil {
+		return ctrl.Result{}, err
+	}
+	if err := r.reconcileNetworkPolicy(ctx, &session, runtime.Spec.Session.Port); err != nil {
 		return ctrl.Result{}, err
 	}
 
@@ -179,8 +186,35 @@ func (r *HarnessSessionReconciler) reconcileService(ctx context.Context, session
 	return err
 }
 
+// reconcileNetworkPolicy gives a session the minimum useful model egress while
+// deliberately omitting NATS. A harness session has no IPC bridge and must not
+// bypass the API/controller boundary by publishing directly.
+func (r *HarnessSessionReconciler) reconcileNetworkPolicy(ctx context.Context, session *sympoziumv1alpha1.HarnessSession, port int32) error {
+	policy := &networkingv1.NetworkPolicy{ObjectMeta: metav1.ObjectMeta{Name: sessionWorkloadName(session), Namespace: session.Namespace}}
+	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, policy, func() error {
+		if err := controllerutil.SetControllerReference(session, policy, r.Scheme); err != nil {
+			return err
+		}
+		apiNamespace := metav1.LabelSelector{MatchLabels: map[string]string{"kubernetes.io/metadata.name": harnessSessionSystemNamespace}}
+		apiPod := metav1.LabelSelector{MatchLabels: map[string]string{"app.kubernetes.io/component": "apiserver"}}
+		policy.Spec = networkingv1.NetworkPolicySpec{
+			PodSelector: metav1.LabelSelector{MatchLabels: map[string]string{"app.kubernetes.io/name": "harness-session", "app.kubernetes.io/instance": session.Name}},
+			PolicyTypes: []networkingv1.PolicyType{networkingv1.PolicyTypeIngress, networkingv1.PolicyTypeEgress},
+			Ingress:     []networkingv1.NetworkPolicyIngressRule{{From: []networkingv1.NetworkPolicyPeer{{NamespaceSelector: &apiNamespace, PodSelector: &apiPod}}, Ports: []networkingv1.NetworkPolicyPort{{Protocol: protocolPtr(corev1.ProtocolTCP), Port: intstrPtr(port)}}}},
+			Egress: []networkingv1.NetworkPolicyEgressRule{
+				{Ports: []networkingv1.NetworkPolicyPort{{Protocol: protocolPtr(corev1.ProtocolUDP), Port: intstrPtr(53)}, {Protocol: protocolPtr(corev1.ProtocolTCP), Port: intstrPtr(53)}}},
+				// HTTPS covers public providers; 8080 and 9473 preserve standard
+				// cluster-local/node-proxy model routes. NATS (4222) is absent.
+				{Ports: []networkingv1.NetworkPolicyPort{{Protocol: protocolPtr(corev1.ProtocolTCP), Port: intstrPtr(443)}, {Protocol: protocolPtr(corev1.ProtocolTCP), Port: intstrPtr(8080)}, {Protocol: protocolPtr(corev1.ProtocolTCP), Port: intstrPtr(9473)}}},
+			},
+		}
+		return nil
+	})
+	return err
+}
+
 func (r *HarnessSessionReconciler) deleteWorkload(ctx context.Context, session *sympoziumv1alpha1.HarnessSession) error {
-	for _, obj := range []client.Object{&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: sessionWorkloadName(session), Namespace: session.Namespace}}, &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: sessionWorkloadName(session), Namespace: session.Namespace}}} {
+	for _, obj := range []client.Object{&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: sessionWorkloadName(session), Namespace: session.Namespace}}, &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: sessionWorkloadName(session), Namespace: session.Namespace}}, &networkingv1.NetworkPolicy{ObjectMeta: metav1.ObjectMeta{Name: sessionWorkloadName(session), Namespace: session.Namespace}}} {
 		if err := r.Delete(ctx, obj); err != nil && !errors.IsNotFound(err) {
 			return err
 		}
@@ -202,5 +236,12 @@ func (r *HarnessSessionReconciler) setStatusWithCondition(ctx context.Context, s
 }
 
 func (r *HarnessSessionReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	return ctrl.NewControllerManagedBy(mgr).For(&sympoziumv1alpha1.HarnessSession{}).Owns(&appsv1.Deployment{}).Owns(&corev1.Service{}).Complete(r)
+	return ctrl.NewControllerManagedBy(mgr).For(&sympoziumv1alpha1.HarnessSession{}).Owns(&appsv1.Deployment{}).Owns(&corev1.Service{}).Owns(&networkingv1.NetworkPolicy{}).Complete(r)
+}
+
+func protocolPtr(protocol corev1.Protocol) *corev1.Protocol { return &protocol }
+
+func intstrPtr(port int32) *intstr.IntOrString {
+	value := intstr.FromInt32(port)
+	return &value
 }

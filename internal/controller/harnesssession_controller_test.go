@@ -7,6 +7,7 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -78,6 +79,17 @@ func TestHarnessSessionCreatesPrivateHardenedWorkload(t *testing.T) {
 	}
 	if service.Spec.Ports[0].Port != 8080 {
 		t.Fatalf("service port = %d, want 8080", service.Spec.Ports[0].Port)
+	}
+	var policy networkingv1.NetworkPolicy
+	if err := cl.Get(context.Background(), key, &policy); err != nil {
+		t.Fatal(err)
+	}
+	for _, rule := range policy.Spec.Egress {
+		for _, policyPort := range rule.Ports {
+			if policyPort.Port != nil && policyPort.Port.IntVal == 4222 {
+				t.Fatal("session NetworkPolicy must not permit direct NATS egress")
+			}
+		}
 	}
 }
 
