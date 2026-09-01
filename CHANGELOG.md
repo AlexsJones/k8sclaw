@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.10.53](https://github.com/sympozium-ai/sympozium/compare/v0.10.52...v0.10.53) (2026-09-01)
+
+
+### Bug Fixes
+
+* **harness:** persist session state across restarts ([#407](https://github.com/sympozium-ai/sympozium/issues/407)) ([c3bab88](https://github.com/sympozium-ai/sympozium/commit/c3bab88a267a798b682f2e7b7ca3ad338378b0e8))
+* **harness:** separate persistent sessions from one-shot runs ([#404](https://github.com/sympozium-ai/sympozium/issues/404)) ([776dcc4](https://github.com/sympozium-ai/sympozium/commit/776dcc4c90b004389c0efbad71826582612d3e7f))
+* support keyless local harness inference ([#406](https://github.com/sympozium-ai/sympozium/issues/406)) ([f61e861](https://github.com/sympozium-ai/sympozium/commit/f61e861c6a07712d44cf8465968f89b4ba4a5a53))
+
 ## [0.10.52](https://github.com/sympozium-ai/sympozium/compare/v0.10.51...v0.10.52) (2026-09-01)
 
 
