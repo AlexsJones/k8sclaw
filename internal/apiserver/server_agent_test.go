@@ -2,6 +2,7 @@ package apiserver
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -36,13 +37,60 @@ func newInstanceTestServer(t *testing.T) (*Server, *runtime.Scheme) {
 	return NewServer(cl, nil, nil, logr.Discard()), scheme
 }
 
+func TestInstallDefaultRuntimes(t *testing.T) {
+	policy := &sympoziumv1alpha1.SympoziumPolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: "harness-examples", Namespace: "sympozium-system", Labels: map[string]string{"sympozium.ai/harness-example": "true"}},
+		Spec:       sympoziumv1alpha1.SympoziumPolicySpec{HarnessPolicy: &sympoziumv1alpha1.HarnessPolicySpec{Enabled: true}},
+	}
+	runtime := &sympoziumv1alpha1.AgentRuntime{
+		ObjectMeta: metav1.ObjectMeta{Name: "pi-v0-84-4", Namespace: "sympozium-system", Labels: map[string]string{"sympozium.ai/harness-example": "true"}},
+		Spec:       sympoziumv1alpha1.AgentRuntimeSpec{Image: "ghcr.io/sympozium-ai/harness-adapters/pi@sha256:1234"},
+	}
+	srv, cl := newTestServer(t, policy, runtime)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/runtimes/install-defaults?namespace=team-a", nil)
+	rec := httptest.NewRecorder()
+	srv.buildMux(nil, nil).ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var response InstallDefaultRuntimesResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if len(response.Copied) != 2 {
+		t.Fatalf("copied = %v, want policy and runtime", response.Copied)
+	}
+	var installed sympoziumv1alpha1.AgentRuntime
+	if err := cl.Get(context.Background(), types.NamespacedName{Name: runtime.Name, Namespace: "team-a"}, &installed); err != nil {
+		t.Fatalf("get installed runtime: %v", err)
+	}
+	if installed.Spec.Image != runtime.Spec.Image {
+		t.Fatalf("image = %q, want %q", installed.Spec.Image, runtime.Spec.Image)
+	}
+
+	// Installation is idempotent and must not replace namespaced objects.
+	rec = httptest.NewRecorder()
+	srv.buildMux(nil, nil).ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("second status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if len(response.AlreadyPresent) != 2 {
+		t.Fatalf("alreadyPresent = %v, want policy and runtime", response.AlreadyPresent)
+	}
+}
+
 func TestCreateInstance_NoHardcodedOTLPEndpoint(t *testing.T) {
 	srv, _ := newInstanceTestServer(t)
 
 	body, _ := json.Marshal(CreateInstanceRequest{
-		Name:     "test-adhoc",
-		Provider: "lm-studio",
-		Model:    "qwen/qwen3.5-35b-a3b",
+		Name:       "test-adhoc",
+		Provider:   "lm-studio",
+		Model:      "qwen/qwen3.5-35b-a3b",
+		RuntimeRef: "pi-v0-84-4",
 	})
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/agents?namespace=default", bytes.NewReader(body))
@@ -71,6 +119,9 @@ func TestCreateInstance_NoHardcodedOTLPEndpoint(t *testing.T) {
 	}
 	if inst.Spec.Observability.OTLPProtocol != "" {
 		t.Errorf("expected empty OTLPProtocol (should not be hardcoded), got %q", inst.Spec.Observability.OTLPProtocol)
+	}
+	if inst.Spec.RuntimeRef != "pi-v0-84-4" {
+		t.Errorf("RuntimeRef = %q, want Agent-level harness selection preserved", inst.Spec.RuntimeRef)
 	}
 }
 

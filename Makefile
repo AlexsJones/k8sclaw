@@ -192,14 +192,17 @@ web-dev-serve: web-install ## Vite hot-reload + port-forward to in-cluster apise
 	if [ -z "$$APISERVER_TOKEN" ]; then \
 		SECRET_NAME=$$(kubectl get deploy -n $(SYMPOZIUM_NAMESPACE) sympozium-apiserver -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="SYMPOZIUM_UI_TOKEN")].valueFrom.secretKeyRef.name}' 2>/dev/null); \
 		SECRET_KEY=$$(kubectl get deploy -n $(SYMPOZIUM_NAMESPACE) sympozium-apiserver -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="SYMPOZIUM_UI_TOKEN")].valueFrom.secretKeyRef.key}' 2>/dev/null); \
+		if [ -z "$$SECRET_NAME" ]; then \
+			SECRET_NAME=$$(kubectl get deploy -n $(SYMPOZIUM_NAMESPACE) sympozium-apiserver -o jsonpath='{.spec.template.spec.volumes[?(@.name=="sympozium-ui-token")].secret.secretName}' 2>/dev/null); \
+		fi; \
 		if [ -z "$$SECRET_KEY" ]; then SECRET_KEY=token; fi; \
 		if [ -n "$$SECRET_NAME" ]; then \
 			APISERVER_TOKEN=$$(kubectl get secret -n $(SYMPOZIUM_NAMESPACE) "$$SECRET_NAME" -o jsonpath="{.data.$$SECRET_KEY}" 2>/dev/null | base64 -d 2>/dev/null); \
 		fi; \
 	fi; \
 	if [ -z "$$APISERVER_TOKEN" ]; then \
-		echo "ERROR: Could not resolve API token from apiserver deployment."; \
-		echo "  Check: kubectl get deploy -n $(SYMPOZIUM_NAMESPACE) sympozium-apiserver -o yaml | grep SYMPOZIUM_UI_TOKEN"; \
+		echo "ERROR: Could not resolve API token from the apiserver environment or token volume."; \
+		echo "  Check: kubectl get secret -n $(SYMPOZIUM_NAMESPACE) sympozium-ui-token -o jsonpath='{.data.token}'"; \
 		exit 1; \
 	fi; \
 	STALE_PID=$$(lsof -ti tcp:$(API_LOCAL_PORT) 2>/dev/null || true); \

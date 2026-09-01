@@ -143,6 +143,7 @@ func (s *Server) buildMux(frontendFS fs.FS, expected *tokenReader) http.Handler 
 
 	// Administrator-approved harness runtimes
 	mux.HandleFunc("GET /api/v1/runtimes", s.listRuntimes)
+	mux.HandleFunc("POST /api/v1/runtimes/install-defaults", s.installDefaultRuntimes)
 
 	// Run endpoints
 	mux.HandleFunc("GET /api/v1/runs", s.listRuns)
@@ -414,6 +415,100 @@ func (s *Server) listRuntimes(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, list.Items)
 }
 
+// InstallDefaultRuntimesResponse records an idempotent installation of the
+// curated harness catalog into a namespace. The API takes no image input: it
+// can only copy the chart-managed catalog from sympozium-system.
+type InstallDefaultRuntimesResponse struct {
+	SourceNamespace string   `json:"sourceNamespace"`
+	TargetNamespace string   `json:"targetNamespace"`
+	Copied          []string `json:"copied"`
+	AlreadyPresent  []string `json:"alreadyPresent"`
+}
+
+func (s *Server) installDefaultRuntimes(w http.ResponseWriter, r *http.Request) {
+	targetNS := r.URL.Query().Get("namespace")
+	if targetNS == "" {
+		targetNS = "default"
+	}
+	const sourceNS = "sympozium-system"
+	const catalogLabel = "sympozium.ai/harness-example"
+
+	// A harness runtime is only usable under the accompanying policy. Copy the
+	// policy first and never replace a namespace owner's object of the same name.
+	var sourcePolicy sympoziumv1alpha1.SympoziumPolicy
+	if err := s.client.Get(r.Context(), types.NamespacedName{Name: "harness-examples", Namespace: sourceNS}, &sourcePolicy); err != nil {
+		if k8serrors.IsNotFound(err) {
+			http.Error(w, "default harness catalog is not installed in sympozium-system", http.StatusNotFound)
+			return
+		}
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if sourcePolicy.Labels[catalogLabel] != "true" || sourcePolicy.Spec.HarnessPolicy == nil || !sourcePolicy.Spec.HarnessPolicy.Enabled {
+		http.Error(w, "default harness catalog policy is invalid", http.StatusInternalServerError)
+		return
+	}
+
+	var sourceRuntimes sympoziumv1alpha1.AgentRuntimeList
+	if err := s.client.List(r.Context(), &sourceRuntimes, client.InNamespace(sourceNS), client.MatchingLabels{catalogLabel: "true"}); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if len(sourceRuntimes.Items) == 0 {
+		http.Error(w, "default harness catalog contains no runtimes", http.StatusNotFound)
+		return
+	}
+
+	resp := InstallDefaultRuntimesResponse{SourceNamespace: sourceNS, TargetNamespace: targetNS, Copied: []string{}, AlreadyPresent: []string{}}
+	installPolicy := &sympoziumv1alpha1.SympoziumPolicy{ObjectMeta: metav1.ObjectMeta{Name: sourcePolicy.Name, Namespace: targetNS, Labels: sourcePolicy.Labels, Annotations: sourcePolicy.Annotations}, Spec: sourcePolicy.Spec}
+	var existingPolicy sympoziumv1alpha1.SympoziumPolicy
+	err := s.client.Get(r.Context(), types.NamespacedName{Name: installPolicy.Name, Namespace: targetNS}, &existingPolicy)
+	if err == nil {
+		resp.AlreadyPresent = append(resp.AlreadyPresent, "policy/"+installPolicy.Name)
+	} else if !k8serrors.IsNotFound(err) {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	} else if err := s.client.Create(r.Context(), installPolicy); err != nil {
+		if k8serrors.IsAlreadyExists(err) {
+			resp.AlreadyPresent = append(resp.AlreadyPresent, "policy/"+installPolicy.Name)
+		} else {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	} else {
+		resp.Copied = append(resp.Copied, "policy/"+installPolicy.Name)
+	}
+
+	for _, src := range sourceRuntimes.Items {
+		if src.Spec.Image == "" { // Defensive: never turn malformed catalog data into a target resource.
+			http.Error(w, "default harness catalog contains an invalid runtime", http.StatusInternalServerError)
+			return
+		}
+		var existing sympoziumv1alpha1.AgentRuntime
+		err := s.client.Get(r.Context(), types.NamespacedName{Name: src.Name, Namespace: targetNS}, &existing)
+		if err == nil {
+			resp.AlreadyPresent = append(resp.AlreadyPresent, "runtime/"+src.Name)
+			continue
+		}
+		if !k8serrors.IsNotFound(err) {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		runtime := &sympoziumv1alpha1.AgentRuntime{ObjectMeta: metav1.ObjectMeta{Name: src.Name, Namespace: targetNS, Labels: src.Labels, Annotations: src.Annotations}, Spec: src.Spec}
+		if err := s.client.Create(r.Context(), runtime); err != nil {
+			if k8serrors.IsAlreadyExists(err) {
+				resp.AlreadyPresent = append(resp.AlreadyPresent, "runtime/"+src.Name)
+				continue
+			}
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		resp.Copied = append(resp.Copied, "runtime/"+src.Name)
+	}
+
+	writeJSON(w, resp)
+}
+
 func (s *Server) getAgent(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	ns := r.URL.Query().Get("namespace")
@@ -643,6 +738,7 @@ type CreateInstanceRequest struct {
 	AWSSecretAccessKey string                                  `json:"awsSecretAccessKey,omitempty"`
 	AWSSessionToken    string                                  `json:"awsSessionToken,omitempty"`
 	PolicyRef          string                                  `json:"policyRef,omitempty"`
+	RuntimeRef         string                                  `json:"runtimeRef,omitempty"`
 	Skills             []sympoziumv1alpha1.SkillRef            `json:"skills,omitempty"`
 	Channels           []sympoziumv1alpha1.ChannelSpec         `json:"channels,omitempty"`
 	HeartbeatInterval  string                                  `json:"heartbeatInterval,omitempty"`
@@ -796,6 +892,9 @@ func (s *Server) createAgent(w http.ResponseWriter, r *http.Request) {
 
 	if req.PolicyRef != "" {
 		inst.Spec.PolicyRef = req.PolicyRef
+	}
+	if req.RuntimeRef != "" {
+		inst.Spec.RuntimeRef = req.RuntimeRef
 	}
 
 	if len(req.Skills) > 0 {

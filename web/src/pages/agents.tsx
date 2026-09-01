@@ -1,10 +1,12 @@
-import { useState } from "react";
-import { Link } from "react-router-dom";
+import { useEffect, useRef, useState } from "react";
+import { Link, useSearchParams } from "react-router-dom";
 import {
   useAgents,
   useDeleteAgent,
   useCreateAgent,
   useSkills,
+  useRuntimes,
+  usePolicies,
 } from "@/hooks/use-api";
 import { StatusBadge } from "@/components/status-badge";
 import {
@@ -30,11 +32,25 @@ import { formatAge } from "@/lib/utils";
 export function AgentsPage() {
   const { data, isLoading } = useAgents();
   const { data: skillPacks } = useSkills();
+  const { data: runtimes } = useRuntimes();
+  const { data: policies } = usePolicies();
+  const [searchParams] = useSearchParams();
   const deleteAgent = useDeleteAgent();
   const createAgent = useCreateAgent();
   const [wizardOpen, setWizardOpen] = useState(false);
   const [search, setSearch] = useState("");
   const [whatsAppInstance, setWhatsAppInstance] = useState<string | null>(null);
+  const autoOpenConsumed = useRef(false);
+  const harnessIncompatibleSkills = (skillPacks || [])
+    .filter((skill) => skill.spec.sidecar?.hostAccess?.enabled)
+    .map((skill) => skill.metadata.name);
+
+  useEffect(() => {
+    if (searchParams.get("create") === "1" && !autoOpenConsumed.current) {
+      autoOpenConsumed.current = true;
+      setWizardOpen(true);
+    }
+  }, [searchParams]);
 
   const filtered = (data || [])
     .filter((inst) =>
@@ -55,6 +71,8 @@ export function AgentsPage() {
         awsAccessKeyId: result.awsAccessKeyId || undefined,
         awsSecretAccessKey: result.awsSecretAccessKey || undefined,
         awsSessionToken: result.awsSessionToken || undefined,
+        runtimeRef: result.runtimeRef || undefined,
+        policyRef: result.policyRef || undefined,
         skills: result.skills.map((skillPackRef) => {
           if (skillPackRef === "web-endpoint") {
             const params: Record<string, string> = {};
@@ -262,10 +280,17 @@ export function AgentsPage() {
         onClose={() => setWizardOpen(false)}
         mode="agent"
         availableSkills={(skillPacks || []).map((s) => s.metadata.name)}
+        availableRuntimes={runtimes || []}
+        availablePolicies={policies || []}
+        harnessIncompatibleSkills={harnessIncompatibleSkills}
         defaults={{
           provider: "openai",
           model: "gpt-4o",
           skills: ["k8s-ops", "llmfit", "memory"],
+          ...(searchParams.get("runtime") ? {
+            runtimeRef: searchParams.get("runtime") || "",
+            policyRef: searchParams.get("policy") || "harness-examples",
+          } : {}),
         }}
         onComplete={handleComplete}
         isPending={createAgent.isPending}
