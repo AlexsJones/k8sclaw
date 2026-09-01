@@ -180,6 +180,10 @@ The web dashboard provides a graphical interface for **all** Sympozium actions:
 - **Dashboard** — cluster overview with instance counts, run stats, and recent activity
 - **Instances** — list, create, and delete Agents
 - **Runs** — view all AgentRuns, inspect logs, create new runs
+- **Agents → Chat** — start or resume a persistent private conversation when
+  the Agent has a session-capable AgentHarness runtime
+- **Harnesses** — inspect administrator-approved harness runtimes and advanced
+  session state
 - **Policies** — browse SympoziumPolicy rules
 - **Skills** — explore installed SkillPacks
 - **Schedules** — list and manage SympoziumSchedules

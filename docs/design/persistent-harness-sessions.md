@@ -26,8 +26,9 @@ spec:
 
 The controller resolves and records the immutable runtime digest once, creates
 a Deployment and ClusterIP Service, and reports `Pending`, `Ready`, `Draining`,
-or `Failed`. Deletion, an explicit `desiredState: stopped`, and idle expiry
-remove the workload and its per-session identity.
+or `Failed`. Deletion and an explicit `desiredState: stopped` remove the
+workload. `idleTimeout` is reserved until API activity reporting is available;
+it must not silently stop a session before then.
 
 The API/UI talks to the Session through a Sympozium-owned proxy. It does not
 expose pod exec, a ServiceAccount token, or direct NATS access to a browser.
@@ -50,8 +51,8 @@ substitute for a session.
 ## Security invariants
 
 - The Agent remains the sole authority for provider credential allowlisting.
-- Every session gets a unique ServiceAccount with `automountServiceAccountToken:
-  false`; trusted sidecars receive only the projected tokens they need.
+- Session pods set `automountServiceAccountToken: false`; the adapter receives
+  no Kubernetes API token.
 - The runtime image stays digest-pinned and policy-approved, and the resolved
   digest is recorded in status.
 - Harness containers retain narrowed mounts and cannot publish directly to

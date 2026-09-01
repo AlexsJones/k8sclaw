@@ -37,10 +37,11 @@
 ---
 
 > [!IMPORTANT]
-> **AgentHarness support is landing now.** Run an administrator-approved external
-> agent adapter inside a normal Sympozium AgentRun while keeping Kubernetes
-> policy, per-run identity, skills, memory, MCP, observability, and audit under
-> platform control. Start with the [AgentHarness guide](https://deploy.sympozium.ai/docs/guides/agentharness/)
+> **AgentHarness is available experimentally.** Run an administrator-approved
+> external adapter in an isolated AgentRun, or choose a session-capable runtime
+> for a private, continuing **Agent → Chat** conversation. Kubernetes policy,
+> identity, skills, memory, MCP, observability, and audit remain under platform
+> control. Start with the [AgentHarness guide](https://deploy.sympozium.ai/docs/guides/agentharness/)
 > and the digest-pinned [reference adapter](examples/harness-reference/). This
 > is an adapter boundary—not permission to run arbitrary upstream images.
 
