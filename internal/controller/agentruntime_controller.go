@@ -72,6 +72,15 @@ func (r *AgentRuntimeReconciler) validate(runtime *sympoziumv1alpha1.AgentRuntim
 		}
 	}
 
+	// v1alpha2 is reserved for persistent HTTP sessions. Keep the descriptor
+	// honest at the existing Ready gate so a malformed session runtime cannot
+	// look selectable and fail only after a user creates a session.
+	if runtime.Spec.ContractVersion == "v1alpha2" {
+		if runtime.Spec.Session == nil || runtime.Spec.Session.Protocol != "openai-chat" || runtime.Spec.Session.Port < 1 {
+			return "", "v1alpha2 requires spec.session.protocol=openai-chat and a valid spec.session.port"
+		}
+	}
+
 	return digest, ""
 }
 

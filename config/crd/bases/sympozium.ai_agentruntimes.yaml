@@ -183,6 +183,31 @@ spec:
                       More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
                     type: object
                 type: object
+              session:
+                description: |-
+                  Session describes the network contract exposed by a persistent-session
+                  capable adapter. It is deliberately absent from v1alpha1 one-shot
+                  runtimes: a runtime must opt in explicitly before Sympozium will keep it
+                  running behind a Service.
+                properties:
+                  port:
+                    description: Port is the container and Service port on which the
+                      adapter listens.
+                    format: int32
+                    maximum: 65535
+                    minimum: 1
+                    type: integer
+                  protocol:
+                    description: |-
+                      Protocol identifies the session wire protocol. The initial supported
+                      value is "openai-chat".
+                    enum:
+                    - openai-chat
+                    type: string
+                required:
+                - port
+                - protocol
+                type: object
               supportOwner:
                 description: |-
                   SupportOwner identifies the team or person responsible for this runtime,

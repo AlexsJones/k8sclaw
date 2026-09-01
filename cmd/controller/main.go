@@ -254,6 +254,15 @@ func main() {
 		os.Exit(1)
 	}
 
+	if err := (&controller.HarnessSessionReconciler{
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+		Log:    ctrl.Log.WithName("controllers").WithName("HarnessSession"),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "HarnessSession")
+		os.Exit(1)
+	}
+
 	modelReconciler := &controller.ModelReconciler{
 		Client:    mgr.GetClient(),
 		Scheme:    mgr.GetScheme(),
