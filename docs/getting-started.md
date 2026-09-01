@@ -170,8 +170,7 @@ kubectl port-forward -n sympozium-system svc/sympozium-apiserver 8080:8080
 Retrieve the UI token:
 
 ```bash
-kubectl get secret sympozium-ui-token -n sympozium-system \
-  -o jsonpath='{.data.token}' | base64 -d
+sympozium token
 ```
 
 ### What you can do
