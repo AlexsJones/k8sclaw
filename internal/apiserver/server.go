@@ -842,6 +842,33 @@ func (s *Server) createAgent(w http.ResponseWriter, r *http.Request) {
 	}
 
 	secretAutoCreated := false
+	// First-party harness adapters configure local OpenAI-compatible routes
+	// through Pi/Hermes provider files. Those clients require an API-key field
+	// even when the endpoint itself is intentionally keyless (LocalAI,
+	// llama.cpp, LM Studio, Ollama, and similar). Give only harness-backed,
+	// explicitly keyless Agents a scoped compatibility value; the built-in
+	// runner and genuinely authenticated providers retain their existing
+	// credential behavior.
+	if req.RuntimeRef != "" && req.APIKey == "" && req.SecretName == "" && inst.Spec.Agents.Default.BaseURL != "" {
+		secretAutoCreated = true
+		req.SecretName = defaultProviderSecretName(req.Name, "harness-local")
+		secret := &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      req.SecretName,
+				Namespace: ns,
+				Labels: map[string]string{
+					"app.kubernetes.io/managed-by": "sympozium",
+					"sympozium.ai/instance":        req.Name,
+					"sympozium.ai/credential-kind": "harness-local-compatibility",
+				},
+			},
+			StringData: map[string]string{"OPENAI_API_KEY": "local-no-key"},
+		}
+		if err := createOrUpdateSecret(r.Context(), s.client, secret); err != nil {
+			http.Error(w, "failed to create harness compatibility secret: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
 	if req.Provider != "" && req.APIKey != "" && req.SecretName == "" {
 		secretAutoCreated = true
 		req.SecretName = defaultProviderSecretName(req.Name, req.Provider)

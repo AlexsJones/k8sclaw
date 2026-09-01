@@ -704,8 +704,17 @@ function buildTopology(
   const LOCAL_PROVIDERS = new Set(["lm-studio", "ollama", "llama-server", "vllm", "unsloth"]);
 
   for (const ens of ensembles) {
+    const inferred = ens.spec.baseURL ? inferProvider(ens.spec.baseURL) : null;
+    if (inferred && LOCAL_PROVIDERS.has(inferred)) {
+      ensProviders.set(inferred, PROVIDER_LABELS[inferred] || inferred);
+      ensProviderMap.set(ens.metadata.name, inferred);
+    }
     for (const ref of ens.spec.authRefs || []) {
-      if (ref.provider) {
+      // A compatibility credential may retain provider=custom even though the
+      // endpoint is a discovered local runtime. The endpoint is authoritative
+      // for topology classification; credentials describe authentication,
+      // not where inference executes.
+      if (ref.provider && !ensProviderMap.has(ens.metadata.name)) {
         ensProviders.set(ref.provider, PROVIDER_LABELS[ref.provider] || ref.provider);
         ensProviderMap.set(ens.metadata.name, ref.provider);
       }
@@ -715,10 +724,10 @@ function buildTopology(
         (m) => m.status?.endpoint && ens.spec.baseURL?.includes(m.status.endpoint.replace("/v1", "")),
       );
       if (!isModelEndpoint) {
-        const inferred = inferProvider(ens.spec.baseURL);
-        if (inferred) {
-          ensProviders.set(inferred, PROVIDER_LABELS[inferred] || inferred);
-          ensProviderMap.set(ens.metadata.name, inferred);
+        const fallbackProvider = inferProvider(ens.spec.baseURL);
+        if (fallbackProvider) {
+          ensProviders.set(fallbackProvider, PROVIDER_LABELS[fallbackProvider] || fallbackProvider);
+          ensProviderMap.set(ens.metadata.name, fallbackProvider);
         }
       }
     }
@@ -739,8 +748,11 @@ function buildTopology(
       agentModelMap.set(agent.metadata.name, matchedModel.metadata.name);
       continue;
     }
-    let prov = (agent.spec.authRefs || []).find((r) => r.provider)?.provider;
-    if (!prov && baseURL) prov = inferProvider(baseURL) || undefined;
+    const inferred = baseURL ? inferProvider(baseURL) : null;
+    let prov = inferred && LOCAL_PROVIDERS.has(inferred)
+      ? inferred
+      : (agent.spec.authRefs || []).find((r) => r.provider)?.provider;
+    if (!prov) prov = inferred || undefined;
     if (prov) {
       ensProviders.set(prov, PROVIDER_LABELS[prov] || prov);
       agentProviderMap.set(agent.metadata.name, prov);
