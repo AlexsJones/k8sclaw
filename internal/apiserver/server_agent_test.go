@@ -123,6 +123,47 @@ func TestCreateInstance_NoHardcodedOTLPEndpoint(t *testing.T) {
 	if inst.Spec.RuntimeRef != "pi-v0-84-4" {
 		t.Errorf("RuntimeRef = %q, want Agent-level harness selection preserved", inst.Spec.RuntimeRef)
 	}
+	if len(inst.Spec.AuthRefs) != 1 || inst.Spec.AuthRefs[0].Provider != "lm-studio" {
+		t.Fatalf("AuthRefs = %#v, want scoped local harness compatibility secret", inst.Spec.AuthRefs)
+	}
+	var secret corev1.Secret
+	if err := srv.client.Get(req.Context(), types.NamespacedName{Name: inst.Spec.AuthRefs[0].Secret, Namespace: "default"}, &secret); err != nil {
+		t.Fatalf("get harness compatibility secret: %v", err)
+	}
+	if got := string(secret.Data["OPENAI_API_KEY"]); got != "local-no-key" {
+		t.Errorf("OPENAI_API_KEY = %q, want compatibility value", got)
+	}
+	if got := secret.Labels["sympozium.ai/credential-kind"]; got != "harness-local-compatibility" {
+		t.Errorf("credential-kind label = %q", got)
+	}
+}
+
+func TestCreateInstance_KeylessBuiltInAgentDoesNotCreateCompatibilitySecret(t *testing.T) {
+	srv, _ := newInstanceTestServer(t)
+	body, _ := json.Marshal(CreateInstanceRequest{
+		Name:     "builtin-local",
+		Provider: "lm-studio",
+		Model:    "qwen-local",
+		BaseURL:  "http://models.local/v1",
+	})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/agents?namespace=default", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	srv.buildMux(nil, nil).ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var inst sympoziumv1alpha1.Agent
+	if err := srv.client.Get(req.Context(), types.NamespacedName{Name: "builtin-local", Namespace: "default"}, &inst); err != nil {
+		t.Fatal(err)
+	}
+	if len(inst.Spec.AuthRefs) != 0 {
+		t.Fatalf("AuthRefs = %#v, built-in keyless Agent must not receive harness compatibility credentials", inst.Spec.AuthRefs)
+	}
+	var secret corev1.Secret
+	err := srv.client.Get(req.Context(), types.NamespacedName{Name: "builtin-local-harness-local-key", Namespace: "default"}, &secret)
+	if err == nil {
+		t.Fatal("built-in Agent unexpectedly created a harness compatibility Secret")
+	}
 }
 
 func TestPatchAgent_RuntimeRef(t *testing.T) {
