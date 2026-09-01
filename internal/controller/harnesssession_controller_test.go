@@ -73,6 +73,19 @@ func TestHarnessSessionCreatesPrivateHardenedWorkload(t *testing.T) {
 	if got := len(pod.Containers[0].Env); got < len(allowedAuthSecretKeys) {
 		t.Fatalf("got %d env vars, want allowlisted credential env vars", got)
 	}
+	var claim corev1.PersistentVolumeClaim
+	if err := cl.Get(context.Background(), key, &claim); err != nil {
+		t.Fatal(err)
+	}
+	if got := claim.Spec.Resources.Requests.Storage().String(); got != "1Gi" {
+		t.Fatalf("state claim size = %q, want 1Gi", got)
+	}
+	if len(pod.Volumes) != 1 || pod.Volumes[0].PersistentVolumeClaim == nil || pod.Volumes[0].PersistentVolumeClaim.ClaimName != session.Name {
+		t.Fatalf("session pod does not mount its state claim: %#v", pod.Volumes)
+	}
+	if pod.SecurityContext == nil || pod.SecurityContext.FSGroup == nil || *pod.SecurityContext.FSGroup != 1000 {
+		t.Fatal("session pod must make durable state writable by the non-root harness user")
+	}
 	var service corev1.Service
 	if err := cl.Get(context.Background(), key, &service); err != nil {
 		t.Fatal(err)
@@ -90,6 +103,25 @@ func TestHarnessSessionCreatesPrivateHardenedWorkload(t *testing.T) {
 				t.Fatal("session NetworkPolicy must not permit direct NATS egress")
 			}
 		}
+	}
+}
+
+func TestHarnessSessionStopPreservesDurableState(t *testing.T) {
+	scheme := harnessSessionTestScheme(t)
+	session := &sympoziumv1alpha1.HarnessSession{ObjectMeta: metav1.ObjectMeta{Name: "analyst-session", Namespace: "default"}, Spec: sympoziumv1alpha1.HarnessSessionSpec{AgentRef: "analyst", RuntimeRef: "pi-session", DesiredState: "stopped"}}
+	claim := corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{Name: session.Name, Namespace: session.Namespace}}
+	deployment := appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: session.Name, Namespace: session.Namespace}}
+	cl := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(session).WithObjects(session, &claim, &deployment).Build()
+	r := &HarnessSessionReconciler{Client: cl, Scheme: scheme}
+	key := types.NamespacedName{Name: session.Name, Namespace: session.Namespace}
+	if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: key}); err != nil {
+		t.Fatal(err)
+	}
+	if err := cl.Get(context.Background(), key, &claim); err != nil {
+		t.Fatalf("stopping a session deleted durable state: %v", err)
+	}
+	if err := cl.Get(context.Background(), key, &deployment); err == nil {
+		t.Fatal("stopping a session did not remove its Deployment")
 	}
 }
 
