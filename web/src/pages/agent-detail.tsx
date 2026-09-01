@@ -4,9 +4,12 @@ import {
   useAgent,
   useCapabilities,
   usePatchAgent,
+	useCreateHarnessSession,
+	useHarnessSessions,
   useRuntimes,
   useRuns,
 } from "@/hooks/use-api";
+import { HarnessSessionChatDialog } from "@/components/harness-session-dialog";
 import { StatusBadge } from "@/components/status-badge";
 import { GithubAuthDialog } from "@/components/github-auth-dialog";
 import {
@@ -45,6 +48,7 @@ import {
 } from "@/components/ui/dialog";
 import {
   AlertTriangle,
+  MessageSquare,
   Plus,
   Pencil,
   Trash2,
@@ -68,6 +72,7 @@ export function AgentDetailPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const allowedTabs = new Set([
     "overview",
+    "chat",
     "harness",
     "ensemble",
     "runs",
@@ -86,6 +91,9 @@ export function AgentDetailPage() {
   const { data: inst, isLoading } = useAgent(name || "");
   const { data: capabilities } = useCapabilities();
   const { data: runtimes } = useRuntimes();
+  const { data: harnessSessions } = useHarnessSessions();
+  const createHarnessSession = useCreateHarnessSession();
+  const [chatOpen, setChatOpen] = useState(false);
   const { data: allRuns } = useRuns();
   const { isUnseen } = useRunsSeen();
   const instanceRuns = (allRuns || [])
@@ -125,6 +133,15 @@ export function AgentDetailPage() {
     return <p className="text-muted-foreground">Agent not found</p>;
   }
 
+  const selectedRuntime = runtimes?.find((runtime) => runtime.metadata.name === inst.spec.runtimeRef);
+  const agentName = inst.metadata.name;
+  const persistentHarness = selectedRuntime?.spec.contractVersion === "v1alpha2" && selectedRuntime.spec.session?.protocol === "openai-chat";
+  const chatSession = harnessSessions?.find((session) => session.spec.agentRef === agentName && session.spec.runtimeRef === selectedRuntime?.metadata.name);
+  function startChat() {
+    if (!selectedRuntime) return;
+    createHarnessSession.mutate({ name: defaultChatSessionName(agentName), agentRef: agentName, runtimeRef: selectedRuntime.metadata.name });
+  }
+
   return (
     <div className="space-y-6">
       <div className="space-y-1">
@@ -144,6 +161,7 @@ export function AgentDetailPage() {
       <Tabs value={activeTab} onValueChange={setActiveTab}>
         <TabsList>
           <TabsTrigger value="overview">Overview</TabsTrigger>
+          {persistentHarness && <TabsTrigger value="chat"><MessageSquare className="mr-1 h-3.5 w-3.5" />Chat</TabsTrigger>}
           <TabsTrigger value="harness">Harness</TabsTrigger>
           <TabsTrigger value="ensemble">Ensemble</TabsTrigger>
           <TabsTrigger value="runs">
@@ -222,6 +240,16 @@ export function AgentDetailPage() {
             <ResponseGateCard inst={inst} />
           </div>
         </TabsContent>
+
+        {persistentHarness && <TabsContent value="chat">
+          <Card>
+            <CardHeader><CardTitle className="flex items-center gap-2 text-base"><MessageSquare className="h-4 w-4" />Persistent chat</CardTitle></CardHeader>
+            <CardContent className="space-y-4 text-sm">
+              <p className="text-muted-foreground">This Agent’s harness is a durable conversation pod. Chat turns stay in that harness; use the Runs tab only for explicit one-shot or workflow executions.</p>
+              {!chatSession ? <Button onClick={startChat} disabled={createHarnessSession.isPending}>{createHarnessSession.isPending ? "Starting chat…" : "Start chat"}</Button> : chatSession.status?.phase === "Ready" ? <div className="flex items-center justify-between rounded border p-3"><div><p className="font-mono text-xs">{chatSession.metadata.name}</p><p className="text-xs text-muted-foreground">Ready · persistent {selectedRuntime.metadata.name} session</p></div><Button onClick={() => setChatOpen(true)}><MessageSquare className="mr-2 h-4 w-4" />Open chat</Button></div> : <div className="rounded border p-3 text-muted-foreground">Starting persistent chat session… <span className="font-mono">{chatSession.status?.phase || "Pending"}</span></div>}
+            </CardContent>
+          </Card>
+        </TabsContent>}
 
         <TabsContent value="harness">
           <div className="space-y-4">
@@ -452,8 +480,13 @@ export function AgentDetailPage() {
           </Card>
         </TabsContent>
       </Tabs>
+      {chatSession && <HarnessSessionChatDialog open={chatOpen} onOpenChange={setChatOpen} session={chatSession} />}
     </div>
   );
+}
+
+function defaultChatSessionName(agentName: string) {
+  return `${agentName.slice(0, 57).replace(/-+$/, "")}-chat`;
 }
 
 function AgentRuntimeCard({ inst, runtimes }: { inst: Agent; runtimes: import("@/lib/api").AgentRuntime[] }) {
