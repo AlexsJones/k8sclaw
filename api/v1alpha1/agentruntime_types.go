@@ -72,6 +72,28 @@ type AgentRuntimeSpec struct {
 	// versioned adapter contract.
 	// +optional
 	Conformance *AgentRuntimeConformance `json:"conformance,omitempty"`
+
+	// Session describes the network contract exposed by a persistent-session
+	// capable adapter. It is deliberately absent from v1alpha1 one-shot
+	// runtimes: a runtime must opt in explicitly before Sympozium will keep it
+	// running behind a Service.
+	// +optional
+	Session *AgentRuntimeSession `json:"session,omitempty"`
+}
+
+// AgentRuntimeSession describes the narrow HTTP interface an adapter exposes
+// for a HarnessSession. The API server is the only supported client of this
+// endpoint; it is never exposed directly to browsers or tenants.
+type AgentRuntimeSession struct {
+	// Protocol identifies the session wire protocol. The initial supported
+	// value is "openai-chat".
+	// +kubebuilder:validation:Enum=openai-chat
+	Protocol string `json:"protocol"`
+
+	// Port is the container and Service port on which the adapter listens.
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=65535
+	Port int32 `json:"port"`
 }
 
 // AgentRuntimeModel describes a runtime's default model routing.

@@ -53,3 +53,15 @@ func TestAgentRuntime_Validate_AllowsSupportedCapabilities(t *testing.T) {
 		t.Fatalf("validate(persona,toolFilter) returned reason %q", reason)
 	}
 }
+
+func TestAgentRuntime_Validate_RequiresSessionDescriptorForV1Alpha2(t *testing.T) {
+	runtime := runtimeSpec(runtimeTestImage)
+	runtime.Spec.ContractVersion = "v1alpha2"
+	if _, reason := (&AgentRuntimeReconciler{}).validate(runtime); reason == "" {
+		t.Fatal("v1alpha2 without session descriptor was accepted")
+	}
+	runtime.Spec.Session = &sympoziumv1alpha1.AgentRuntimeSession{Protocol: "openai-chat", Port: 8080}
+	if _, reason := (&AgentRuntimeReconciler{}).validate(runtime); reason != "" {
+		t.Fatalf("v1alpha2 session descriptor rejected: %s", reason)
+	}
+}

@@ -138,6 +138,10 @@ export interface AgentRuntime {
     image: string;
     contractVersion?: string;
     capabilities?: string[];
+    session?: {
+      protocol?: "openai-chat";
+      port?: number;
+    };
     supportOwner?: string;
     conformance?: {
       status?: string;
@@ -149,6 +153,27 @@ export interface AgentRuntime {
     resolvedImageDigest?: string;
     conditions?: Condition[];
   };
+}
+
+export interface HarnessSession {
+  metadata: ObjectMeta;
+  spec: {
+    agentRef: string;
+    runtimeRef: string;
+    desiredState?: "running" | "stopped";
+    idleTimeout?: string;
+  };
+  status?: {
+    phase?: "Pending" | "Ready" | "Draining" | "Failed";
+    resolvedImageDigest?: string;
+    serviceName?: string;
+    conditions?: Condition[];
+  };
+}
+
+export interface HarnessSessionChatResponse {
+  choices?: Array<{ message?: { role?: string; content?: string } }>;
+  error?: { message?: string };
 }
 
 // ── AgentRun ─────────────────────────────────────────────────────────────────
@@ -1305,6 +1330,16 @@ export const api = {
       apiFetch<InstallDefaultRuntimesResponse>("/api/v1/runtimes/install-defaults", {
         method: "POST",
       }),
+  },
+
+  harnessSessions: {
+    list: () => apiFetch<HarnessSession[]>("/api/v1/harness-sessions"),
+    create: (data: { name: string; agentRef: string; runtimeRef: string; idleTimeout?: string }) =>
+      apiFetch<HarnessSession>("/api/v1/harness-sessions", { method: "POST", body: JSON.stringify(data) }),
+    delete: (name: string) => apiFetch<void>(`/api/v1/harness-sessions/${name}`, { method: "DELETE" }),
+    chat: (name: string, message: string) => apiFetch<HarnessSessionChatResponse>(`/api/v1/harness-sessions/${name}/chat`, {
+      method: "POST", body: JSON.stringify({ messages: [{ role: "user", content: message }] }),
+    }),
   },
 
   policies: {

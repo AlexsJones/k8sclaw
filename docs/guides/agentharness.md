@@ -27,6 +27,56 @@ platform still controls:
 Normal AgentRuns are not replaced. Harness mode changes only the process that
 drives the agent loop; the surrounding AgentRun machinery remains the same.
 
+## Persistent interactive sessions (experimental)
+
+Most harness work remains deliberately one-shot: an `AgentRun` creates an
+isolated Job, records a terminal result, and exits. A `HarnessSession` is the
+separate opt-in path for a user who needs to keep an approved harness pod
+alive and interact with it over several turns. It does **not** keep a completed
+`AgentRun` alive or change its lifecycle.
+
+The feature is available only to an `AgentRuntime` that explicitly declares
+the `v1alpha2` `openai-chat` contract. The controller then creates a private
+Deployment and ClusterIP Service, waits for the adapter's `/healthz`, and the
+authenticated Sympozium API proxies chat requests. The browser never receives
+a pod IP, service URL, Kubernetes credential, or direct NATS access.
+
+```yaml
+apiVersion: sympozium.ai/v1alpha1
+kind: HarnessSession
+metadata:
+  name: analyst-session
+  namespace: default
+spec:
+  agentRef: analyst
+  runtimeRef: pi-session-v1
+  desiredState: running
+```
+
+In the UI, open **Agents → Harnesses**, select a session-capable runtime, then
+choose **Start interactive session**. Select the Agent whose credential
+allowlist should apply and give the session a name. Once its phase is `Ready`,
+choose **Open** to use the proxied chat panel. **Stop** deletes the private
+workload while retaining no browser-to-pod connection.
+
+The first reference adapter is Pi's experimental `v1alpha2` mode. It keeps
+Pi's own conversation file inside the session pod and serializes turns; it
+continues to disable tools, skills, and prompt templates. If the pod restarts,
+its ephemeral adapter conversation state is lost. Treat a session as a
+bounded interactive workspace, not durable Agent memory or a general exposed
+OpenAI gateway.
+
+For operators, the trust boundary is unchanged:
+
+- only a Ready, digest-pinned approved runtime can be selected;
+- the backing Agent must explicitly allow the model credential the runtime
+  requests;
+- model secret keys are injected individually from the existing allowlist;
+- the session pod has no service-account token, privilege escalation, or
+  writable root filesystem; and
+- only Sympozium's API server proxies the fixed `/v1/chat/completions` target,
+  with bounded requests/responses and redirects refused.
+
 <figure markdown="span">
   <img src="../assets/agentharness/lifecycle.svg" alt="AgentHarness lifecycle: approve a digest-pinned AgentRuntime, select it on an AgentRun, execute it in an isolated pod, then validate and record the result." width="1200">
   <figcaption>Approval precedes selection; every run still finishes through the normal AgentRun record.</figcaption>

@@ -1,10 +1,12 @@
 import { Link } from "react-router-dom";
-import { useRuntimes, useInstallDefaultRuntimes } from "@/hooks/use-api";
+import { useState } from "react";
+import { useAgents, useDeleteHarnessSession, useHarnessSessions, useRuntimes, useInstallDefaultRuntimes } from "@/hooks/use-api";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { ShieldCheck, ShieldX, ExternalLink, Download, Plus } from "lucide-react";
+import { ShieldCheck, ShieldX, ExternalLink, Download, Plus, MessageSquare, Square } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { HarnessSessionChatDialog, StartHarnessSessionDialog } from "@/components/harness-session-dialog";
 
 function ready(runtime: import("@/lib/api").AgentRuntime) {
   return runtime.status?.conditions?.some(
@@ -14,7 +16,12 @@ function ready(runtime: import("@/lib/api").AgentRuntime) {
 
 export function HarnessesPage() {
   const { data: runtimes, isLoading } = useRuntimes();
+  const { data: agents } = useAgents();
+  const { data: sessions } = useHarnessSessions();
   const installDefaults = useInstallDefaultRuntimes();
+  const stopSession = useDeleteHarnessSession();
+  const [startingRuntime, setStartingRuntime] = useState<import("@/lib/api").AgentRuntime | null>(null);
+  const [chattingSession, setChattingSession] = useState<import("@/lib/api").HarnessSession | null>(null);
 
   if (isLoading) {
     return <Skeleton className="h-64 w-full" />;
@@ -94,6 +101,7 @@ export function HarnessesPage() {
                     <Link to={`/agents?runtime=${encodeURIComponent(runtime.metadata.name)}&policy=harness-examples`} className="inline-flex items-center gap-1 text-blue-400 hover:text-blue-300">
                       <Plus className="h-3 w-3" /> Create Agent using this harness
                     </Link>
+                    {runtime.spec.contractVersion === "v1alpha2" && runtime.spec.session?.protocol === "openai-chat" && <Button variant="link" className="h-auto p-0 text-xs text-blue-400 hover:text-blue-300" onClick={() => setStartingRuntime(runtime)}><MessageSquare className="mr-1 h-3 w-3" /> Start interactive session</Button>}
                   </div>
                 </CardContent>
               </Card>
@@ -101,6 +109,13 @@ export function HarnessesPage() {
           })}
         </div>
       )}
+
+      {(sessions || []).length > 0 && <Card>
+        <CardHeader><CardTitle className="text-base">Interactive sessions</CardTitle></CardHeader>
+        <CardContent className="space-y-2">{sessions?.map((session) => <div key={session.metadata.name} className="flex items-center justify-between gap-3 border p-3 text-sm"><div><p className="font-mono">{session.metadata.name}</p><p className="text-xs text-muted-foreground">{session.spec.agentRef} · {session.spec.runtimeRef} · {session.status?.phase || "Pending"}</p></div><div className="flex gap-2">{session.status?.phase === "Ready" && <Button size="sm" onClick={() => setChattingSession(session)}><MessageSquare className="mr-2 h-4 w-4" /> Open</Button>}<Button size="sm" variant="outline" disabled={stopSession.isPending} onClick={() => stopSession.mutate(session.metadata.name)}><Square className="mr-2 h-3 w-3" /> Stop</Button></div></div>)}</CardContent>
+      </Card>}
+      {startingRuntime && <StartHarnessSessionDialog open={true} onOpenChange={(open) => { if (!open) setStartingRuntime(null); }} runtime={startingRuntime} agents={agents || []} />}
+      {chattingSession && <HarnessSessionChatDialog open={true} onOpenChange={(open) => { if (!open) setChattingSession(null); }} session={chattingSession} />}
     </div>
   );
 }

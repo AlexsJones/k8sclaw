@@ -83,6 +83,32 @@ export function useInstallDefaultRuntimes() {
   });
 }
 
+export function useHarnessSessions() {
+  return useQuery({ queryKey: ["harness-sessions"], queryFn: api.harnessSessions.list, refetchInterval: 3_000 });
+}
+
+export function useCreateHarnessSession() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: api.harnessSessions.create,
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ["harness-sessions"] }); toast.success("Interactive harness session started"); },
+    onError: toastError,
+  });
+}
+
+export function useDeleteHarnessSession() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: api.harnessSessions.delete,
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ["harness-sessions"] }); toast.success("Harness session stopped"); },
+    onError: toastError,
+  });
+}
+
+export function useHarnessSessionChat() {
+  return useMutation({ mutationFn: ({ name, message }: { name: string; message: string }) => api.harnessSessions.chat(name, message), onError: toastError });
+}
+
 export function useAgent(name: string) {
   return useQuery({
     queryKey: ["agents", name],
