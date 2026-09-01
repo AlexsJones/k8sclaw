@@ -1342,6 +1342,34 @@ export const api = {
     chat: (name: string, message: string) => apiFetch<HarnessSessionChatResponse>(`/api/v1/harness-sessions/${name}/chat`, {
       method: "POST", body: JSON.stringify({ messages: [{ role: "user", content: message }] }),
     }),
+    chatStream: async (name: string, message: string, onDelta: (content: string) => void) => {
+      const token = getToken();
+      const headers = new Headers({ "Content-Type": "application/json", Accept: "text/event-stream" });
+      if (token) headers.set("Authorization", `Bearer ${token.replace(/[^\x00-\xFF]/g, "")}`);
+      const response = await fetch(`/api/v1/harness-sessions/${name}/chat?namespace=${encodeURIComponent(getNamespace())}`, {
+        method: "POST", headers, body: JSON.stringify({ stream: true, messages: [{ role: "user", content: message }] }),
+      });
+      if (!response.ok) throw new Error((await response.text()) || `Chat failed (${response.status})`);
+      if (!response.body) throw new Error("The browser did not expose the chat stream");
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let pending = "";
+      for (;;) {
+        const { value, done } = await reader.read();
+        pending += decoder.decode(value, { stream: !done });
+        const events = pending.split("\n\n");
+        pending = events.pop() || "";
+        for (const event of events) {
+          const data = event.split("\n").find((line) => line.startsWith("data: "))?.slice(6);
+          if (!data || data === "[DONE]") continue;
+          const payload = JSON.parse(data) as { choices?: Array<{ delta?: { content?: string } }>; error?: { message?: string } };
+          if (payload.error?.message) throw new Error(payload.error.message);
+          const content = payload.choices?.[0]?.delta?.content;
+          if (content) onDelta(content);
+        }
+        if (done) return;
+      }
+    },
   },
 
   policies: {
