@@ -569,8 +569,9 @@ func readyRuntime(name string, capabilities ...string) *sympoziumv1alpha1.AgentR
 	rt := &sympoziumv1alpha1.AgentRuntime{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"},
 		Spec: sympoziumv1alpha1.AgentRuntimeSpec{
-			Image:        "ghcr.io/acme/my-harness@sha256:" + strings.Repeat("a", 64),
-			Capabilities: capabilities,
+			Image:           "ghcr.io/acme/my-harness@sha256:" + strings.Repeat("a", 64),
+			ContractVersion: HarnessContractVersion,
+			Capabilities:    capabilities,
 		},
 	}
 	meta.SetStatusCondition(&rt.Status.Conditions, metav1.Condition{
@@ -580,6 +581,26 @@ func readyRuntime(name string, capabilities ...string) *sympoziumv1alpha1.AgentR
 		Message: "spec validated",
 	})
 	return rt
+}
+
+func TestNormalizeHarnessTask_RejectsSessionRuntime(t *testing.T) {
+	runtime := readyRuntime("pi-session")
+	runtime.Spec.ContractVersion = "v1alpha2"
+	runtime.Spec.Session = &sympoziumv1alpha1.AgentRuntimeSession{Protocol: "openai-chat", Port: 8080}
+	task := &sympoziumv1alpha1.TaskSpec{
+		Mode:       Harness,
+		Parameters: map[string]string{harnessParamPrompt: "do it", harnessParamRuntime: runtime.Name},
+	}
+
+	_, err := NormalizeHarnessTask("default", task, func(_, _ string) (*sympoziumv1alpha1.AgentRuntime, error) {
+		return runtime, nil
+	})
+	if err == nil {
+		t.Fatal("NormalizeHarnessTask accepted a persistent-session runtime for a one-shot AgentRun")
+	}
+	if !strings.Contains(err.Error(), "start it as a HarnessSession") {
+		t.Fatalf("error = %q, want HarnessSession guidance", err)
+	}
 }
 
 func TestNormalizeHarnessTask_ResolvesRuntimeIntoInlineForm(t *testing.T) {
