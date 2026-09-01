@@ -115,13 +115,46 @@ func (r *HarnessSessionReconciler) resolveInputs(ctx context.Context, session *s
 	if runtime.Spec.ContractVersion != "v1alpha2" || runtime.Spec.Session == nil || runtime.Spec.Session.Protocol != "openai-chat" || runtime.Spec.Session.Port == 0 {
 		return nil, nil, fmt.Sprintf("AgentRuntime %q does not declare the v1alpha2 openai-chat session contract", runtime.Name)
 	}
-	if runtime.Spec.Model == nil || strings.TrimSpace(runtime.Spec.Model.Provider) == "" || strings.TrimSpace(runtime.Spec.Model.Model) == "" {
-		return nil, nil, fmt.Sprintf("AgentRuntime %q must declare spec.model.provider and spec.model.model for sessions", runtime.Name)
+	model, modelReason := resolveSessionModel(agent, runtime)
+	if modelReason != "" {
+		return nil, nil, modelReason
 	}
-	if !agentAllowsModelCredential(agent, runtime.Spec.Model.Provider, runtime.Spec.Model.AuthSecretRef) {
-		return nil, nil, fmt.Sprintf("Agent %q does not allow runtime model credential %q for provider %q", agent.Name, runtime.Spec.Model.AuthSecretRef, runtime.Spec.Model.Provider)
+	// This is an in-memory resolved copy, not a mutation of the admin-owned
+	// AgentRuntime. The Agent remains the owner of the default model route and
+	// credential allowlist when the runtime deliberately leaves model blank.
+	runtime.Spec.Model = model
+	if !agentAllowsModelCredential(agent, model.Provider, model.AuthSecretRef) {
+		return nil, nil, fmt.Sprintf("Agent %q does not allow runtime model credential %q for provider %q", agent.Name, model.AuthSecretRef, model.Provider)
 	}
 	return agent, runtime, ""
+}
+
+func resolveSessionModel(agent *sympoziumv1alpha1.Agent, runtime *sympoziumv1alpha1.AgentRuntime) (*sympoziumv1alpha1.AgentRuntimeModel, string) {
+	model := &sympoziumv1alpha1.AgentRuntimeModel{}
+	if runtime.Spec.Model != nil {
+		*model = *runtime.Spec.Model
+	}
+	if model.Model == "" {
+		model.Model = agent.Spec.Agents.Default.Model
+	}
+	if model.BaseURL == "" {
+		model.BaseURL = agent.Spec.Agents.Default.BaseURL
+	}
+	if model.Provider == "" && len(agent.Spec.AuthRefs) == 1 {
+		model.Provider = agent.Spec.AuthRefs[0].Provider
+	}
+	if model.AuthSecretRef == "" {
+		for _, ref := range agent.Spec.AuthRefs {
+			if ref.Provider == "" || strings.EqualFold(ref.Provider, model.Provider) {
+				model.AuthSecretRef = ref.Secret
+				break
+			}
+		}
+	}
+	if strings.TrimSpace(model.Provider) == "" || strings.TrimSpace(model.Model) == "" {
+		return nil, fmt.Sprintf("AgentRuntime %q needs spec.model.provider/model, or an Agent with exactly one provider credential and a default model", runtime.Name)
+	}
+	return model, ""
 }
 
 func sessionWorkloadName(session *sympoziumv1alpha1.HarnessSession) string {
