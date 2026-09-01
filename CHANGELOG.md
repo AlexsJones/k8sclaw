@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.10.52](https://github.com/sympozium-ai/sympozium/compare/v0.10.51...v0.10.52) (2026-09-01)
+
+
+### Features
+
+* add persistent HarnessSession lifecycle ([#395](https://github.com/sympozium-ai/sympozium/issues/395)) ([4019702](https://github.com/sympozium-ai/sympozium/commit/40197029b8f6218ee74119faecb6b74deba9f0f3))
+* **cli:** add dashboard token command ([#388](https://github.com/sympozium-ai/sympozium/issues/388)) ([fb8eeea](https://github.com/sympozium-ai/sympozium/commit/fb8eeea41b7884d6e188478ca059e48de9530165))
+* **harness:** install maintained adapter catalog ([093d0ff](https://github.com/sympozium-ai/sympozium/commit/093d0ff89f0a1f68f9970217a8c26519df7799ba))
+* **harness:** install maintained adapter catalog ([ace6e60](https://github.com/sympozium-ai/sympozium/commit/ace6e60c62f9fa11191c49235e87629a065702fd))
+* install Pi persistent session runtime by default ([#398](https://github.com/sympozium-ai/sympozium/issues/398)) ([945ec14](https://github.com/sympozium-ai/sympozium/commit/945ec149f9eff4d60abb5cf718843a931802ce80))
+* make harness execution a first-class Agent flow ([#391](https://github.com/sympozium-ai/sympozium/issues/391)) ([2bb0fd7](https://github.com/sympozium-ai/sympozium/commit/2bb0fd73e3e9ef43c6be7ff58b445335590256bd))
+* make persistent harness chat agent-first ([#399](https://github.com/sympozium-ai/sympozium/issues/399)) ([718ccf5](https://github.com/sympozium-ai/sympozium/commit/718ccf59aa359cdc3a83c6467d8dec9de0abf9df))
+* make persistent harness chat resumable ([#400](https://github.com/sympozium-ai/sympozium/issues/400)) ([4a27062](https://github.com/sympozium-ai/sympozium/commit/4a27062d846330be0d1f4a12c9a97f03ef58bbd2))
+* stream persistent harness chat responses ([#403](https://github.com/sympozium-ai/sympozium/issues/403)) ([5a4c832](https://github.com/sympozium-ai/sympozium/commit/5a4c8322e5954c47f452ebfb6bca1aef23cab7a2))
+
 ## [0.10.51](https://github.com/sympozium-ai/sympozium/compare/v0.10.50...v0.10.51) (2026-08-31)
 
 
