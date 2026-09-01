@@ -144,6 +144,12 @@ func (s *Server) buildMux(frontendFS fs.FS, expected *tokenReader) http.Handler 
 	// Administrator-approved harness runtimes
 	mux.HandleFunc("GET /api/v1/runtimes", s.listRuntimes)
 	mux.HandleFunc("POST /api/v1/runtimes/install-defaults", s.installDefaultRuntimes)
+	// Persistent harness sessions. The API server owns the only browser-facing
+	// route to a session's private in-cluster Service.
+	mux.HandleFunc("GET /api/v1/harness-sessions", s.listHarnessSessions)
+	mux.HandleFunc("POST /api/v1/harness-sessions", s.createHarnessSession)
+	mux.HandleFunc("DELETE /api/v1/harness-sessions/{name}", s.deleteHarnessSession)
+	mux.HandleFunc("POST /api/v1/harness-sessions/{name}/chat", s.chatHarnessSession)
 
 	// Run endpoints
 	mux.HandleFunc("GET /api/v1/runs", s.listRuns)

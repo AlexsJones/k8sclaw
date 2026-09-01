@@ -143,6 +143,7 @@ func (r *HarnessSessionReconciler) reconcileDeployment(ctx context.Context, sess
 			Resources:       corev1.ResourceRequirements{},
 			Env: []corev1.EnvVar{
 				{Name: "SYMPOZIUM_HARNESS_CONTRACT_VERSION", Value: "v1alpha2"},
+				{Name: "SYMPOZIUM_SESSION_PORT", Value: fmt.Sprintf("%d", runtime.Spec.Session.Port)},
 				{Name: "MODEL_PROVIDER", Value: runtime.Spec.Model.Provider}, {Name: "MODEL_NAME", Value: runtime.Spec.Model.Model}, {Name: "MODEL_BASE_URL", Value: runtime.Spec.Model.BaseURL},
 				{Name: "HOME", Value: "/tmp/home"}, {Name: "XDG_CONFIG_HOME", Value: "/tmp/config"}, {Name: "XDG_CACHE_HOME", Value: "/tmp/cache"},
 			},

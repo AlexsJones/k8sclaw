@@ -41,6 +41,7 @@ rules:
     resources:
       - agents
       - agentruntimes
+      - harnesssessions
       - agentruns
       - sympoziumpolicies
       - skillpacks
@@ -54,6 +55,7 @@ rules:
     resources:
       - agents/status
       - agentruntimes/status
+      - harnesssessions/status
       - agentruns/status
       - sympoziumpolicies/status
       - skillpacks/status
@@ -208,6 +210,7 @@ rules:
     resources:
       - agents
       - agentruntimes
+      - harnesssessions
       - agentruns
       - sympoziumpolicies
       - skillpacks
@@ -222,6 +225,7 @@ rules:
     resources:
       - agents/status
       - agentruntimes/status
+      - harnesssessions/status
       - agentruns/status
       - sympoziumpolicies/status
       - ensembles/status
