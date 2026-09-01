@@ -121,6 +121,13 @@ export function useHarnessSessionChat() {
   return useMutation({ mutationFn: ({ name, message }: { name: string; message: string }) => api.harnessSessions.chat(name, message), onError: toastError });
 }
 
+export function useHarnessSessionChatStream() {
+  return useMutation({
+    mutationFn: ({ name, message, onDelta }: { name: string; message: string; onDelta: (content: string) => void }) => api.harnessSessions.chatStream(name, message, onDelta),
+    onError: toastError,
+  });
+}
+
 export function useAgent(name: string) {
   return useQuery({
     queryKey: ["agents", name],

@@ -41,6 +41,21 @@ type PatchHarnessSessionRequest struct {
 	DesiredState string `json:"desiredState"`
 }
 
+// flushingWriter prevents a buffering proxy from turning adapter SSE into a
+// delayed, completed response. The adapter is still constrained by the same
+// fixed target, timeout, and response-size limit as non-streaming chat.
+type flushingWriter struct {
+	w http.ResponseWriter
+}
+
+func (w flushingWriter) Write(data []byte) (int, error) {
+	n, err := w.w.Write(data)
+	if flusher, ok := w.w.(http.Flusher); ok {
+		flusher.Flush()
+	}
+	return n, err
+}
+
 func requestNamespace(r *http.Request) string {
 	if ns := r.URL.Query().Get("namespace"); ns != "" {
 		return ns
@@ -178,6 +193,20 @@ func (s *Server) chatHarnessSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer response.Body.Close()
+	if strings.HasPrefix(response.Header.Get("Content-Type"), "text/event-stream") {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.Header().Set("X-Accel-Buffering", "no")
+		w.WriteHeader(response.StatusCode)
+		written, copyErr := io.Copy(flushingWriter{w}, io.LimitReader(response.Body, 2_000_001))
+		if copyErr != nil {
+			return
+		}
+		if written > 2_000_000 {
+			s.log.Info("harness session stream exceeded response limit", "session", name)
+		}
+		return
+	}
 	responseBody, err := io.ReadAll(io.LimitReader(response.Body, 2_000_001))
 	if err != nil {
 		http.Error(w, "could not read session response", http.StatusBadGateway)
