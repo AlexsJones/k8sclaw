@@ -96,8 +96,9 @@ jobs:
     runs-on: ubuntu-latest
     needs: [changes, verify]
     if: >-
-      (github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.changes.outputs.code == 'true') ||
-      github.event_name == 'workflow_dispatch'
+      always() && needs.verify.result == 'success' &&
+      ((github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.changes.outputs.code == 'true') ||
+      github.event_name == 'workflow_dispatch')
     strategy:
       matrix:
         image:
