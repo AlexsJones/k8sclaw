@@ -53,6 +53,16 @@ func (r *HarnessSessionReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		}
 		return ctrl.Result{}, err
 	}
+	if session.Spec.IdleTimeout != nil && session.Status.Phase == "Ready" && session.Status.ActiveRequests == 0 && session.Status.LastActivityTime != nil && time.Since(session.Status.LastActivityTime.Time) >= session.Spec.IdleTimeout.Duration {
+		session.Spec.DesiredState = "stopped"
+		if err := r.Update(ctx, &session); err != nil {
+			return ctrl.Result{}, err
+		}
+		if err := r.deleteWorkload(ctx, &session); err != nil {
+			return ctrl.Result{}, err
+		}
+		return r.setStatus(ctx, &session, "Draining", "IdleTimeout", "session stopped after its configured idle timeout", "", "", "")
+	}
 
 	if session.Spec.DesiredState == "stopped" {
 		if err := r.deleteWorkload(ctx, &session); err != nil {
@@ -87,11 +97,26 @@ func (r *HarnessSessionReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	phase, conditionStatus, conditionReason, message := "Pending", metav1.ConditionFalse, "WaitingForDeployment", "waiting for session deployment to become ready"
 	if deployment.Status.ReadyReplicas > 0 {
 		phase, conditionStatus, conditionReason, message = "Ready", metav1.ConditionTrue, "DeploymentReady", "session endpoint is ready for proxied requests"
+		if session.Status.LastActivityTime == nil {
+			now := metav1.Now()
+			session.Status.LastActivityTime = &now
+			session.Status.UsageAccounting = "unavailable"
+		}
 	}
 	endpoint := fmt.Sprintf("http://%s.%s.svc:%d", sessionWorkloadName(&session), session.Namespace, runtime.Spec.Session.Port)
 	result, err := r.setStatusWithCondition(ctx, &session, phase, conditionStatus, conditionReason, message, runtime.Status.ResolvedImageDigest, sessionWorkloadName(&session), endpoint)
-	if err != nil || phase == "Ready" {
+	if err != nil {
 		return result, err
+	}
+	if phase == "Ready" {
+		if session.Spec.IdleTimeout != nil && session.Status.LastActivityTime != nil {
+			remaining := time.Until(session.Status.LastActivityTime.Add(session.Spec.IdleTimeout.Duration))
+			if remaining < time.Second {
+				remaining = time.Second
+			}
+			return ctrl.Result{RequeueAfter: remaining}, nil
+		}
+		return result, nil
 	}
 	return ctrl.Result{RequeueAfter: 2 * time.Second}, nil
 }

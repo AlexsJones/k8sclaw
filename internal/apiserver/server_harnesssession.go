@@ -2,6 +2,7 @@ package apiserver
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -9,9 +10,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	sympoziumv1alpha1 "github.com/sympozium-ai/sympozium/api/v1alpha1"
@@ -155,7 +158,7 @@ func (s *Server) chatHarnessSession(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	if session.Status.Phase != "Ready" || session.Status.ServiceName != name {
+	if session.Spec.DesiredState != "running" || session.Status.Phase != "Ready" || session.Status.ServiceName != name {
 		http.Error(w, "HarnessSession is not ready", http.StatusConflict)
 		return
 	}
@@ -168,6 +171,21 @@ func (s *Server) chatHarnessSession(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "session runtime does not support proxied chat", http.StatusConflict)
 		return
 	}
+	requestID := uuid.NewString()
+	startedAt := metav1.Now()
+	w.Header().Set("X-Sympozium-Request-ID", requestID)
+	s.log.Info("harness session request started", "session", types.NamespacedName{Namespace: ns, Name: name}, "requestID", requestID)
+	s.recordHarnessSessionRequest(r.Context(), ns, name, requestID, "started", startedAt, true)
+	requestState := "failed"
+	defer func() {
+		if r.Context().Err() != nil {
+			requestState = "cancelled"
+		}
+		auditContext, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 5*time.Second)
+		defer cancel()
+		s.recordHarnessSessionRequest(auditContext, ns, name, requestID, requestState, metav1.Now(), false)
+		s.log.Info("harness session request completed", "session", types.NamespacedName{Namespace: ns, Name: name}, "requestID", requestID, "state", requestState, "duration", time.Since(startedAt.Time))
+	}()
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 1_048_576))
 	if err != nil {
 		http.Error(w, "invalid chat request: "+err.Error(), http.StatusBadRequest)
@@ -205,6 +223,9 @@ func (s *Server) chatHarnessSession(w http.ResponseWriter, r *http.Request) {
 		if written > 2_000_000 {
 			s.log.Info("harness session stream exceeded response limit", "session", name)
 		}
+		if response.StatusCode < http.StatusBadRequest {
+			requestState = "succeeded"
+		}
 		return
 	}
 	responseBody, err := io.ReadAll(io.LimitReader(response.Body, 2_000_001))
@@ -219,4 +240,39 @@ func (s *Server) chatHarnessSession(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(response.StatusCode)
 	_, _ = w.Write(responseBody)
+	if response.StatusCode < http.StatusBadRequest {
+		requestState = "succeeded"
+	}
+}
+
+func (s *Server) recordHarnessSessionRequest(ctx context.Context, namespace, name, requestID, state string, at metav1.Time, started bool) {
+	err := retry.RetryOnConflict(retry.DefaultBackoff, func() error {
+		var session sympoziumv1alpha1.HarnessSession
+		if err := s.client.Get(ctx, types.NamespacedName{Namespace: namespace, Name: name}, &session); err != nil {
+			return err
+		}
+		before := session.DeepCopy()
+		session.Status.LastActivityTime = &at
+		session.Status.LastRequestID = requestID
+		session.Status.LastRequestState = state
+		session.Status.UsageAccounting = "unavailable"
+		if started {
+			session.Status.RequestCount++
+			session.Status.ActiveRequests++
+			session.Status.LastRequestStartedAt = &at
+			session.Status.LastRequestCompletedAt = nil
+		} else {
+			if session.Status.ActiveRequests > 0 {
+				session.Status.ActiveRequests--
+			}
+			session.Status.LastRequestCompletedAt = &at
+			if state == "failed" || state == "cancelled" {
+				session.Status.ErrorCount++
+			}
+		}
+		return s.client.Status().Patch(ctx, &session, client.MergeFrom(before))
+	})
+	if err != nil && !k8serrors.IsNotFound(err) {
+		s.log.Error(err, "could not record harness session request", "session", types.NamespacedName{Namespace: namespace, Name: name}, "requestID", requestID, "state", state)
+	}
 }

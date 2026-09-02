@@ -45,10 +45,8 @@ type HarnessSessionSpec struct {
 	// +optional
 	DesiredState string `json:"desiredState,omitempty"`
 
-	// IdleTimeout is reserved for the API proxy to record activity and for the
-	// controller to stop idle sessions. It is not activated until the proxy
-	// activity endpoint lands; this avoids silently timing out sessions before
-	// there is a trustworthy activity signal.
+	// IdleTimeout stops the session workload after this period without an active
+	// authenticated chat request. The PVC and HarnessSession are preserved.
 	// +optional
 	IdleTimeout *metav1.Duration `json:"idleTimeout,omitempty"`
 }
@@ -71,6 +69,40 @@ type HarnessSessionStatus struct {
 	// status/audit information, not a browser-facing endpoint.
 	// +optional
 	Endpoint string `json:"endpoint,omitempty"`
+
+	// LastActivityTime is updated when an authenticated chat starts or completes.
+	// +optional
+	LastActivityTime *metav1.Time `json:"lastActivityTime,omitempty"`
+
+	// RequestCount is the number of chat requests accepted by the API proxy.
+	// +optional
+	RequestCount int64 `json:"requestCount,omitempty"`
+
+	// ActiveRequests prevents idle timeout from stopping in-flight model work.
+	// +optional
+	ActiveRequests int32 `json:"activeRequests,omitempty"`
+
+	// ErrorCount is the number of requests that failed or were cancelled.
+	// +optional
+	ErrorCount int64 `json:"errorCount,omitempty"`
+
+	// LastRequestID is returned to the caller in X-Sympozium-Request-ID.
+	// +optional
+	LastRequestID string `json:"lastRequestID,omitempty"`
+
+	// LastRequestState is started, succeeded, failed, or cancelled.
+	// +optional
+	LastRequestState string `json:"lastRequestState,omitempty"`
+
+	// LastRequestStartedAt and LastRequestCompletedAt bound the latest request.
+	// +optional
+	LastRequestStartedAt *metav1.Time `json:"lastRequestStartedAt,omitempty"`
+	// +optional
+	LastRequestCompletedAt *metav1.Time `json:"lastRequestCompletedAt,omitempty"`
+
+	// UsageAccounting is unavailable until adapters report trustworthy usage.
+	// +optional
+	UsageAccounting string `json:"usageAccounting,omitempty"`
 
 	// Conditions represent the latest observations.
 	// +optional

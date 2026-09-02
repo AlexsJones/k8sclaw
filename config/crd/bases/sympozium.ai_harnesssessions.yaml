@@ -71,10 +71,8 @@ spec:
                 type: string
               idleTimeout:
                 description: |-
-                  IdleTimeout is reserved for the API proxy to record activity and for the
-                  controller to stop idle sessions. It is not activated until the proxy
-                  activity endpoint lands; this avoids silently timing out sessions before
-                  there is a trustworthy activity signal.
+                  IdleTimeout stops the session workload after this period without an active
+                  authenticated chat request. The PVC and HarnessSession are preserved.
                 type: string
               runtimeRef:
                 description: |-
@@ -89,6 +87,11 @@ spec:
             description: HarnessSessionStatus is the observed lifecycle and immutable
               provenance.
             properties:
+              activeRequests:
+                description: ActiveRequests prevents idle timeout from stopping in-flight
+                  model work.
+                format: int32
+                type: integer
               conditions:
                 description: Conditions represent the latest observations.
                 items:
@@ -151,9 +154,38 @@ spec:
                   Endpoint is an internal-only URL for the Sympozium API server. It is
                   status/audit information, not a browser-facing endpoint.
                 type: string
+              errorCount:
+                description: ErrorCount is the number of requests that failed or were
+                  cancelled.
+                format: int64
+                type: integer
+              lastActivityTime:
+                description: LastActivityTime is updated when an authenticated chat
+                  starts or completes.
+                format: date-time
+                type: string
+              lastRequestCompletedAt:
+                format: date-time
+                type: string
+              lastRequestID:
+                description: LastRequestID is returned to the caller in X-Sympozium-Request-ID.
+                type: string
+              lastRequestStartedAt:
+                description: LastRequestStartedAt and LastRequestCompletedAt bound
+                  the latest request.
+                format: date-time
+                type: string
+              lastRequestState:
+                description: LastRequestState is started, succeeded, failed, or cancelled.
+                type: string
               phase:
                 description: Phase is Pending, Ready, Draining, or Failed.
                 type: string
+              requestCount:
+                description: RequestCount is the number of chat requests accepted
+                  by the API proxy.
+                format: int64
+                type: integer
               resolvedImageDigest:
                 description: ResolvedImageDigest records the exact adapter image selected
                   at creation.
@@ -161,6 +193,10 @@ spec:
               serviceName:
                 description: ServiceName is the private in-namespace Service owned
                   by this session.
+                type: string
+              usageAccounting:
+                description: UsageAccounting is unavailable until adapters report
+                  trustworthy usage.
                 type: string
             type: object
         type: object

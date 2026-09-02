@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -122,6 +123,59 @@ func TestHarnessSessionStopPreservesDurableState(t *testing.T) {
 	}
 	if err := cl.Get(context.Background(), key, &deployment); err == nil {
 		t.Fatal("stopping a session did not remove its Deployment")
+	}
+}
+
+func TestHarnessSessionIdleTimeoutStopsWorkloadButPreservesState(t *testing.T) {
+	scheme := harnessSessionTestScheme(t)
+	lastActivity := metav1.NewTime(time.Now().Add(-2 * time.Hour))
+	session := &sympoziumv1alpha1.HarnessSession{
+		ObjectMeta: metav1.ObjectMeta{Name: "idle-session", Namespace: "default"},
+		Spec:       sympoziumv1alpha1.HarnessSessionSpec{DesiredState: "running", IdleTimeout: &metav1.Duration{Duration: time.Hour}},
+		Status:     sympoziumv1alpha1.HarnessSessionStatus{Phase: "Ready", LastActivityTime: &lastActivity},
+	}
+	claim := &corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{Name: session.Name, Namespace: session.Namespace}}
+	deployment := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: session.Name, Namespace: session.Namespace}}
+	cl := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(session).WithObjects(session, claim, deployment).Build()
+	r := &HarnessSessionReconciler{Client: cl, Scheme: scheme}
+	key := types.NamespacedName{Name: session.Name, Namespace: session.Namespace}
+	if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: key}); err != nil {
+		t.Fatal(err)
+	}
+	var got sympoziumv1alpha1.HarnessSession
+	if err := cl.Get(context.Background(), key, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Spec.DesiredState != "stopped" || got.Status.Phase != "Draining" || got.Status.Conditions[0].Reason != "IdleTimeout" {
+		t.Fatalf("idle session was not stopped with an actionable reason: %#v", got)
+	}
+	if err := cl.Get(context.Background(), key, claim); err != nil {
+		t.Fatalf("idle timeout deleted durable state: %v", err)
+	}
+	if err := cl.Get(context.Background(), key, deployment); err == nil {
+		t.Fatal("idle timeout retained the Deployment")
+	}
+}
+
+func TestHarnessSessionIdleTimeoutDoesNotStopActiveRequest(t *testing.T) {
+	scheme := harnessSessionTestScheme(t)
+	lastActivity := metav1.NewTime(time.Now().Add(-2 * time.Hour))
+	session := &sympoziumv1alpha1.HarnessSession{
+		ObjectMeta: metav1.ObjectMeta{Name: "active-session", Namespace: "default"},
+		Spec:       sympoziumv1alpha1.HarnessSessionSpec{DesiredState: "running", IdleTimeout: &metav1.Duration{Duration: time.Hour}},
+		Status:     sympoziumv1alpha1.HarnessSessionStatus{Phase: "Ready", LastActivityTime: &lastActivity, ActiveRequests: 1},
+	}
+	cl := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(session).WithObjects(session).Build()
+	r := &HarnessSessionReconciler{Client: cl, Scheme: scheme}
+	// Input resolution fails because this focused fixture omits Agent and
+	// Runtime, but the idle-timeout branch must not change desired state.
+	_, _ = r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: session.Name, Namespace: session.Namespace}})
+	var got sympoziumv1alpha1.HarnessSession
+	if err := cl.Get(context.Background(), types.NamespacedName{Name: session.Name, Namespace: session.Namespace}, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Spec.DesiredState != "running" {
+		t.Fatal("idle timeout stopped an active request")
 	}
 }
 
