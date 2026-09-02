@@ -189,8 +189,9 @@ func (r *AgentRunReconciler) buildSkillToolsContainer(agentRun *sympoziumv1alpha
 	}
 }
 
-// mountHarnessMCPRegistry gives a replaced agent container the MCP server
-// registry and the credentials for it.
+// mountHarnessMCPRegistry gives a replaced agent container only the trusted
+// loopback SkillPack MCP registry. Remote MCP servers are rejected for harness
+// runs, so this function never injects their credentials.
 //
 // It gets the JSON rendering, not the YAML one the mcp-bridge reads: the
 // adapter is a shell script, and asking it to parse YAML would mean either a
@@ -198,7 +199,7 @@ func (r *AgentRunReconciler) buildSkillToolsContainer(agentRun *sympoziumv1alpha
 // carries auth material. The per-server tokens come with it — without them a
 // registry entry naming an authSecret would connect unauthenticated and fail at
 // the first tool call.
-func mountHarnessMCPRegistry(agent *corev1.Container, mcpAuthEnv []corev1.EnvVar) {
+func mountHarnessMCPRegistry(agent *corev1.Container) {
 	agent.VolumeMounts = append(agent.VolumeMounts, corev1.VolumeMount{
 		Name:      "mcp-config",
 		MountPath: "/config/mcp",
@@ -207,5 +208,4 @@ func mountHarnessMCPRegistry(agent *corev1.Container, mcpAuthEnv []corev1.EnvVar
 	agent.Env = append(agent.Env,
 		corev1.EnvVar{Name: "MCP_CONFIG_PATH", Value: "/config/mcp/mcp-servers.json"},
 	)
-	agent.Env = append(agent.Env, mcpAuthEnv...)
 }

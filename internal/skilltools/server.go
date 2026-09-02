@@ -28,8 +28,10 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
+	"github.com/santhosh-tekuri/jsonschema/v6"
 	"github.com/sympozium-ai/sympozium/internal/mcpbridge"
 	"github.com/sympozium-ai/sympozium/pkg/sidecartools"
 )
@@ -47,6 +49,12 @@ const ServerName = "sympozium-skills"
 
 // resultPollInterval is how often a pending exec result is checked for.
 const resultPollInterval = 100 * time.Millisecond
+
+const (
+	defaultMaxRequestBytes = 1 << 20
+	defaultMaxOutputBytes  = 1 << 20
+	defaultMaxConcurrent   = 4
+)
 
 // Config is everything the server needs, all of it controller-supplied. None of
 // it comes from the agent, which is the point: the policy this server enforces
@@ -68,13 +76,34 @@ type Config struct {
 	// LoadTimeout is how long to wait for the manifest mount. Zero means
 	// sidecartools.DefaultLoadTimeout.
 	LoadTimeout time.Duration
+	// MaxRequestBytes, MaxOutputBytes, and MaxConcurrent bound untrusted MCP
+	// clients. Zero selects the conservative defaults above.
+	MaxRequestBytes int64
+	MaxOutputBytes  int64
+	MaxConcurrent   int
 }
 
 // Server serves the permitted SkillPack tools over MCP.
 type Server struct {
-	cfg   Config
-	tools map[string]sidecartools.Tool
-	order []string
+	cfg     Config
+	tools   map[string]sidecartools.Tool
+	order   []string
+	schemas map[string]*jsonschema.Schema
+	sem     chan struct{}
+}
+
+type rpcRequest struct {
+	JSONRPC string          `json:"jsonrpc"`
+	ID      json.RawMessage `json:"id,omitempty"`
+	Method  string          `json:"method"`
+	Params  any             `json:"params,omitempty"`
+}
+
+type rpcResponse struct {
+	JSONRPC string                  `json:"jsonrpc"`
+	ID      json.RawMessage         `json:"id"`
+	Result  json.RawMessage         `json:"result,omitempty"`
+	Error   *mcpbridge.JSONRPCError `json:"error,omitempty"`
 }
 
 // NewServer loads the manifest, applies the tool policy once at startup, and
@@ -90,6 +119,15 @@ func NewServer(cfg Config) (*Server, error) {
 	if cfg.ExecTimeout <= 0 {
 		cfg.ExecTimeout = sidecartools.DefaultExecTimeout * time.Second
 	}
+	if cfg.MaxRequestBytes <= 0 {
+		cfg.MaxRequestBytes = defaultMaxRequestBytes
+	}
+	if cfg.MaxOutputBytes <= 0 {
+		cfg.MaxOutputBytes = defaultMaxOutputBytes
+	}
+	if cfg.MaxConcurrent <= 0 {
+		cfg.MaxConcurrent = defaultMaxConcurrent
+	}
 
 	manifest, err := sidecartools.LoadManifest(cfg.ManifestPath, cfg.LoadTimeout)
 	if err != nil {
@@ -98,12 +136,26 @@ func NewServer(cfg Config) (*Server, error) {
 
 	permitted := sidecartools.FilterByPolicy(manifest.Tools, cfg.ToolPolicyAllow, cfg.ToolPolicyDeny)
 	s := &Server{
-		cfg:   cfg,
-		tools: make(map[string]sidecartools.Tool, len(permitted)),
+		cfg:     cfg,
+		tools:   make(map[string]sidecartools.Tool, len(permitted)),
+		schemas: make(map[string]*jsonschema.Schema, len(permitted)),
+		sem:     make(chan struct{}, cfg.MaxConcurrent),
 	}
 	for _, t := range permitted {
 		s.tools[t.Name] = t
 		s.order = append(s.order, t.Name)
+		if t.Parameters != nil {
+			compiler := jsonschema.NewCompiler()
+			url := "urn:sympozium:skill-tool:" + t.Name
+			if err := compiler.AddResource(url, t.Parameters); err != nil {
+				return nil, fmt.Errorf("tool %s input schema: %w", t.Name, err)
+			}
+			sch, err := compiler.Compile(url)
+			if err != nil {
+				return nil, fmt.Errorf("tool %s input schema: %w", t.Name, err)
+			}
+			s.schemas[t.Name] = sch
+		}
 	}
 
 	log.Printf("skill-tools: serving %d of %d tool(s) after spec.toolPolicy (allow=%q deny=%q)",
@@ -122,6 +174,9 @@ func (s *Server) Run(ctx context.Context) error {
 		Addr:              s.cfg.Addr,
 		Handler:           mux,
 		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       10 * time.Second,
+		IdleTimeout:       30 * time.Second,
+		MaxHeaderBytes:    16 << 10,
 	}
 
 	errCh := make(chan error, 1)
@@ -143,16 +198,35 @@ func (s *Server) Run(ctx context.Context) error {
 }
 
 func (s *Server) handleJSONRPC(w http.ResponseWriter, r *http.Request) {
-	var req mcpbridge.JSONRPCRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if origin := strings.TrimSpace(r.Header.Get("Origin")); origin != "" {
+		http.Error(w, "Origin is not allowed on the loopback MCP endpoint", http.StatusForbidden)
+		return
+	}
+	if contentType := r.Header.Get("Content-Type"); contentType != "" && !strings.HasPrefix(strings.ToLower(contentType), "application/json") {
+		http.Error(w, "Content-Type must be application/json", http.StatusUnsupportedMediaType)
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, s.cfg.MaxRequestBytes)
+	var req rpcRequest
+	dec := json.NewDecoder(r.Body)
+	dec.UseNumber()
+	if err := dec.Decode(&req); err != nil {
 		writeError(w, nil, -32700, "parse error")
+		return
+	}
+	if req.JSONRPC != "2.0" || req.Method == "" {
+		writeError(w, req.ID, -32600, "invalid request")
+		return
+	}
+	if !validRPCID(req.ID) {
+		writeError(w, nil, -32600, "id must be a string, number, or null")
 		return
 	}
 
 	switch req.Method {
 	case "initialize":
 		caps := json.RawMessage(`{"tools":{}}`)
-		writeResult(w, &req.ID, mcpbridge.MCPInitializeResult{
+		writeResult(w, req.ID, mcpbridge.MCPInitializeResult{
 			ProtocolVersion: protocolVersion,
 			Capabilities:    caps,
 			ServerInfo: mcpbridge.MCPImplementation{
@@ -166,16 +240,34 @@ func (s *Server) handleJSONRPC(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusAccepted)
 
 	case "tools/list":
-		writeResult(w, &req.ID, mcpbridge.MCPToolsListResult{Tools: s.listTools()})
+		writeResult(w, req.ID, mcpbridge.MCPToolsListResult{Tools: s.listTools()})
 
 	case "tools/call":
 		s.handleToolCall(w, r.Context(), &req)
 
 	case "ping":
-		writeResult(w, &req.ID, struct{}{})
+		writeResult(w, req.ID, struct{}{})
 
 	default:
-		writeError(w, &req.ID, -32601, fmt.Sprintf("method not found: %s", req.Method))
+		writeError(w, req.ID, -32601, fmt.Sprintf("method not found: %s", req.Method))
+	}
+}
+
+func validRPCID(id json.RawMessage) bool {
+	if len(id) == 0 || string(id) == "null" {
+		return true
+	}
+	var value any
+	dec := json.NewDecoder(strings.NewReader(string(id)))
+	dec.UseNumber()
+	if err := dec.Decode(&value); err != nil {
+		return false
+	}
+	switch value.(type) {
+	case string, json.Number:
+		return true
+	default:
+		return false
 	}
 }
 
@@ -199,15 +291,22 @@ func (s *Server) listTools() []mcpbridge.MCPTool {
 	return out
 }
 
-func (s *Server) handleToolCall(w http.ResponseWriter, ctx context.Context, req *mcpbridge.JSONRPCRequest) {
+func (s *Server) handleToolCall(w http.ResponseWriter, ctx context.Context, req *rpcRequest) {
+	select {
+	case s.sem <- struct{}{}:
+		defer func() { <-s.sem }()
+	default:
+		writeError(w, req.ID, -32000, "too many concurrent tool calls")
+		return
+	}
 	raw, err := json.Marshal(req.Params)
 	if err != nil {
-		writeError(w, &req.ID, -32602, "invalid params")
+		writeError(w, req.ID, -32602, "invalid params")
 		return
 	}
 	var params mcpbridge.MCPToolCallParams
 	if err := json.Unmarshal(raw, &params); err != nil {
-		writeError(w, &req.ID, -32602, "invalid params")
+		writeError(w, req.ID, -32602, "invalid params")
 		return
 	}
 
@@ -218,7 +317,7 @@ func (s *Server) handleToolCall(w http.ResponseWriter, ctx context.Context, req 
 	tool, ok := s.tools[params.Name]
 	if !ok {
 		log.Printf("skill-tools: refused %q — not permitted by spec.toolPolicy for this run", params.Name)
-		writeResult(w, &req.ID, mcpbridge.MCPToolCallResult{
+		writeResult(w, req.ID, mcpbridge.MCPToolCallResult{
 			IsError: true,
 			Content: []mcpbridge.MCPContent{{
 				Type: "text",
@@ -232,16 +331,25 @@ func (s *Server) handleToolCall(w http.ResponseWriter, ctx context.Context, req 
 	if args == "" || args == "null" {
 		args = "{}"
 	}
+	if schema := s.schemas[params.Name]; schema != nil {
+		var value any
+		dec := json.NewDecoder(strings.NewReader(args))
+		dec.UseNumber()
+		if err := dec.Decode(&value); err != nil || schema.Validate(value) != nil {
+			writeError(w, req.ID, -32602, "tool arguments do not match inputSchema")
+			return
+		}
+	}
 
 	out, err := s.dispatch(ctx, tool, args)
 	if err != nil {
-		writeResult(w, &req.ID, mcpbridge.MCPToolCallResult{
+		writeResult(w, req.ID, mcpbridge.MCPToolCallResult{
 			IsError: true,
 			Content: []mcpbridge.MCPContent{{Type: "text", Text: err.Error()}},
 		})
 		return
 	}
-	writeResult(w, &req.ID, mcpbridge.MCPToolCallResult{
+	writeResult(w, req.ID, mcpbridge.MCPToolCallResult{
 		Content: []mcpbridge.MCPContent{{Type: "text", Text: out}},
 	})
 }
@@ -276,7 +384,13 @@ func (s *Server) dispatch(ctx context.Context, tool sidecartools.Tool, argsJSON 
 
 	deadline := time.Now().Add(s.cfg.ExecTimeout)
 	for {
+		if info, err := os.Stat(resPath); err == nil && info.Size() > s.cfg.MaxOutputBytes+(64<<10) {
+			return "", fmt.Errorf("tool %s result file exceeded the %d-byte output limit", tool.Name, s.cfg.MaxOutputBytes)
+		}
 		if res, ok := readExecResult(resPath); ok {
+			if int64(len(res.Stdout)+len(res.Stderr)) > s.cfg.MaxOutputBytes {
+				return "", fmt.Errorf("tool %s output exceeded %d bytes", tool.Name, s.cfg.MaxOutputBytes)
+			}
 			if res.TimedOut {
 				return "", fmt.Errorf("tool %s timed out", tool.Name)
 			}
@@ -320,23 +434,23 @@ func readExecResult(path string) (execResult, bool) {
 	return res, true
 }
 
-func writeResult(w http.ResponseWriter, id *int64, result any) {
+func writeResult(w http.ResponseWriter, id json.RawMessage, result any) {
 	payload, err := json.Marshal(result)
 	if err != nil {
 		writeError(w, id, -32603, "internal error")
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(mcpbridge.JSONRPCResponse{
+	_ = json.NewEncoder(w).Encode(rpcResponse{
 		JSONRPC: "2.0",
 		ID:      id,
 		Result:  payload,
 	})
 }
 
-func writeError(w http.ResponseWriter, id *int64, code int, msg string) {
+func writeError(w http.ResponseWriter, id json.RawMessage, code int, msg string) {
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(mcpbridge.JSONRPCResponse{
+	_ = json.NewEncoder(w).Encode(rpcResponse{
 		JSONRPC: "2.0",
 		ID:      id,
 		Error:   &mcpbridge.JSONRPCError{Code: code, Message: msg},

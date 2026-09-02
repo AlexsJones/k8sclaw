@@ -231,34 +231,10 @@ func TestBuildContainers_HarnessCredentialsStayPerKeySecretRefs(t *testing.T) {
 	}
 }
 
-// The MCP server registry the controller already generates is mounted for the
-// harness, which speaks MCP itself rather than going through the bridge's
-// discovered manifest.
-func TestBuildContainers_HarnessMountsMCPRegistry(t *testing.T) {
-	r := &AgentRunReconciler{}
-	mcpServers := []sympoziumv1alpha1.MCPServerRef{{Name: "github", URL: "http://mcp-github:8080"}}
-
-	cs, _, err := r.buildContainers(harnessModeRun(nil), false, nil, nil, mcpServers, nil)
-	if err != nil {
-		t.Fatalf("buildContainers: %v", err)
-	}
-	agent := containerByName(cs, "agent")
-
-	if !hasMount(agent.VolumeMounts, "mcp-config") {
-		t.Errorf("agent volumeMounts = %v, want the mcp-config mount", agent.VolumeMounts)
-	}
-	// JSON, not the YAML the bridge reads: the harness adapter is a shell
-	// script with jq and no YAML parser.
-	if v, ok := envValueLocal(agent.Env, "MCP_CONFIG_PATH"); !ok || v != "/config/mcp/mcp-servers.json" {
-		t.Errorf("MCP_CONFIG_PATH = (%q, %v), want /config/mcp/mcp-servers.json", v, ok)
-	}
-}
-
-// The registry names an auth env var per server; without the var itself on
-// the harness container, the harness connects unauthenticated and fails at
-// the first tool call. The bridge sidecar got these already — the replaced
-// agent container has to get them too, because it is the MCP client now.
-func TestBuildContainers_HarnessGetsMCPAuthTokens(t *testing.T) {
+// Remote MCP credentials belong only to the trusted bridge. Until a trusted
+// loopback proxy mediates those servers, a harness must fail closed rather than
+// receive their registry, headers, or Secret-derived environment variables.
+func TestBuildContainers_HarnessRejectsRemoteMCPServers(t *testing.T) {
 	r := &AgentRunReconciler{}
 	mcpServers := []sympoziumv1alpha1.MCPServerRef{{
 		Name:       "github-mcp",
@@ -267,27 +243,9 @@ func TestBuildContainers_HarnessGetsMCPAuthTokens(t *testing.T) {
 		AuthKey:    "token",
 	}}
 
-	cs, _, err := r.buildContainers(harnessModeRun(nil), false, nil, nil, mcpServers, nil)
-	if err != nil {
-		t.Fatalf("buildContainers: %v", err)
-	}
-	agent := containerByName(cs, "agent")
-
-	var found bool
-	for _, e := range agent.Env {
-		if e.Name != "MCP_AUTH_GITHUB_MCP" {
-			continue
-		}
-		found = true
-		if e.ValueFrom == nil || e.ValueFrom.SecretKeyRef == nil {
-			t.Fatalf("MCP_AUTH_GITHUB_MCP = %+v, want a SecretKeyRef", e)
-		}
-		if e.ValueFrom.SecretKeyRef.Name != "gh-token" || e.ValueFrom.SecretKeyRef.Key != "token" {
-			t.Errorf("SecretKeyRef = %+v, want gh-token/token", e.ValueFrom.SecretKeyRef)
-		}
-	}
-	if !found {
-		t.Error("MCP_AUTH_GITHUB_MCP not injected; the harness cannot authenticate to the MCP server")
+	_, _, err := r.buildContainers(harnessModeRun(nil), false, nil, nil, mcpServers, nil)
+	if err == nil || !strings.Contains(err.Error(), "remote MCP credentials are never exposed") {
+		t.Fatalf("buildContainers error = %v, want fail-closed remote MCP boundary", err)
 	}
 }
 
@@ -326,24 +284,6 @@ func TestMCPRegistryJSONMatchesInjectedAuthEnvNames(t *testing.T) {
 			cfg.Servers[0].Auth.SecretKey)
 	}
 
-	r := &AgentRunReconciler{}
-	cs, _, err := r.buildContainers(harnessModeRun(nil), false, nil, nil, mcpServers, nil)
-	if err != nil {
-		t.Fatalf("buildContainers: %v", err)
-	}
-	// A SecretKeyRef env var carries no literal value, so this checks the
-	// name is present rather than reading it back.
-	var present bool
-	for _, e := range containerByName(cs, "agent").Env {
-		if e.Name == cfg.Servers[0].Auth.SecretKey {
-			present = true
-			break
-		}
-	}
-	if !present {
-		t.Errorf("registry names %q but no such env var is on the agent container",
-			cfg.Servers[0].Auth.SecretKey)
-	}
 }
 
 // Without MCP servers there is no mcp-config volume, so the mount must not
@@ -795,11 +735,13 @@ func TestBuildContainers_RejectsAnyReservedPrefixName(t *testing.T) {
 // obvious names for their own servers.
 func TestBuildContainers_AllowsOrdinaryMCPServerNames(t *testing.T) {
 	r := &AgentRunReconciler{}
+	run := newTestRun()
+	run.Spec.Task = sympoziumv1alpha1.NewStringTask("use a remote tool")
 	mcp := []sympoziumv1alpha1.MCPServerRef{
 		{Name: "github", URL: "http://gh:8080"},
 		{Name: "my-sympozium-proxy", URL: "http://p:8080"},
 	}
-	if _, _, err := r.buildContainers(harnessModeRun(nil), false, nil, nil, mcp, nil); err != nil {
+	if _, _, err := r.buildContainers(run, false, nil, nil, mcp, nil); err != nil {
 		t.Errorf("buildContainers rejected ordinary server names: %v", err)
 	}
 }

@@ -3089,6 +3089,9 @@ func (r *AgentRunReconciler) buildContainers(
 	if err := validateMCPServerNames(mcpServers); err != nil {
 		return nil, nil, err
 	}
+	if taskModeReplacesAgentContainer(agentRun.Spec.Task) && len(mcpServers) > 0 {
+		return nil, nil, fmt.Errorf("task.mode %q cannot use Agent.spec.mcpServers: remote MCP credentials are never exposed to external adapters; use mediated SkillPack tools or remove the remote MCP servers", agentRun.Spec.Task.GetMode())
+	}
 
 	// Add MCP bridge sidecar if MCP servers are configured.
 	if len(mcpServers) > 0 {
@@ -3104,9 +3107,8 @@ func (r *AgentRunReconciler) buildContainers(
 		if observability != nil && observability.Enabled {
 			mcpEnv = append(mcpEnv, buildObservabilityEnv(agentRun, observability)...)
 		}
-		// Inject auth secrets as env vars for each MCP server. Built once:
-		// the mcp-bridge sidecar reads them, and so does an agent container
-		// a task mode replaced, which talks to the servers itself.
+		// Inject auth secrets only into the trusted mcp-bridge sidecar. External
+		// adapter containers are rejected above when remote MCP is configured.
 		var mcpAuthEnv []corev1.EnvVar
 		for _, srv := range mcpServers {
 			if srv.AuthSecret == "" {
@@ -3129,22 +3131,6 @@ func (r *AgentRunReconciler) buildContainers(
 			})
 		}
 		mcpEnv = append(mcpEnv, mcpAuthEnv...)
-
-		// A task mode that replaces the agent container brings its own MCP
-		// client (that depth is why an external harness is being used at
-		// all), so it reads the server registry the controller already
-		// generates rather than the mcp-bridge's discovered tool manifest.
-		//
-		// It gets the JSON rendering of that registry, not the YAML one the
-		// bridge reads: the adapter is a shell script, and asking it to parse
-		// YAML would mean either a YAML binary in every harness image or
-		// hand-rolled parsing of a file that carries auth material. The
-		// per-server tokens come with it — without them a registry entry
-		// naming an authSecret would connect unauthenticated and fail at the
-		// first tool call.
-		if taskModeReplacesAgentContainer(agentRun.Spec.Task) {
-			mountHarnessMCPRegistry(&containers[0], mcpAuthEnv)
-		}
 
 		// Init container for MCP tool discovery (runs before agent starts)
 		initContainers = append(initContainers, corev1.Container{
@@ -3216,7 +3202,7 @@ func (r *AgentRunReconciler) buildContainers(
 		// A run with no operator-configured MCP servers still needs the
 		// registry, because the skill tool server is in it.
 		if len(mcpServers) == 0 {
-			mountHarnessMCPRegistry(&containers[0], nil)
+			mountHarnessMCPRegistry(&containers[0])
 		}
 	}
 

@@ -29,7 +29,7 @@ Everything arrives as environment variables and mounted files on an ordinary con
 | `MODEL_NAME`, `MODEL_BASE_URL`, `MODEL_PROVIDER` | `spec.model`. Map these onto whatever your harness reads — see [Model routing](#model-routing-is-yours) below. |
 | provider credential | Injected per-key by `SecretKeyRef` from the `allowedAuthSecretKeys` allowlist (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `DEEPSEEK_API_KEY`, …). Already on the container; never widen the allowlist to make an adapter work. |
 | `TOOL_POLICY_ALLOW`, `TOOL_POLICY_DENY` | Comma-separated. Honour them only if you declare `toolFilter`. |
-| `MCP_CONFIG_PATH` | Path to the MCP server registry, as **JSON**: `{"servers":[{"name","url","toolsPrefix","timeout","headers","auth":{"type":"bearer","secretKey":"MCP_AUTH_X"}}]}`. Read the token from the env var `auth.secretKey` names — it is on the container. Connect to **every** entry: one of them may be `sympozium-skills`, which is how the run's SkillPack tools reach you. |
+| `MCP_CONFIG_PATH` | Path to the trusted loopback SkillPack MCP registry, as JSON. Remote operator-configured MCP servers and their credentials are never exposed to an external adapter. A `sympozium-skills` entry is present when the run has mediated SkillPack tools. |
 | `HOME` | `/home/agent`, an `emptyDir`. The only writable path besides `/workspace`, `/ipc/output` and `/tmp`. |
 | `SYMPOZIUM_RESULT_PATH` | Where to write the result. Defaults to `/ipc/output/result.json`; read it from env rather than hardcoding. |
 | `SYMPOZIUM_HARNESS_CONTRACT_VERSION` | Adapter contract version (`v1alpha1` today). Check it at startup and fail closed on unknown versions. |
@@ -118,7 +118,10 @@ the same AgentRun field.
 
 ## Model routing is yours
 
-Sympozium sets `MODEL_*` and injects the credential, then stops. It cannot verify that your
+Sympozium sets `MODEL_*` and injects the model credential, then stops. Remote
+MCP credentials are not injected into adapters: a harness run with
+`Agent.spec.mcpServers` is rejected until those connections have a trusted
+local mediator. Sympozium cannot verify that your
 harness routes to the model the `AgentRun` names, and many harnesses have opinionated
 provider resolution — config files, CLI logins, ambient environment — that can quietly win
 over what you pass.

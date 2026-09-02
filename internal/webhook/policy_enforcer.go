@@ -172,6 +172,12 @@ func (pe *PolicyEnforcer) Handle(ctx context.Context, req admission.Request) adm
 	if err := validateReservedMCPServerNames(instance.Spec.MCPServers); err != nil {
 		return admission.Denied(err.Error())
 	}
+	// External adapters are outside Sympozium's trust boundary. Remote MCP
+	// entries can carry Secret-derived credentials and arbitrary headers, so
+	// fail closed until a trusted local mediator owns those connections.
+	if taskmodes.HarnessImage(run.Spec.Task) != "" && len(instance.Spec.MCPServers) > 0 {
+		return admission.Denied("task.mode \"harness\" cannot use Agent.spec.mcpServers: remote MCP credentials are never exposed to external adapters; use mediated SkillPack tools or remove the remote MCP servers")
+	}
 
 	// Replacing the trusted runner is a privileged operation. Require an
 	// explicit policy binding before the otherwise-permissive early return.

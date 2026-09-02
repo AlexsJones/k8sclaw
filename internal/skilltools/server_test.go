@@ -249,6 +249,117 @@ func TestServer_UnknownMethod(t *testing.T) {
 	}
 }
 
+func TestServer_PreservesStringRequestID(t *testing.T) {
+	s, _ := newTestServer(t, "", "")
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"jsonrpc":"2.0","id":"client-7","method":"tools/list"}`))
+	req.Header.Set("Content-Type", "application/json")
+	s.handleJSONRPC(rec, req)
+	var response struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if response.ID != "client-7" {
+		t.Fatalf("id = %q, want client-7", response.ID)
+	}
+}
+
+func TestServer_RejectsCompositeRequestID(t *testing.T) {
+	s, _ := newTestServer(t, "", "")
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"jsonrpc":"2.0","id":{"nested":true},"method":"tools/list"}`))
+	s.handleJSONRPC(rec, req)
+	if !strings.Contains(rec.Body.String(), "id must be a string, number, or null") {
+		t.Fatalf("response = %s", rec.Body.String())
+	}
+}
+
+func TestServer_RejectsBrowserOrigin(t *testing.T) {
+	s, _ := newTestServer(t, "", "")
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`))
+	req.Header.Set("Origin", "https://attacker.example")
+	s.handleJSONRPC(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403", rec.Code)
+	}
+}
+
+func TestServer_BoundsRequestBody(t *testing.T) {
+	s, _ := newTestServer(t, "", "")
+	s.cfg.MaxRequestBytes = 32
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/list","padding":"xxxxxxxxxxxxxxxxxxxxxxxx"}`))
+	s.handleJSONRPC(rec, req)
+	if !strings.Contains(rec.Body.String(), "parse error") {
+		t.Fatalf("response = %s, want bounded parse error", rec.Body.String())
+	}
+}
+
+func TestServer_ValidatesToolArgumentsAgainstSchema(t *testing.T) {
+	s, _ := newTestServer(t, "", "")
+	resp := call(t, s, "tools/call", mcpbridge.MCPToolCallParams{Name: "kubectl_get", Arguments: json.RawMessage(`{"resource":12}`)})
+	if resp.Error == nil || resp.Error.Code != -32602 {
+		t.Fatalf("error = %+v, want invalid params", resp.Error)
+	}
+}
+
+func TestServer_BoundsConcurrentToolCalls(t *testing.T) {
+	s, _ := newTestServer(t, "", "")
+	for i := 0; i < cap(s.sem); i++ {
+		s.sem <- struct{}{}
+	}
+	defer func() {
+		for len(s.sem) > 0 {
+			<-s.sem
+		}
+	}()
+	resp := call(t, s, "tools/call", mcpbridge.MCPToolCallParams{Name: "kubectl_get", Arguments: json.RawMessage(`{"resource":"pods"}`)})
+	if resp.Error == nil || resp.Error.Code != -32000 {
+		t.Fatalf("error = %+v, want concurrency limit", resp.Error)
+	}
+}
+
+func TestServer_BoundsToolOutput(t *testing.T) {
+	s, toolsDir := newTestServer(t, "", "")
+	s.cfg.MaxOutputBytes = 8
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		deadline := time.Now().Add(2 * time.Second)
+		for time.Now().Before(deadline) {
+			entries, _ := os.ReadDir(toolsDir)
+			for _, entry := range entries {
+				if !strings.HasPrefix(entry.Name(), "exec-request-") {
+					continue
+				}
+				raw, _ := os.ReadFile(filepath.Join(toolsDir, entry.Name()))
+				var request struct {
+					ID string `json:"id"`
+				}
+				if json.Unmarshal(raw, &request) != nil || request.ID == "" {
+					continue
+				}
+				result, _ := json.Marshal(map[string]any{"id": request.ID, "exitCode": 0, "stdout": "this output is too large"})
+				_ = os.WriteFile(filepath.Join(toolsDir, "exec-result-"+request.ID+".json"), result, 0o644)
+				return
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}()
+	resp := call(t, s, "tools/call", mcpbridge.MCPToolCallParams{Name: "kubectl_get", Arguments: json.RawMessage(`{"resource":"pods"}`)})
+	<-done
+	var result mcpbridge.MCPToolCallResult
+	if err := json.Unmarshal(resp.Result, &result); err != nil {
+		t.Fatalf("decode result: %v", err)
+	}
+	if !result.IsError || !strings.Contains(result.Content[0].Text, "output exceeded") {
+		t.Fatalf("result = %+v, want bounded output error", result)
+	}
+}
+
 func TestNewServer_MissingManifestFails(t *testing.T) {
 	_, err := NewServer(Config{
 		ManifestPath: filepath.Join(t.TempDir(), "absent.json"),
