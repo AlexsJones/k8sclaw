@@ -1,8 +1,18 @@
 import { useState, useRef, useEffect, useMemo } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { useAgents, useCreateRun, useRuns } from "@/hooks/use-api";
+import {
+  useAgents,
+  useCreateRun,
+  useRuns,
+  useRuntimes,
+  useHarnessSessions,
+  useCreateHarnessSession,
+  useSetHarnessSessionState,
+} from "@/hooks/use-api";
 import { useWebSocket, type StreamEvent } from "@/hooks/use-websocket";
+import { HarnessSessionChatDialog } from "@/components/harness-session-dialog";
+import type { Agent, AgentRuntime, HarnessSession } from "@/lib/api";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -25,10 +35,37 @@ import {
   Loader2,
   Radio,
   ShieldAlert,
+  Play,
+  Square,
 } from "lucide-react";
 import { cn, taskText } from "@/lib/utils";
 
 // ── Feed pane (right slide-out) ──────────────────────────────────────────────
+
+type FeedMode = "runs" | "persistent";
+
+function isPersistentRuntime(runtime: AgentRuntime | undefined) {
+  return (
+    runtime?.spec.contractVersion === "v1alpha2" &&
+    runtime.spec.session?.protocol === "openai-chat"
+  );
+}
+
+function defaultChatSessionName(agentName: string) {
+  return `${agentName.slice(0, 57).replace(/-+$/, "")}-chat`;
+}
+
+function sessionFor(
+  agent: Agent,
+  runtime: AgentRuntime,
+  sessions: HarnessSession[],
+) {
+  return sessions.find(
+    (session) =>
+      session.spec.agentRef === agent.metadata.name &&
+      session.spec.runtimeRef === runtime.metadata.name,
+  );
+}
 
 export function FeedPane({
   open,
@@ -39,25 +76,48 @@ export function FeedPane({
 }) {
   const { data: instances } = useAgents();
   const { data: runs } = useRuns();
+  const { data: runtimes } = useRuntimes();
+  const { data: harnessSessions } = useHarnessSessions();
   const { events } = useWebSocket();
   const createRun = useCreateRun();
+  const createHarnessSession = useCreateHarnessSession();
+  const setHarnessSessionState = useSetHarnessSessionState();
 
+  const [mode, setMode] = useState<FeedMode>("runs");
   const [activeTab, setActiveTab] = useState<string>("");
   const [message, setMessage] = useState("");
+  const [chattingSession, setChattingSession] = useState<HarnessSession | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
 
-  // Filter to running / ready instances
+  const runtimeFor = (inst: Agent) =>
+    runtimes?.find((runtime) => runtime.metadata.name === inst.spec.runtimeRef);
+
+  // Split agents by execution mode. Session-only (v1alpha2 openai-chat) harnesses
+  // run as a persistent HarnessSession; everything else dispatches a one-shot AgentRun.
+  const oneShotInstances = useMemo(
+    () => (instances || []).filter((inst) => !isPersistentRuntime(runtimeFor(inst))),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [instances, runtimes],
+  );
+
+  const persistentAgents = useMemo(
+    () => (instances || []).filter((inst) => isPersistentRuntime(runtimeFor(inst))),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [instances, runtimes],
+  );
+
+  // Filter to running / ready instances (one-shot tab only)
   const activeInstances = useMemo(
     () =>
-      (instances || []).filter((inst) => {
+      oneShotInstances.filter((inst) => {
         const phase = inst.status?.phase?.toLowerCase();
         return phase === "running" || phase === "ready" || phase === "active";
       }),
-    [instances],
+    [oneShotInstances],
   );
 
   // All instances for fallback
-  const allInstances = instances || [];
+  const allInstances = oneShotInstances;
 
   // Use active instances if available, otherwise show all
   const tabInstances =
@@ -226,6 +286,14 @@ export function FeedPane({
     }
   }
 
+  function startSession(agent: Agent, runtime: AgentRuntime) {
+    createHarnessSession.mutate({
+      name: defaultChatSessionName(agent.metadata.name),
+      agentRef: agent.metadata.name,
+      runtimeRef: runtime.metadata.name,
+    });
+  }
+
   // ── Toggle button (always visible) ──────────────────────────────────────
 
   if (!open) {
@@ -259,8 +327,84 @@ export function FeedPane({
         </Button>
       </div>
 
-      {/* Instance selector */}
-      {tabInstances.length > 0 ? (
+      {/* Mode switch */}
+      <div className="flex gap-1 border-b border-border/50 px-3 py-2">
+        <button
+          onClick={() => setMode("runs")}
+          className={cn(
+            "flex-1 rounded-md px-2 py-1 text-xs font-medium transition-colors",
+            mode === "runs"
+              ? "bg-muted text-foreground"
+              : "text-muted-foreground hover:text-foreground",
+          )}
+        >
+          Runs
+        </button>
+        <button
+          onClick={() => setMode("persistent")}
+          className={cn(
+            "flex-1 rounded-md px-2 py-1 text-xs font-medium transition-colors",
+            mode === "persistent"
+              ? "bg-muted text-foreground"
+              : "text-muted-foreground hover:text-foreground",
+          )}
+        >
+          Persistent
+        </button>
+      </div>
+
+      {mode === "persistent" ? (
+        persistentAgents.length === 0 ? (
+          <div className="flex flex-1 flex-col items-center justify-center p-6 text-center">
+            <Bot className="h-10 w-10 text-muted-foreground/40 mb-3" />
+            <p className="text-sm font-medium text-muted-foreground">
+              No persistent agents
+            </p>
+            <p className="text-xs text-muted-foreground/70 mt-1">
+              Agents backed by a v1alpha2 openai-chat harness appear here as
+              durable conversations.
+            </p>
+          </div>
+        ) : (
+          <ScrollArea className="flex-1">
+            <div className="space-y-2 p-3">
+              {persistentAgents.map((agent) => {
+                const runtime = runtimeFor(agent)!;
+                const session = sessionFor(
+                  agent,
+                  runtime,
+                  harnessSessions || [],
+                );
+                return (
+                  <PersistentAgentItem
+                    key={agent.metadata.name}
+                    agent={agent}
+                    runtime={runtime}
+                    session={session}
+                    onStart={() => startSession(agent, runtime)}
+                    onOpen={() => session && setChattingSession(session)}
+                    onResume={() =>
+                      session &&
+                      setHarnessSessionState.mutate({
+                        name: session.metadata.name,
+                        desiredState: "running",
+                      })
+                    }
+                    onStop={() =>
+                      session &&
+                      setHarnessSessionState.mutate({
+                        name: session.metadata.name,
+                        desiredState: "stopped",
+                      })
+                    }
+                    pending={createHarnessSession.isPending}
+                  />
+                );
+              })}
+            </div>
+          </ScrollArea>
+        )
+      ) : tabInstances.length > 0 ? (
         <>
           <div className="border-b border-border/50 px-3 py-2">
             <Select value={activeTab} onValueChange={setActiveTab}>
@@ -342,14 +486,143 @@ export function FeedPane({
         <div className="flex flex-1 flex-col items-center justify-center p-6 text-center">
           <Bot className="h-10 w-10 text-muted-foreground/40 mb-3" />
           <p className="text-sm font-medium text-muted-foreground">
-            No instances available
+            No one-shot agents available
           </p>
           <p className="text-xs text-muted-foreground/70 mt-1">
             Create an instance or enable an ensemble to get started
           </p>
         </div>
       )}
+
+      {chattingSession && (
+        <HarnessSessionChatDialog
+          open={true}
+          onOpenChange={(open) => {
+            if (!open) setChattingSession(null);
+          }}
+          session={chattingSession}
+        />
+      )}
     </aside>
+  );
+}
+
+// ── Persistent agent item ────────────────────────────────────────────────────
+
+function PersistentAgentItem({
+  agent,
+  runtime,
+  session,
+  onStart,
+  onOpen,
+  onResume,
+  onStop,
+  pending,
+}: {
+  agent: Agent;
+  runtime: AgentRuntime;
+  session?: HarnessSession;
+  onStart: () => void;
+  onOpen: () => void;
+  onResume: () => void;
+  onStop: () => void;
+  pending: boolean;
+}) {
+  const phase = session?.status?.phase;
+  const stopped =
+    session?.spec.desiredState === "stopped" || phase === "Draining";
+  const failed = phase === "Failed";
+
+  return (
+    <div className="rounded-lg border p-3 text-sm">
+      <div className="flex items-center justify-between gap-2">
+        <div className="min-w-0">
+          <p className="truncate font-mono text-xs">{agent.metadata.name}</p>
+          <p className="text-[10px] text-muted-foreground">
+            {runtime.metadata.name}
+          </p>
+        </div>
+        {session && (
+          <Badge
+            variant={phase === "Ready" ? "default" : "outline"}
+            className="gap-1 shrink-0"
+          >
+            {phase === "Ready"
+              ? "Ready"
+              : phase === "Failed"
+                ? "Failed"
+                : stopped
+                  ? "Stopped"
+                  : "Starting"}
+          </Badge>
+        )}
+      </div>
+
+      <div className="mt-2 flex flex-wrap gap-1.5">
+        {!session ? (
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={onStart}
+            disabled={pending}
+            className="h-7 text-xs"
+          >
+            {pending ? (
+              <Loader2 className="mr-1 h-3 w-3 animate-spin" />
+            ) : (
+              <Play className="mr-1 h-3 w-3" />
+            )}
+            Start
+          </Button>
+        ) : phase === "Ready" ? (
+          <>
+            <Button size="sm" onClick={onOpen} className="h-7 text-xs">
+              <MessageSquare className="mr-1 h-3 w-3" />Open
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={onStop}
+              className="h-7 text-xs"
+            >
+              <Square className="mr-1 h-3 w-3" />Stop
+            </Button>
+          </>
+        ) : stopped ? (
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={onResume}
+            className="h-7 text-xs"
+          >
+            <Play className="mr-1 h-3 w-3" />Resume
+          </Button>
+        ) : failed ? (
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={onResume}
+            className="h-7 text-xs"
+          >
+            Retry
+          </Button>
+        ) : (
+          <span className="flex items-center gap-1.5 text-[10px] text-muted-foreground">
+            <Loader2 className="h-3 w-3 animate-spin" />
+            {session.metadata.name}
+          </span>
+        )}
+      </div>
+
+      {session && (failed || stopped) && (
+        <p className="mt-1.5 text-[10px] text-muted-foreground">
+          {failed
+            ? session.status?.conditions?.find((c) => c.type === "Ready")
+                ?.message || "Session failed to start"
+            : `${session.metadata.name} · stopped`}
+        </p>
+      )}
+    </div>
   );
 }
 
