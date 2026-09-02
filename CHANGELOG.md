@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.10.54](https://github.com/sympozium-ai/sympozium/compare/v0.10.53...v0.10.54) (2026-09-02)
+
+
+### Features
+
+* **harness:** add persistent Hermes default ([6f0a45b](https://github.com/sympozium-ai/sympozium/commit/6f0a45ba02b8b300d06e60c3b044f20b30cc9940))
+* **harness:** track activity and enforce idle timeout ([f1de44c](https://github.com/sympozium-ai/sympozium/commit/f1de44cc45a44ef309e8d8e600ffb0c03ca3b5c2))
+
+
+### Bug Fixes
+
+* **ci:** allow explicit image fleet rebuilds ([567564a](https://github.com/sympozium-ai/sympozium/commit/567564ac044054836d682e12dabaadf741f2b404))
+* **ci:** evaluate manual build after skipped detection ([39efce6](https://github.com/sympozium-ai/sympozium/commit/39efce655138a1e1d16f047de20a5eac25977cf6))
+* **ci:** preserve required image builds ([9da627d](https://github.com/sympozium-ai/sympozium/commit/9da627d280a7bf06fe485f8368dfae0692ecfb4f))
+* **harness:** auto-start persistent agent sessions ([4f8c538](https://github.com/sympozium-ai/sympozium/commit/4f8c5382756d110b13ef2ad8850bc6825d63853a))
+* **harness:** pin corrected Hermes session image ([1d281a4](https://github.com/sympozium-ai/sympozium/commit/1d281a468ad6561206a23b0390e385ffa856868a))
+* **harness:** retain idle timeout condition ([8cd7eb8](https://github.com/sympozium-ai/sympozium/commit/8cd7eb83aebe5fd54dbcb30c478e410b11b19c0c))
+
 ## [0.10.53](https://github.com/sympozium-ai/sympozium/compare/v0.10.52...v0.10.53) (2026-09-01)
 
 
