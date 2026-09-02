@@ -216,6 +216,10 @@ for _ in $(seq 1 30); do
 done
 kubectl get harnesssession "$SESSION_NAME" -n "$NAMESPACE" >/dev/null 2>&1 && fail "deleted HarnessSession still exists"
 for resource in deployment service networkpolicy persistentvolumeclaim; do
+  for _ in $(seq 1 30); do
+    kubectl get "$resource" "$SESSION_NAME" -n "$NAMESPACE" >/dev/null 2>&1 || break
+    sleep 1
+  done
   kubectl get "$resource" "$SESSION_NAME" -n "$NAMESPACE" >/dev/null 2>&1 && fail "deleted HarnessSession retained ${resource}/${SESSION_NAME}"
 done
 pass "deletion removed the session and all owned resources"
