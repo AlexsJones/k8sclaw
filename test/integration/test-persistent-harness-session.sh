@@ -164,6 +164,36 @@ RESUMED_TEXT="$(jq -r '.choices[0].message.content // ""' <<<"$RESUMED_RESPONSE"
 [[ "$RESUMED_TEXT" == *"$MEMORY_TOKEN"* ]] || fail "conversation state did not survive stop/resume; response: ${RESUMED_TEXT}"
 pass "conversation state survived explicit stop/resume"
 
+REQUEST_COUNT="$(kubectl get harnesssession "$SESSION_NAME" -n "$NAMESPACE" -o jsonpath='{.status.requestCount}')"
+LAST_REQUEST_ID="$(kubectl get harnesssession "$SESSION_NAME" -n "$NAMESPACE" -o jsonpath='{.status.lastRequestID}')"
+LAST_REQUEST_STATE="$(kubectl get harnesssession "$SESSION_NAME" -n "$NAMESPACE" -o jsonpath='{.status.lastRequestState}')"
+USAGE_ACCOUNTING="$(kubectl get harnesssession "$SESSION_NAME" -n "$NAMESPACE" -o jsonpath='{.status.usageAccounting}')"
+[[ "${REQUEST_COUNT:-0}" -ge 4 && -n "$LAST_REQUEST_ID" && "$LAST_REQUEST_STATE" == "succeeded" && "$USAGE_ACCOUNTING" == "unavailable" ]] || fail "request audit status is incomplete"
+pass "request IDs, lifecycle counters, and honest unavailable usage are recorded"
+
+info "Proving client disconnect cancellation"
+CANCEL_BODY='{"stream":true,"messages":[{"role":"user","content":"Write a detailed 3000 word technical essay. Do not finish early."}]}'
+CANCEL_URL="$(url_with_namespace "/api/v1/harness-sessions/${SESSION_NAME}/chat")"
+CANCEL_ARGS=(-sS --max-time 1 -X POST -H "Content-Type: application/json")
+[[ -n "$APISERVER_TOKEN" ]] && CANCEL_ARGS+=(-H "Authorization: Bearer ${APISERVER_TOKEN}")
+curl "${CANCEL_ARGS[@]}" --data "$CANCEL_BODY" "$CANCEL_URL" >/dev/null 2>&1 || true
+for _ in $(seq 1 30); do
+  LAST_REQUEST_STATE="$(kubectl get harnesssession "$SESSION_NAME" -n "$NAMESPACE" -o jsonpath='{.status.lastRequestState}' 2>/dev/null || true)"
+  ACTIVE_REQUESTS="$(kubectl get harnesssession "$SESSION_NAME" -n "$NAMESPACE" -o jsonpath='{.status.activeRequests}' 2>/dev/null || true)"
+  [[ "$LAST_REQUEST_STATE" == "cancelled" && "${ACTIVE_REQUESTS:-0}" == "0" ]] && break
+  sleep 1
+done
+[[ "$LAST_REQUEST_STATE" == "cancelled" && "${ACTIVE_REQUESTS:-0}" == "0" ]] || fail "cancelled request remained active or was not audited"
+pass "client disconnect cancelled and audited in-flight model work"
+
+info "Proving trustworthy idle timeout"
+kubectl patch harnesssession "$SESSION_NAME" -n "$NAMESPACE" --type=merge -p '{"spec":{"idleTimeout":"8s"}}' >/dev/null
+wait_for_session_phase "$SESSION_NAME" Draining || fail "idle timeout did not stop the session"
+IDLE_REASON="$(kubectl get harnesssession "$SESSION_NAME" -n "$NAMESPACE" -o jsonpath='{.status.conditions[?(@.type=="Ready")].reason}')"
+[[ "$IDLE_REASON" == "IdleTimeout" ]] || fail "idle timeout stopped without an actionable reason: ${IDLE_REASON}"
+kubectl get pvc "$SESSION_NAME" -n "$NAMESPACE" >/dev/null 2>&1 || fail "idle timeout deleted durable state"
+pass "idle timeout stopped compute and preserved durable state"
+
 info "Proving actionable reconciliation failure status"
 BAD_BODY="$(jq -cn --arg name "$BAD_AGENT_NAME" --arg model "$MODEL" --arg runtimeRef "$RUNTIME_NAME" '{name:$name,provider:"openai",model:$model,runtimeRef:$runtimeRef,policyRef:"harness-examples",skills:[],channels:[]}')"
 api_request POST /api/v1/agents "$BAD_BODY" >/dev/null
