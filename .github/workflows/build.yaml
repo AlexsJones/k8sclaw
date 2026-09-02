@@ -14,13 +14,12 @@ permissions:
   contents: read
   packages: write
 
-# A newer push supersedes an in-flight run of the same ref. The fleet is
-# tagged by sha + latest, so the superseding run rewrites every tag the
-# cancelled one would have written — back-to-back pushes stop paying for
-# the whole 18-image fleet twice.
+# Preserve an in-flight image build even when a later docs/chart-only push
+# arrives. Path filtering happens after concurrency is evaluated, so cancelling
+# here can otherwise suppress required artifacts without a replacement build.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   # Gate the expensive fleet build on whether anything that reaches an
