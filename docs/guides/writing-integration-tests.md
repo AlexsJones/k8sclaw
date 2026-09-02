@@ -33,7 +33,8 @@ TEST_TIMEOUT=180 ./test/integration/test-write-file.sh
 kubectl create secret generic inttest-openai-key --from-literal=OPENAI_API_KEY=sk-...
 ./test/integration/test-write-file.sh
 
-# Persistent AgentHarness lifecycle, real chat, and restart continuity
+# Persistent AgentHarness: Pi and Hermes real chat, streaming, restart,
+# stop/resume, request audit, cancellation, idle timeout, failures, and cleanup
 OPENAI_API_KEY=... ./test/integration/test-persistent-harness-session.sh
 ```
 

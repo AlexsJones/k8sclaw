@@ -1,0 +1,88 @@
+# Persistent AgentHarness catalog and session example.
+#
+# Create the model credential first; do not commit a real key:
+#   kubectl -n default create secret generic analyst-openai \
+#     --from-literal=OPENAI_API_KEY="$OPENAI_API_KEY"
+#
+# Helm installs equivalent Pi and Hermes session runtimes in its release
+# namespace by default. This standalone sample is useful without that catalog.
+# Only v1alpha2 runtimes declaring openai-chat can back a HarnessSession. The
+# v1alpha1 one-shot adapters intentionally do not appear here.
+apiVersion: sympozium.ai/v1alpha1
+kind: SympoziumPolicy
+metadata:
+  name: persistent-harness-example
+  namespace: default
+spec:
+  harnessPolicy:
+    enabled: true
+    # The maintained session adapters currently report usage as unavailable.
+    allowUnmetered: true
+  imagePolicy:
+    allowedRegistries:
+      - ghcr.io/sympozium-ai/harness-adapters/pi@sha256:8c8f0df071dc5307b3b557e0233a70757d8a4be17cb688c1ca725cb41001bbd5
+      - ghcr.io/sympozium-ai/harness-adapters/hermes@sha256:70c643b287b4a74583c7fedafd60e853579a36380a652a3d39ab0ae8c86e2d3b
+---
+apiVersion: sympozium.ai/v1alpha1
+kind: AgentRuntime
+metadata:
+  name: pi-session-v0-84-4
+  namespace: default
+spec:
+  image: ghcr.io/sympozium-ai/harness-adapters/pi@sha256:8c8f0df071dc5307b3b557e0233a70757d8a4be17cb688c1ca725cb41001bbd5
+  contractVersion: v1alpha2
+  session:
+    protocol: openai-chat
+    port: 8080
+  supportOwner: sympozium-maintainers
+  conformance:
+    status: conformant
+    owner: sympozium-maintainers
+    reference: https://github.com/sympozium-ai/harness-adapters/blob/main/docs/conformance.md
+---
+apiVersion: sympozium.ai/v1alpha1
+kind: AgentRuntime
+metadata:
+  name: hermes-session-v0-20-6
+  namespace: default
+spec:
+  image: ghcr.io/sympozium-ai/harness-adapters/hermes@sha256:70c643b287b4a74583c7fedafd60e853579a36380a652a3d39ab0ae8c86e2d3b
+  contractVersion: v1alpha2
+  session:
+    protocol: openai-chat
+    port: 8080
+  supportOwner: sympozium-maintainers
+  conformance:
+    status: conformant
+    owner: sympozium-maintainers
+    reference: https://github.com/sympozium-ai/harness-adapters/blob/main/docs/conformance.md
+---
+apiVersion: sympozium.ai/v1alpha1
+kind: Agent
+metadata:
+  name: persistent-analyst
+  namespace: default
+spec:
+  policyRef: persistent-harness-example
+  runtimeRef: pi-session-v0-84-4
+  agents:
+    default:
+      model: gpt-5.2
+  authRefs:
+    - provider: openai
+      secret: analyst-openai
+---
+# The web/API Agent creation flow creates this deterministic <agent>-chat
+# session automatically. Include it when applying resources declaratively with
+# kubectl. To use Hermes, change runtimeRef here and on the Agent above.
+apiVersion: sympozium.ai/v1alpha1
+kind: HarnessSession
+metadata:
+  name: persistent-analyst-chat
+  namespace: default
+spec:
+  agentRef: persistent-analyst
+  runtimeRef: pi-session-v0-84-4
+  desiredState: running
+  # Stops compute after inactivity while retaining the CR and PVC for resume.
+  idleTimeout: 30m

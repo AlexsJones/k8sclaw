@@ -8,9 +8,9 @@ This design adds a separate, explicitly managed interactive session so a user
 can select a harness, wait for it to become ready, and converse with it without
 overloading an ephemeral AgentRun.
 
-## First implementation slice
+## Implemented lifecycle
 
-Introduce a namespaced `HarnessSession` resource owned by an Agent:
+A namespaced `HarnessSession` resource binds the runtime to an Agent:
 
 ```yaml
 apiVersion: sympozium.ai/v1alpha1
@@ -19,16 +19,22 @@ metadata:
   name: analyst-session
 spec:
   agentRef: analyst
-  runtimeRef: pi-v1
+  runtimeRef: pi-session-v0-84-4
   desiredState: running
   idleTimeout: 1h
 ```
 
-The controller resolves and records the immutable runtime digest once, creates
-a Deployment and ClusterIP Service, and reports `Pending`, `Ready`, `Draining`,
-or `Failed`. Deletion and an explicit `desiredState: stopped` remove the
-workload. `idleTimeout` is reserved until API activity reporting is available;
-it must not silently stop a session before then.
+The controller resolves and records the immutable runtime digest, creates a
+PVC, Deployment, ClusterIP Service, and NetworkPolicy, and reports `Pending`,
+`Ready`, `Draining`, or `Failed`. Deletion removes the complete session;
+`desiredState: stopped` removes only the private workload and preserves the CR
+and PVC for resume.
+
+`idleTimeout` is active. The authenticated API proxy updates
+`status.lastActivityTime`, request counts, active-request state, the latest
+request ID and outcome, and error counts. Once the timeout expires with no
+request in flight, the controller stops the workload and records
+`Ready=False`, reason `IdleTimeout`. Setting `desiredState: running` resumes it.
 
 The API/UI talks to the Session through a Sympozium-owned proxy. It does not
 expose pod exec, a ServiceAccount token, or direct NATS access to a browser.
@@ -36,7 +42,7 @@ expose pod exec, a ServiceAccount token, or direct NATS access to a browser.
 ## Contract boundary
 
 Existing `v1alpha1` Pi and Hermes images remain **one-shot only**. Persistent
-sessions require a new adapter contract version with:
+sessions use the implemented `v1alpha2` adapter contract with:
 
 - readiness and bounded request handling;
 - an authenticated local request/response endpoint;
@@ -62,7 +68,7 @@ substitute for a session.
 - The UI sees only proxy-mediated requests and audit records, never raw model
   or MCP credentials.
 
-## Completion evidence for the first slice
+## Verified behavior
 
 1. Selecting a session-capable runtime creates a persistent pod and Service.
 2. A real credential-backed request receives a response through the proxy.
@@ -70,4 +76,9 @@ substitute for a session.
    cleanup behavior.
 4. One-shot Pi and Hermes AgentRuns remain supported and regression-tested.
 
-Tracked in [#392](https://github.com/sympozium-ai/sympozium/issues/392).
+This lifecycle is covered by the real-model
+`test/integration/test-persistent-harness-session.sh` test for both maintained
+Pi and Hermes session adapters. The implementation issue is complete in
+[#392](https://github.com/sympozium-ai/sympozium/issues/392); broader
+AgentHarness hardening remains tracked in
+[#349](https://github.com/sympozium-ai/sympozium/issues/349).

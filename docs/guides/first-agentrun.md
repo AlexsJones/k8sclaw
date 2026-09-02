@@ -325,4 +325,4 @@ SympoziumSchedule or use an Ensemble with a schedule — see
 - [Writing Skills](./writing-skills.md) — create custom tools for your agents
 - [Local Models guide](./local-models.md) — run models in-cluster with no API keys
 - [LM Studio guide](./lm-studio.md) / [Ollama guide](./ollama.md) — use external local inference
-- [Agent Sandboxing](../concepts/agent-sandboxing.md) — isolate agent execution
+- [Agent Sandboxing](../concepts/agent-sandbox.md) — isolate agent execution

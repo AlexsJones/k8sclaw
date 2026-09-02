@@ -17,6 +17,10 @@ list of blessed ones. An adapter tracks its upstream harness's release cadence �
 config formats, auth shapes — which is work this repo deliberately does not take on. Writing
 one is [harness-adapters.md](harness-adapters.md).
 
+This page documents the `v1alpha1` **one-shot AgentRun** contract. Continuing
+chat is a separate `HarnessSession` using a session-capable `v1alpha2` runtime;
+see the [AgentHarness guide](../guides/agentharness.md#persistent-interactive-sessions-experimental).
+
 ## What harness mode is (and isn't)
 
 A harness run **keeps** everything that lives outside the agent process: the `/workspace`
@@ -25,11 +29,11 @@ registry, response gates, retries, cost estimation, memory extraction, ensembles
 and the run-detail UI. All of it works on a run it never drove, because the result contract
 is unchanged.
 
-The current creation UX is experimental: the web API and New Run form create string-form
-tasks and do not expose an approved-runtime selector. Use an object-form `AgentRun` manifest
-such as [`config/samples/agentrun_harness.yaml`](../../config/samples/agentrun_harness.yaml).
-Channels and schedules do not inherit harness mode yet; that requires moving runtime choice
-onto an administrator-approved Agent/runtime profile.
+The web New Run form can inherit an administrator-approved runtime from the
+Agent or select a one-run override. Inline object-form authoring remains
+available through
+[`config/samples/agentrun_harness.yaml`](https://github.com/sympozium-ai/sympozium/blob/main/config/samples/agentrun_harness.yaml).
+Agent runtime defaults are inherited by ordinary AgentRun entrypoints.
 
 It deliberately does **not** give you:
 
@@ -59,7 +63,7 @@ metadata:
 spec:
   policyRef: byo-enabled
   agents:
-    primary:
+    default:
       model: deepseek-chat
   authRefs:
     - provider: deepseek
@@ -477,6 +481,7 @@ inside `agent-runner`.
 ## See Also
 
 - [Writing a harness adapter](harness-adapters.md) — the contract, in both directions
+- [AgentHarness guide](../guides/agentharness.md) — approved runtimes and persistent sessions
 - [Celln Backend](../concepts/celln-backend.md) — the same division of labour, at the
   execution-substrate layer
 - [Adding a Task Mode](extension-guide.md) — the seam this mode is built on

@@ -14,9 +14,10 @@ Platform operator approves an adapter  ->  Agent owner chooses a default
                                             ->  Run detail proves what ran
 ```
 
-The harness is only the process that drives the agent loop. An AgentRun is
-still the unit of execution, lifecycle, scheduling, access control, result,
-and audit. Choosing no harness preserves the built-in `agent-runner` path.
+The harness is only the process that drives the agent loop. An AgentRun remains
+the unit for bounded execution, scheduling, result, and audit; a
+`HarnessSession` is the separate unit for persistent chat. Choosing no harness
+preserves the built-in `agent-runner` path.
 
 ## Choose the right interaction
 
@@ -28,11 +29,14 @@ and must not be blended in the UI.
 | A normal, continuing conversation | **Agent → Chat** with a session-capable runtime | Sympozium creates or resumes one private `HarnessSession` Deployment. The harness owns live conversation context. |
 | A bounded task, automation, schedule, or auditable batch outcome | **AgentRun** | Sympozium creates an isolated Job, injects the normal run inputs/memory, records a terminal result, then the pod exits. |
 
-For a persistent-capable Agent, **Chat** is the primary affordance. Selecting a
-runtime does not silently consume a pod forever: the first **Start chat**
-action creates the durable session, and subsequent visits resume it. The
-**Harnesses** page remains an operator inventory and an advanced way to manage
-additional sessions; it is not the required first click for ordinary chat.
+For a persistent-capable Agent, **Chat** is the primary affordance. Creating the
+Agent with that runtime automatically creates and starts its deterministic
+`<agent>-chat` session, so the user sees useful connection state instead of a
+second setup action. Existing Agents can start a missing session from Chat.
+Idle timeout and an explicit stop prevent the pod from consuming compute
+forever. The **Harnesses** page remains an operator inventory and an advanced
+way to manage additional sessions; it is not the required first click for
+ordinary chat.
 
 The chat panel makes lifecycle visible:
 
@@ -46,8 +50,9 @@ The chat panel makes lifecycle visible:
 
 The browser retains the latest 200 visible turns per namespace/session, so a
 refresh does not look like a new conversation. This is a presentation aid on
-that device, not platform memory: the private adapter owns live context and a
-pod restart can lose it. Sympozium intentionally does not write message bodies
+that device, not platform memory: the private adapter owns live context and the
+maintained Pi and Hermes adapters persist that state on the session PVC across
+pod restart and stop/resume. Sympozium intentionally does not write message bodies
 to CRDs or ConfigMaps. Cross-device/history retention needs a separately
 designed, access-controlled transcript store.
 
@@ -220,6 +225,26 @@ spec:
 This does not modify the Agent default. The webhook requires an approved
 runtime, permitted policy, and a compatible adapter contract.
 
+### Create a persistent session declaratively
+
+Use a `v1alpha2` runtime that declares `session.protocol: openai-chat`; a
+one-shot `v1alpha1` runtime is rejected:
+
+```yaml
+apiVersion: sympozium.ai/v1alpha1
+kind: HarnessSession
+metadata:
+  name: review-agent-chat
+spec:
+  agentRef: review-agent
+  runtimeRef: pi-session-v0-84-4
+  desiredState: running
+  idleTimeout: 30m
+```
+
+The complete maintained-runtime example is
+[`config/samples/harnesssession_persistent.yaml`](https://github.com/sympozium-ai/sympozium/blob/main/config/samples/harnesssession_persistent.yaml).
+
 ### Prove the full path
 
 Use the digest-pinned reference adapter smoke manifest when validating a
@@ -232,7 +257,7 @@ kubectl wait --for=jsonpath='{.status.phase}'=Succeeded \
 ```
 
 It is a deterministic contract fixture, not a production agent harness. See
-[the reference-adapter README](../../examples/harness-reference/README.md) and
+[the reference-adapter README](https://github.com/sympozium-ai/sympozium/blob/main/examples/harness-reference/README.md) and
 [Writing a Harness Adapter](../modes/harness-adapters.md) for the contract.
 
 ## UX delivery checklist

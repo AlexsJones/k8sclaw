@@ -456,7 +456,7 @@ Each MCPServer Deployment has readiness and liveness probes:
 
 MCP tools alone aren't enough — agents need **diagnostic methodology** to use them effectively. SkillPacks provide this guidance.
 
-See [Writing SkillPacks](writing-skills.md) for the general SkillPack guide. For MCP-specific SkillPacks:
+See [Writing SkillPacks](guides/writing-skills.md) for the general SkillPack guide. For MCP-specific SkillPacks:
 
 ### Creating an MCP SkillPack
 

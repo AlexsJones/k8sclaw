@@ -43,8 +43,9 @@ Celln resources with `--set celln.enabled=false`. See [Celln Backend](../concept
 
 ### AgentHarness examples
 
-The chart installs the maintained, experimental Pi and Hermes adapter catalog
-entries by default, alongside the built-in Ensemble catalog. They appear in
+The chart installs only the maintained, experimental **persistent** Pi and
+Hermes adapter catalog entries by default, alongside the built-in Ensemble
+catalog. They appear in
 **Agents → Harnesses** when the UI is set to the chart namespace (normally
 `sympozium-system`). Each is pinned to an immutable digest and carries its
 conformance reference.
@@ -52,18 +53,21 @@ conformance reference.
 The chart also creates a `harness-examples` policy that permits only these two
 images. It does **not** create or modify an Agent, so no external harness runs
 until an operator explicitly selects both that policy and a runtime on an
-Agent. The examples are stateless and currently unmetered; they do not support
-MCP/SkillPack tools, native tool filtering, personas, resume, or subagents.
+Agent. The session adapters persist their own conversation state on a
+per-session PVC and are currently unmetered; they do not support MCP/SkillPack
+tools, native tool filtering, personas, or subagents. One-shot Pi and Hermes
+runtimes remain available in values as explicit opt-in examples and are hidden
+from the default interactive catalog.
 
 Disable the catalog, or select only one adapter, with values such as:
 
 ```yaml
 harnessExamples:
   enabled: false
-  # Or retain the catalog but install Pi only:
-  pi:
+  # Or retain the persistent catalog but install Pi only:
+  piSession:
     enabled: true
-  hermes:
+  hermesSession:
     enabled: false
 ```
 

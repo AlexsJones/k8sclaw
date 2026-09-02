@@ -53,7 +53,7 @@ A **Tool** is a function the LLM can call during an agent run. Each tool has:
 | **Parameters** | JSON Schema describing the arguments the LLM must provide |
 | **Handler** | Go function that executes the tool and returns a result string |
 
-Tools are registered in [`cmd/agent-runner/tools.go`](../cmd/agent-runner/tools.go) and are always available to every agent run (when `TOOLS_ENABLED=true`, which is the default).
+Tools are registered in [`cmd/agent-runner/tools.go`](https://github.com/sympozium-ai/sympozium/blob/main/cmd/agent-runner/tools.go) and are always available to every agent run (when `TOOLS_ENABLED=true`, which is the default).
 
 ### Tools vs Skills
 

@@ -5,6 +5,12 @@ primary process. An **adapter** is the image that makes a particular harness fit
 the task the way Sympozium supplies it, runs the harness, and hands the answer back on the
 result contract.
 
+This page describes the `v1alpha1` one-shot adapter contract. A persistent
+adapter uses the separate `v1alpha2` `openai-chat` contract and runs behind a
+`HarnessSession`; see the [persistent-session guide](../guides/agentharness.md#persistent-interactive-sessions-experimental)
+and the maintained adapter repository's
+[contract](https://github.com/sympozium-ai/harness-adapters/blob/main/docs/adapter-contract.md).
+
 Sympozium ships no adapters. This page is the contract, so one can be written and maintained
 without touching this repository or waiting on a Sympozium release. The same division as the
 [Celln backend](../concepts/celln-backend.md), where the execution runtime lives in its own

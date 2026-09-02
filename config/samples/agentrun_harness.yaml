@@ -1,4 +1,4 @@
-# Task mode `harness` — run an external agent harness as the pod's primary
+# One-shot task mode `harness` — run an external agent harness as the pod's primary
 # process instead of agent-runner. See docs/modes/harness.md.
 #
 # Sympozium ships the seam, not the harnesses: every harness-mode run names an
@@ -10,6 +10,9 @@
 # policy explicitly opts in. This sample uses Sympozium's published,
 # deterministic reference adapter; production users should register their own
 # reviewed adapter digest as an AgentRuntime.
+#
+# This v1alpha1 example exits with its AgentRun. For continuing chat, use the
+# v1alpha2 example in harnesssession_persistent.yaml instead.
 apiVersion: sympozium.ai/v1alpha1
 kind: SympoziumPolicy
 metadata:
@@ -33,7 +36,7 @@ metadata:
 spec:
   policyRef: harness-example
   agents:
-    primary:
+    default:
       model: deepseek-chat
   authRefs:
     - provider: deepseek

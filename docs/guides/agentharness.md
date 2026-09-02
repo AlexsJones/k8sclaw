@@ -49,16 +49,17 @@ metadata:
   namespace: default
 spec:
   agentRef: analyst
-  runtimeRef: pi-session-v1
+  runtimeRef: pi-session-v0-84-4
   desiredState: running
 ```
 
 For a person using the Agent, the primary route is **Agents → _your Agent_ →
-Chat**. If its selected runtime supports persistent chat, **Start chat** creates
-one deterministic session for that Agent; when it reaches `Ready`, **Open chat**
-resumes the private conversation. The **Harnesses** page is the operator-facing
-inventory for inspecting approved runtimes and managing additional sessions,
-not the normal way to begin a conversation.
+Chat**. Creating an Agent with a session-capable runtime automatically creates
+and starts its deterministic `<agent>-chat` session. The page shows **Starting**
+until it reaches `Ready`, then **Open chat** enters the conversation. Existing
+Agents can also create or resume a session from Chat. The **Harnesses** page is
+the operator-facing inventory for inspecting approved runtimes and managing
+additional sessions, not the normal way to begin a conversation.
 
 The Chat panel reports whether the session is connected, starting, or stopped.
 Stopping removes the private workload while preserving the `HarnessSession`
@@ -238,7 +239,7 @@ spec:
   policyRef: harness-enabled
   runtimeRef: codex-v1
   agents:
-    primary:
+    default:
       model: claude-sonnet
 ```
 
@@ -278,10 +279,12 @@ kubectl -n default get agentrun review-example -o yaml
 kubectl -n default get job -l sympozium.ai/agent-run=review-example
 ```
 
-For inline object-form authoring, see
-[`config/samples/agentrun_harness.yaml`](../../config/samples/agentrun_harness.yaml).
+For a complete persistent Pi/Hermes catalog and session example, see
+[`config/samples/harnesssession_persistent.yaml`](https://github.com/sympozium-ai/sympozium/blob/main/config/samples/harnesssession_persistent.yaml).
+For inline one-shot object-form authoring, see
+[`config/samples/agentrun_harness.yaml`](https://github.com/sympozium-ai/sympozium/blob/main/config/samples/agentrun_harness.yaml).
 For the complete runtime resource, see
-[`config/samples/agentruntime_sample.yaml`](../../config/samples/agentruntime_sample.yaml).
+[`config/samples/agentruntime_sample.yaml`](https://github.com/sympozium-ai/sympozium/blob/main/config/samples/agentruntime_sample.yaml).
 For the user journey, control meanings, proof shown after a run, and UX
 delivery criteria, see [AgentHarness user experience](agentharness-ux.md).
 

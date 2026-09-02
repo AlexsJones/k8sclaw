@@ -1,4 +1,4 @@
-# AgentRuntime — an administrator-approved external runtime for agent runs.
+# AgentRuntime — an administrator-approved one-shot external runtime for AgentRuns.
 #
 # This is the object-form, admin-owned counterpart to inline `task.mode:
 # harness` parameters. A run references a runtime here instead of naming an
@@ -7,6 +7,8 @@
 #
 # The image must be digest-pinned: a mutable tag is rejected, and the digest is
 # recorded on status.resolvedImageDigest for audit.
+# For a v1alpha2 persistent runtime and HarnessSession, see
+# harnesssession_persistent.yaml.
 apiVersion: sympozium.ai/v1alpha1
 kind: AgentRuntime
 metadata:
