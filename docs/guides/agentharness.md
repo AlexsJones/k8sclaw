@@ -68,12 +68,24 @@ the current browser/device (bounded to the latest 200 turns) so a refresh does
 not make the conversation appear empty. It is deliberately **not** copied into
 CR status, ConfigMaps, or the browser-to-pod API.
 
-The first reference adapter is Pi's experimental `v1alpha2` mode. It serializes
-turns and stores Pi's session state on the `HarnessSession`-owned PVC, so the
-conversation survives pod restart and explicit stop/resume. It continues to
-disable tools, skills, and prompt templates. Treat a session as a bounded
-interactive workspace, not durable platform Agent memory or a general exposed
-OpenAI gateway.
+The maintained Pi and Hermes adapters implement the experimental `v1alpha2`
+session contract. They serialize turns and store adapter-owned session state on
+the `HarnessSession` PVC, so the conversation survives pod restart and explicit
+stop/resume. Both continue to disable tools and skills. Treat a session as a
+bounded interactive workspace, not durable platform Agent memory or a general
+exposed OpenAI gateway.
+
+Each authenticated chat receives an `X-Sympozium-Request-ID`. The session
+status records request/active/error counts, the latest request lifecycle and
+timestamps, and `lastActivityTime`. Disconnecting the client cancels the
+upstream request and the adapter terminates its active model subprocess. Usage
+accounting is explicitly reported as `unavailable` until an adapter supplies
+trustworthy usage; missing metrics are never presented as zero.
+
+Set `spec.idleTimeout` to a positive duration such as `30m` to stop idle
+compute. Activity is measured at the API proxy, and an in-flight request blocks
+idle shutdown. On timeout, the Deployment, Service, and NetworkPolicy are
+removed while the session CR and PVC remain available for Resume.
 
 For operators, the trust boundary is unchanged:
 
