@@ -53,6 +53,11 @@ export function HarnessesPage() {
         </Button>
       </div>
 
+      {(sessions || []).length > 0 && <Card>
+        <CardHeader><CardTitle className="text-base">Interactive sessions</CardTitle></CardHeader>
+        <CardContent className="space-y-2">{sessions?.map((session) => <div key={session.metadata.name} className="flex items-center justify-between gap-3 border p-3 text-sm"><div><p className="font-mono">{session.metadata.name}</p><p className="text-xs text-muted-foreground">{session.spec.agentRef} · {session.spec.runtimeRef} · {session.status?.phase || "Pending"}</p></div><div className="flex gap-2">{session.status?.phase === "Ready" && <Button size="sm" onClick={() => setChattingSession(session)}><MessageSquare className="mr-2 h-4 w-4" /> Open</Button>}<Button size="sm" variant="outline" disabled={stopSession.isPending} onClick={() => stopSession.mutate(session.metadata.name)}><Square className="mr-2 h-3 w-3" /> Stop</Button></div></div>)}</CardContent>
+      </Card>}
+
       {(runtimes || []).length === 0 ? (
         <Card>
           <CardContent className="space-y-4 py-8 text-sm text-muted-foreground">
@@ -118,10 +123,6 @@ export function HarnessesPage() {
         </div>
       )}
 
-      {(sessions || []).length > 0 && <Card>
-        <CardHeader><CardTitle className="text-base">Interactive sessions</CardTitle></CardHeader>
-        <CardContent className="space-y-2">{sessions?.map((session) => <div key={session.metadata.name} className="flex items-center justify-between gap-3 border p-3 text-sm"><div><p className="font-mono">{session.metadata.name}</p><p className="text-xs text-muted-foreground">{session.spec.agentRef} · {session.spec.runtimeRef} · {session.status?.phase || "Pending"}</p></div><div className="flex gap-2">{session.status?.phase === "Ready" && <Button size="sm" onClick={() => setChattingSession(session)}><MessageSquare className="mr-2 h-4 w-4" /> Open</Button>}<Button size="sm" variant="outline" disabled={stopSession.isPending} onClick={() => stopSession.mutate(session.metadata.name)}><Square className="mr-2 h-3 w-3" /> Stop</Button></div></div>)}</CardContent>
-      </Card>}
       {startingRuntime && <StartHarnessSessionDialog open={true} onOpenChange={(open) => { if (!open) setStartingRuntime(null); }} runtime={startingRuntime} agents={agents || []} />}
       {chattingSession && <HarnessSessionChatDialog open={true} onOpenChange={(open) => { if (!open) setChattingSession(null); }} session={chattingSession} />}
     </div>
