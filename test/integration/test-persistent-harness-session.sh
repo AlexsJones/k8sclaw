@@ -141,6 +141,29 @@ RUNS_AFTER="$(kubectl get agentruns -n "$NAMESPACE" --no-headers 2>/dev/null | w
 [[ "$RUNS_AFTER" == "$RUNS_BEFORE" ]] || fail "persistent chat created AgentRuns (${RUNS_BEFORE} -> ${RUNS_AFTER})"
 pass "persistent chat created no AgentRuns"
 
+info "Proving streaming and explicit stop/resume"
+STREAM_BODY='{"stream":true,"messages":[{"role":"user","content":"Reply with STREAM-OK only."}]}'
+STREAM_RESPONSE="$(api_request POST "/api/v1/harness-sessions/${SESSION_NAME}/chat" "$STREAM_BODY")"
+[[ "$STREAM_RESPONSE" == *'data: '* && "$STREAM_RESPONSE" == *'STREAM-OK'* && "$STREAM_RESPONSE" == *'data: [DONE]'* ]] || fail "session stream was not valid SSE: ${STREAM_RESPONSE}"
+pass "persistent chat returned SSE content and [DONE]"
+
+api_request PATCH "/api/v1/harness-sessions/${SESSION_NAME}" '{"desiredState":"stopped"}' >/dev/null
+wait_for_session_phase "$SESSION_NAME" Draining || fail "session did not stop"
+for _ in $(seq 1 30); do
+  kubectl get deployment "$SESSION_NAME" -n "$NAMESPACE" >/dev/null 2>&1 || break
+  sleep 1
+done
+kubectl get deployment "$SESSION_NAME" -n "$NAMESPACE" >/dev/null 2>&1 && fail "stopped session retained its Deployment"
+kubectl get pvc "$SESSION_NAME" -n "$NAMESPACE" >/dev/null 2>&1 || fail "stopped session lost its durable state claim"
+pass "stop removed the workload and preserved durable state"
+
+api_request PATCH "/api/v1/harness-sessions/${SESSION_NAME}" '{"desiredState":"running"}' >/dev/null
+wait_for_session_phase "$SESSION_NAME" Ready || fail "stopped session did not resume"
+RESUMED_RESPONSE="$(api_request POST "/api/v1/harness-sessions/${SESSION_NAME}/chat" "$SECOND_BODY")"
+RESUMED_TEXT="$(jq -r '.choices[0].message.content // ""' <<<"$RESUMED_RESPONSE")"
+[[ "$RESUMED_TEXT" == *"$MEMORY_TOKEN"* ]] || fail "conversation state did not survive stop/resume; response: ${RESUMED_TEXT}"
+pass "conversation state survived explicit stop/resume"
+
 info "Proving actionable reconciliation failure status"
 BAD_BODY="$(jq -cn --arg name "$BAD_AGENT_NAME" --arg model "$MODEL" --arg runtimeRef "$RUNTIME_NAME" '{name:$name,provider:"openai",model:$model,runtimeRef:$runtimeRef,policyRef:"harness-examples",skills:[],channels:[]}')"
 api_request POST /api/v1/agents "$BAD_BODY" >/dev/null
@@ -148,5 +171,17 @@ wait_for_session_phase "$BAD_SESSION_NAME" Failed || fail "invalid persistent Ag
 FAILURE_MESSAGE="$(kubectl get harnesssession "$BAD_SESSION_NAME" -n "$NAMESPACE" -o jsonpath='{.status.conditions[?(@.type=="Ready")].message}')"
 [[ -n "$FAILURE_MESSAGE" ]] || fail "Failed session has no actionable condition message"
 pass "failed reconciliation exposes: ${FAILURE_MESSAGE}"
+
+info "Proving session deletion and owned-resource cleanup"
+api_request DELETE "/api/v1/harness-sessions/${SESSION_NAME}" >/dev/null
+for _ in $(seq 1 30); do
+  kubectl get harnesssession "$SESSION_NAME" -n "$NAMESPACE" >/dev/null 2>&1 || break
+  sleep 1
+done
+kubectl get harnesssession "$SESSION_NAME" -n "$NAMESPACE" >/dev/null 2>&1 && fail "deleted HarnessSession still exists"
+for resource in deployment service networkpolicy persistentvolumeclaim; do
+  kubectl get "$resource" "$SESSION_NAME" -n "$NAMESPACE" >/dev/null 2>&1 && fail "deleted HarnessSession retained ${resource}/${SESSION_NAME}"
+done
+pass "deletion removed the session and all owned resources"
 
 pass "persistent harness session integration test complete"
