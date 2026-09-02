@@ -10,7 +10,7 @@
 #   3. The pod security context is unchanged (non-root, readOnlyRootFilesystem,
 #      drop: [ALL])
 #   4. status.result is populated through the normal result contract
-#   5. A postRun response gate still fires on that result and rewrites it
+#   5. The unmodified harness response is recorded
 #   6. status.tokenUsage stays ABSENT — an external harness reports no tokens,
 #      and absent-not-zero is the existing convention
 #   7. An undeclared capability is rejected at admission
@@ -44,8 +44,6 @@ LM_STUDIO_BASE_URL="${LM_STUDIO_BASE_URL:-http://172.18.0.2:9473/proxy/lm-studio
 LM_STUDIO_MODEL="${LM_STUDIO_MODEL:-qwen/qwen3.5-9b}"
 
 EXPECTED_ANSWER="harness answered"
-GATE_MARKER="GATED-BY-INTEGRATION-TEST"
-
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -129,11 +127,7 @@ TASK_BLOCK=$(cat <<EOF
 EOF
 )
 
-# ── Create the AgentRun, with a postRun response gate ────────────────────────
-#
-# The gate rewrites the result. If it fires, the harness's answer went through
-# the same contract every agent-runner run uses — which is the claim under
-# test.
+# ── Create the one-shot AgentRun ─────────────────────────────────────────────
 
 cat <<EOF | kubectl apply -n "$NAMESPACE" -f -
 apiVersion: sympozium.ai/v1alpha1
@@ -151,26 +145,6 @@ ${TASK_BLOCK}
     baseURL: ${LM_STUDIO_BASE_URL}
     authSecretRef: "${HARNESS_AUTH_SECRET}"
   timeout: "4m"
-  lifecycle:
-    rbac:
-      - apiGroups: ["sympozium.ai"]
-        resources: ["agentruns"]
-        verbs: ["get", "patch"]
-    postRun:
-      - name: response-gate
-        gate: true
-        image: soldevelo/kubectl:1.36
-        command:
-          - sh
-          - -c
-          - |
-            echo "gate: AGENT_EXIT_CODE=\${AGENT_EXIT_CODE}"
-            echo "gate: AGENT_RESULT=\${AGENT_RESULT}"
-            # A constant, not the agent's output: AGENT_RESULT is
-            # agent-controlled and would break the verdict JSON. The claim
-            # under test is that the gate fired on a harness run at all.
-            kubectl annotate agentrun ${RUN_NAME} -n ${NAMESPACE} --overwrite \
-              'sympozium.ai/gate-verdict={"action":"rewrite","response":"${GATE_MARKER}","reason":"integration test"}'
 EOF
 
 info "AgentRun '${RUN_NAME}' created — polling..."
@@ -276,24 +250,44 @@ else
   kubectl logs "$POD_NAME" -n "$NAMESPACE" -c agent --tail=40 2>/dev/null || true
 fi
 
-# 5. The gate still fired on that result.
-#
-# The durable proof is status.gateVerdict plus the rewritten result, asserted
-# below. The transient PostRunning phase is deliberately not sampled: the
-# controller can move Running -> PostRunning -> Succeeded inside a single poll
-# interval, so watching for the intermediate phase is racy by construction.
-GATE_VERDICT="$(kubectl get agentrun "$RUN_NAME" -n "$NAMESPACE" -o jsonpath='{.status.gateVerdict}' 2>/dev/null || echo "")"
-if [[ "$GATE_VERDICT" == "rewritten" ]]; then
-  pass "status.gateVerdict = rewritten"
+# 5. The one-shot adapter response is preserved.
+if [[ "$RESULT" == "$EXPECTED_ANSWER" ]]; then
+  pass "the one-shot harness response was preserved"
 else
-  fail "status.gateVerdict = '${GATE_VERDICT}' (expected rewritten)"
+  fail "unexpected one-shot harness response: '${RESULT}'"
 fi
 
-if [[ "$RESULT" == "$GATE_MARKER" ]]; then
-  pass "the gate rewrote the harness's result"
+# Lifecycle RBAC shares run storage with hooks and must not be combined with an
+# untrusted external runtime. Prove the hardened rejection separately instead
+# of expecting the old unsafe postRun-gate behavior.
+LIFECYCLE_STDERR="$(mktemp)"
+cat <<EOF | kubectl create --dry-run=server -n "$NAMESPACE" -f - >/dev/null 2>"$LIFECYCLE_STDERR" || true
+apiVersion: sympozium.ai/v1alpha1
+kind: AgentRun
+metadata:
+  name: ${RUN_NAME}-lifecycle-check
+spec:
+  agentRef: ${INSTANCE_NAME}
+  agentId: primary
+  sessionKey: harness-lifecycle-check
+${TASK_BLOCK}
+  model:
+    provider: openai-compatible
+    model: ${LM_STUDIO_MODEL}
+    baseURL: ${LM_STUDIO_BASE_URL}
+    authSecretRef: "${HARNESS_AUTH_SECRET}"
+  lifecycle:
+    rbac:
+      - apiGroups: ["sympozium.ai"]
+        resources: ["agentruns"]
+        verbs: ["get"]
+EOF
+if grep -qi "cannot be combined with lifecycle RBAC" "$LIFECYCLE_STDERR"; then
+  pass "admission rejects harness plus lifecycle RBAC"
 else
-  fail "result was not rewritten by the gate: '${RESULT}'"
+  fail "admission did not explain the harness/lifecycle RBAC rejection: $(cat "$LIFECYCLE_STDERR")"
 fi
+rm -f "$LIFECYCLE_STDERR"
 
 # 6. Token usage stays absent rather than zero.
 TOKEN_USAGE="$(kubectl get agentrun "$RUN_NAME" -n "$NAMESPACE" -o jsonpath='{.status.tokenUsage}' 2>/dev/null || echo "")"
