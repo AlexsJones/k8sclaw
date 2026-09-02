@@ -104,8 +104,11 @@ jobs:
                 containers:
                   - name: ollama
                     image: docker.io/ollama/ollama:0.12.10@sha256:e8c3d1f6ad16323bc40dc63eff0701d4fc32113f75a86b54b3e836eef8290de6
+                    env:
+                      - name: OLLAMA_HOST
+                        value: 0.0.0.0:8080
                     ports:
-                      - containerPort: 11434
+                      - containerPort: 8080
                     resources:
                       requests:
                         cpu: 500m
@@ -129,7 +132,7 @@ jobs:
             ports:
               - name: http
                 port: 8080
-                targetPort: 11434
+                targetPort: 8080
           EOF
           kubectl rollout status deployment/ollama --timeout=300s
           kubectl exec deployment/ollama -- ollama pull qwen2.5:0.5b
