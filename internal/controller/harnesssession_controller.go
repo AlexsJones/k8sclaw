@@ -68,7 +68,11 @@ func (r *HarnessSessionReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		if err := r.deleteWorkload(ctx, &session); err != nil {
 			return ctrl.Result{}, err
 		}
-		return r.setStatus(ctx, &session, "Draining", "Stopped", "session is stopped", "", "", "")
+		reason, message := "Stopped", "session is stopped"
+		if condition := meta.FindStatusCondition(session.Status.Conditions, sympoziumv1alpha1.HarnessSessionReadyCondition); condition != nil && condition.Reason == "IdleTimeout" {
+			reason, message = "IdleTimeout", "session stopped after its configured idle timeout"
+		}
+		return r.setStatus(ctx, &session, "Draining", reason, message, "", "", "")
 	}
 
 	agent, runtime, reason := r.resolveInputs(ctx, &session)

@@ -142,6 +142,11 @@ func TestHarnessSessionIdleTimeoutStopsWorkloadButPreservesState(t *testing.T) {
 	if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: key}); err != nil {
 		t.Fatal(err)
 	}
+	// The spec update queues a stopped-state reconcile; it must not replace the
+	// actionable timeout reason with the generic manual-stop reason.
+	if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: key}); err != nil {
+		t.Fatal(err)
+	}
 	var got sympoziumv1alpha1.HarnessSession
 	if err := cl.Get(context.Background(), key, &got); err != nil {
 		t.Fatal(err)
