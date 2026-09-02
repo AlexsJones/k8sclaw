@@ -132,7 +132,7 @@ contract defines mediated equivalents. The historical/default
 
 ### Built-in persistent catalog
 
-The Helm chart installs the maintained experimental Pi persistent runtime in
+The Helm chart installs the maintained experimental Pi and Hermes persistent runtimes in
 the chart namespace by default, just as it installs the Ensemble catalog. In
 the web UI, switch to that namespace (normally `sympozium-system`) and open
 **Agents → Harnesses**. The `harness-examples` policy permits only those exact
@@ -141,9 +141,8 @@ Agent before running it. No Agent or credential is created by the catalog.
 
 The default interactive catalog contains only session-capable runtimes. The
 one-shot Pi and Hermes adapters remain available as explicit AgentRun examples
-but are not installed or shown as default interactive harnesses. Persistent
-Hermes will join the default catalog after it implements and passes the
-`v1alpha2` session contract. Current session adapters deliberately provide no
+but are not installed or shown as default interactive harnesses. Current
+session adapters deliberately provide no
 MCP/SkillPack tools, native tools, persona mapping, subagents, or trusted usage
 metrics. See the [adapter conformance report](https://github.com/sympozium-ai/harness-adapters/blob/main/docs/conformance.md)
 before enabling them.

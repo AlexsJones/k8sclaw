@@ -124,7 +124,15 @@ done
 kubectl wait --for=condition=Ready "pod/${NEW_POD}" -n "$NAMESPACE" --timeout="${TIMEOUT}s" >/dev/null || fail "replacement session pod did not become Ready"
 
 SECOND_BODY='{"messages":[{"role":"user","content":"What exact token did I ask you to remember? Reply with the token only."}]}'
-SECOND_RESPONSE="$(api_request POST "/api/v1/harness-sessions/${SESSION_NAME}/chat" "$SECOND_BODY")"
+SECOND_RESPONSE=""
+# A replacement pod can report Ready just before its Service endpoint update
+# reaches the API server's connection. Retry that short propagation window.
+for _ in $(seq 1 10); do
+  SECOND_RESPONSE="$(api_request POST "/api/v1/harness-sessions/${SESSION_NAME}/chat" "$SECOND_BODY" 2>/dev/null || true)"
+  [[ -n "$SECOND_RESPONSE" ]] && break
+  sleep 2
+done
+[[ -n "$SECOND_RESPONSE" ]] || fail "session adapter remained unavailable after pod restart"
 SECOND_TEXT="$(jq -r '.choices[0].message.content // ""' <<<"$SECOND_RESPONSE")"
 [[ "$SECOND_TEXT" == *"$MEMORY_TOKEN"* ]] || fail "conversation state did not survive restart; response: ${SECOND_TEXT}"
 pass "conversation state survived pod restart"

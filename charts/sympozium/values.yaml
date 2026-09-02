@@ -231,6 +231,10 @@ harnessExamples:
     enabled: false
     name: hermes-v0-20-6
     image: ghcr.io/sympozium-ai/harness-adapters/hermes@sha256:df66d30c56e7a82c74b9df1d8ef4034127f017640f460c0d3aa7c15f28550ab4
+  hermesSession:
+    enabled: true
+    name: hermes-session-v0-20-6
+    image: ghcr.io/sympozium-ai/harness-adapters/hermes@sha256:bdbf6f8fae5f282af8008e0a2c2aef398b8c2146185a32365db8ae7599b833be
 
 # -- Default MCPServer catalog entries to install (github, grafana, kubernetes, argocd, postgres)
 defaultMcpServers:

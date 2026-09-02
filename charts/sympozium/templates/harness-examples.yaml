@@ -18,11 +18,15 @@ the catalog instead of failing on a nil map.
     "enabled" false
     "name" "hermes-v0-20-6"
     "image" "ghcr.io/sympozium-ai/harness-adapters/hermes@sha256:df66d30c56e7a82c74b9df1d8ef4034127f017640f460c0d3aa7c15f28550ab4")
+  "hermesSession" (dict
+    "enabled" true
+    "name" "hermes-session-v0-20-6"
+    "image" "ghcr.io/sympozium-ai/harness-adapters/hermes@sha256:bdbf6f8fae5f282af8008e0a2c2aef398b8c2146185a32365db8ae7599b833be")
 }}
 {{- $examples := mergeOverwrite $defaults (default (dict) .Values.harnessExamples) }}
 {{- if $examples.enabled }}
-{{- if not (or $examples.pi.enabled $examples.piSession.enabled $examples.hermes.enabled) }}
-{{- fail "harnessExamples.enabled requires pi.enabled, piSession.enabled, or hermes.enabled" }}
+{{- if not (or $examples.pi.enabled $examples.piSession.enabled $examples.hermes.enabled $examples.hermesSession.enabled) }}
+{{- fail "harnessExamples.enabled requires at least one adapter runtime" }}
 {{- end }}
 {{- if and $examples.pi.enabled (not (regexMatch "@sha256:[a-f0-9]{64}$" $examples.pi.image)) }}
 {{- fail "harnessExamples.pi.image must be a digest-pinned OCI reference" }}
@@ -32,6 +36,9 @@ the catalog instead of failing on a nil map.
 {{- end }}
 {{- if and $examples.hermes.enabled (not (regexMatch "@sha256:[a-f0-9]{64}$" $examples.hermes.image)) }}
 {{- fail "harnessExamples.hermes.image must be a digest-pinned OCI reference" }}
+{{- end }}
+{{- if and $examples.hermesSession.enabled (not (regexMatch "@sha256:[a-f0-9]{64}$" $examples.hermesSession.image)) }}
+{{- fail "harnessExamples.hermesSession.image must be a digest-pinned OCI reference" }}
 {{- end }}
 ---
 # The chart registers examples but does not bind this policy to any Agent.
@@ -60,6 +67,9 @@ spec:
     {{- end }}
     {{- if $examples.hermes.enabled }}
       - {{ $examples.hermes.image | quote }}
+    {{- end }}
+    {{- if $examples.hermesSession.enabled }}
+      - {{ $examples.hermesSession.image | quote }}
     {{- end }}
 {{- if $examples.pi.enabled }}
 ---
@@ -115,6 +125,28 @@ metadata:
 spec:
   image: {{ $examples.hermes.image | quote }}
   contractVersion: v1alpha1
+  supportOwner: sympozium-maintainers
+  conformance:
+    status: conformant
+    owner: sympozium-maintainers
+    reference: https://github.com/sympozium-ai/harness-adapters/blob/main/docs/conformance.md
+{{- end }}
+{{- if $examples.hermesSession.enabled }}
+---
+apiVersion: sympozium.ai/v1alpha1
+kind: AgentRuntime
+metadata:
+  name: {{ $examples.hermesSession.name }}
+  labels:
+    sympozium.ai/builtin: "true"
+    sympozium.ai/harness-example: "true"
+    {{- include "sympozium.labels" . | nindent 4 }}
+spec:
+  image: {{ $examples.hermesSession.image | quote }}
+  contractVersion: v1alpha2
+  session:
+    protocol: openai-chat
+    port: 8080
   supportOwner: sympozium-maintainers
   conformance:
     status: conformant
