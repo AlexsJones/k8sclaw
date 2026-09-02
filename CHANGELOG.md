@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.10.55](https://github.com/sympozium-ai/sympozium/compare/v0.10.54...v0.10.55) (2026-09-02)
+
+
+### Features
+
+* **web:** split feed into one-shot runs and persistent sessions ([#411](https://github.com/sympozium-ai/sympozium/issues/411)) ([8a09d1b](https://github.com/sympozium-ai/sympozium/commit/8a09d1b64c25882dc84994a7a6660f002ed08421))
+* **web:** surface interactive sessions at top of Harnesses page ([#413](https://github.com/sympozium-ai/sympozium/issues/413)) ([5a53be6](https://github.com/sympozium-ai/sympozium/commit/5a53be6f046e7fca2780f3bc2230ee2d19588c67))
+
 ## [0.10.54](https://github.com/sympozium-ai/sympozium/compare/v0.10.53...v0.10.54) (2026-09-02)
 
 
