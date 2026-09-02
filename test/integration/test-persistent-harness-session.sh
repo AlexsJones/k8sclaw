@@ -144,7 +144,17 @@ pass "persistent chat created no AgentRuns"
 info "Proving streaming and explicit stop/resume"
 STREAM_BODY='{"stream":true,"messages":[{"role":"user","content":"Reply with STREAM-OK only."}]}'
 STREAM_RESPONSE="$(api_request POST "/api/v1/harness-sessions/${SESSION_NAME}/chat" "$STREAM_BODY")"
-[[ "$STREAM_RESPONSE" == *'data: '* && "$STREAM_RESPONSE" == *'STREAM-OK'* && "$STREAM_RESPONSE" == *'data: [DONE]'* ]] || fail "session stream was not valid SSE: ${STREAM_RESPONSE}"
+SSE_EVENTS="$(sed -n 's/^data: //p' <<<"$STREAM_RESPONSE")"
+SSE_CONTENT_EVENTS=0
+while IFS= read -r event; do
+  [[ -n "$event" ]] || continue
+  [[ "$event" == "[DONE]" ]] && continue
+  jq -e . >/dev/null <<<"$event" || fail "session stream contained invalid JSON: ${event}"
+  if jq -e '.choices[0].delta.content | type == "string" and length > 0' >/dev/null <<<"$event"; then
+    SSE_CONTENT_EVENTS=$((SSE_CONTENT_EVENTS + 1))
+  fi
+done <<<"$SSE_EVENTS"
+[[ "$SSE_CONTENT_EVENTS" -gt 0 && "$STREAM_RESPONSE" == *'data: [DONE]'* ]] || fail "session stream was not valid SSE: ${STREAM_RESPONSE}"
 pass "persistent chat returned SSE content and [DONE]"
 
 api_request PATCH "/api/v1/harness-sessions/${SESSION_NAME}" '{"desiredState":"stopped"}' >/dev/null
