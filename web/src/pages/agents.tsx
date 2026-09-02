@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Link, useSearchParams } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import {
   useAgents,
   useDeleteAgent,
@@ -35,6 +35,7 @@ export function AgentsPage() {
   const { data: runtimes } = useRuntimes();
   const { data: policies } = usePolicies();
   const [searchParams] = useSearchParams();
+  const navigate = useNavigate();
   const deleteAgent = useDeleteAgent();
   const createAgent = useCreateAgent();
   const [wizardOpen, setWizardOpen] = useState(false);
@@ -108,6 +109,11 @@ export function AgentsPage() {
       {
         onSuccess: () => {
           setWizardOpen(false);
+          const runtime = runtimes?.find((candidate) => candidate.metadata.name === result.runtimeRef);
+          if (runtime?.spec.contractVersion === "v1alpha2" && runtime.spec.session?.protocol === "openai-chat") {
+            navigate(`/agents/${encodeURIComponent(result.name)}?tab=chat`);
+            return;
+          }
           if (result.channels.includes("whatsapp")) {
             setWhatsAppInstance(result.name);
           }

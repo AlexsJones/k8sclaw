@@ -542,10 +542,8 @@ export function OnboardingWizard({
   onComplete,
   isPending,
 }: OnboardingWizardProps) {
-  const oneShotRuntimes = availableRuntimes.filter(
-    (runtime) => runtime.spec.contractVersion === "v1alpha1" && !runtime.spec.session,
-  );
-  const defaultRuntimeRef = oneShotRuntimes.some(
+  const selectableRuntimes = availableRuntimes;
+  const defaultRuntimeRef = selectableRuntimes.some(
     (runtime) => runtime.metadata.name === defaults?.runtimeRef,
   ) ? defaults?.runtimeRef || "" : "";
   const steps = stepsForMode(mode, !!defaultRuntimeRef);
@@ -886,7 +884,7 @@ export function OnboardingWizard({
               value={form.runtimeRef || "builtin"}
               onValueChange={(value) => {
                 const runtimeRef = value === "builtin" ? "" : value;
-                const isDefaultCatalog = oneShotRuntimes.some((runtime) => runtime.metadata.name === runtimeRef && runtime.metadata.labels?.["sympozium.ai/harness-example"] === "true");
+                const isDefaultCatalog = selectableRuntimes.some((runtime) => runtime.metadata.name === runtimeRef && runtime.metadata.labels?.["sympozium.ai/harness-example"] === "true");
                 setForm({
                   ...form,
                   runtimeRef,
@@ -900,18 +898,13 @@ export function OnboardingWizard({
               <SelectTrigger><SelectValue /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="builtin">Built-in Agent runner — recommended default</SelectItem>
-                {oneShotRuntimes.map((runtime) => (
+                {selectableRuntimes.map((runtime) => (
                   <SelectItem key={runtime.metadata.name} value={runtime.metadata.name}>
-                    {runtime.metadata.name}{runtime.spec.supportOwner ? ` — ${runtime.spec.supportOwner}` : ""}
+                    {runtime.metadata.name}{runtime.spec.session?.protocol === "openai-chat" ? " — persistent chat" : " — one-shot"}{runtime.spec.supportOwner ? ` · ${runtime.spec.supportOwner}` : ""}
                   </SelectItem>
                 ))}
               </SelectContent>
             </Select>
-            {availableRuntimes.some((runtime) => runtime.spec.session) && (
-              <p className="text-xs text-muted-foreground">
-                Persistent runtimes are started from Harnesses and are not AgentRun defaults.
-              </p>
-            )}
             {form.runtimeRef ? (
               <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-3 text-xs text-muted-foreground">
                 <span className="font-medium text-foreground">Harness selected: {form.runtimeRef}.</span>{" "}

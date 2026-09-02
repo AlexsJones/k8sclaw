@@ -213,13 +213,14 @@ defaultPersonas:
 # images. No Agent is created or changed: an operator must select the policy
 # and runtime explicitly on an Agent before either adapter can execute.
 harnessExamples:
-  # -- Install the Pi and Hermes AgentRuntime catalog entries.
+  # -- Install the maintained persistent AgentRuntime catalog. One-shot
+  # adapters remain available as explicit opt-in examples.
   enabled: true
   policy:
     # -- Policy an Agent must reference before it can execute either example.
     name: harness-examples
   pi:
-    enabled: true
+    enabled: false
     name: pi-v0-84-4
     image: ghcr.io/sympozium-ai/harness-adapters/pi@sha256:b0d50402dc0a25b2c46f86dbd6b5de963487fa0ffa44058cb324ab2c68934f3b
   piSession:
@@ -227,7 +228,7 @@ harnessExamples:
     name: pi-session-v0-84-4
     image: ghcr.io/sympozium-ai/harness-adapters/pi@sha256:cb35578a1f1ace8870a2a9c08e9efe7cf720bfd938cec503d24a4eda10384141
   hermes:
-    enabled: true
+    enabled: false
     name: hermes-v0-20-6
     image: ghcr.io/sympozium-ai/harness-adapters/hermes@sha256:df66d30c56e7a82c74b9df1d8ef4034127f017640f460c0d3aa7c15f28550ab4
 

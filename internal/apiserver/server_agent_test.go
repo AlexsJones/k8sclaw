@@ -44,9 +44,13 @@ func TestInstallDefaultRuntimes(t *testing.T) {
 	}
 	runtime := &sympoziumv1alpha1.AgentRuntime{
 		ObjectMeta: metav1.ObjectMeta{Name: "pi-v0-84-4", Namespace: "sympozium-system", Labels: map[string]string{"sympozium.ai/harness-example": "true"}},
-		Spec:       sympoziumv1alpha1.AgentRuntimeSpec{Image: "ghcr.io/sympozium-ai/harness-adapters/pi@sha256:1234"},
+		Spec:       sympoziumv1alpha1.AgentRuntimeSpec{Image: "ghcr.io/sympozium-ai/harness-adapters/pi@sha256:1234", ContractVersion: "v1alpha2", Session: &sympoziumv1alpha1.AgentRuntimeSession{Protocol: "openai-chat", Port: 8080}},
 	}
-	srv, cl := newTestServer(t, policy, runtime)
+	oneShot := &sympoziumv1alpha1.AgentRuntime{
+		ObjectMeta: metav1.ObjectMeta{Name: "hermes-oneshot", Namespace: "sympozium-system", Labels: map[string]string{"sympozium.ai/harness-example": "true"}},
+		Spec:       sympoziumv1alpha1.AgentRuntimeSpec{Image: "ghcr.io/sympozium-ai/harness-adapters/hermes@sha256:5678", ContractVersion: "v1alpha1"},
+	}
+	srv, cl := newTestServer(t, policy, runtime, oneShot)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/runtimes/install-defaults?namespace=team-a", nil)
 	rec := httptest.NewRecorder()
@@ -68,6 +72,9 @@ func TestInstallDefaultRuntimes(t *testing.T) {
 	if installed.Spec.Image != runtime.Spec.Image {
 		t.Fatalf("image = %q, want %q", installed.Spec.Image, runtime.Spec.Image)
 	}
+	if err := cl.Get(context.Background(), types.NamespacedName{Name: oneShot.Name, Namespace: "team-a"}, &sympoziumv1alpha1.AgentRuntime{}); err == nil {
+		t.Fatal("one-shot runtime was copied by the persistent default installer")
+	}
 
 	// Installation is idempotent and must not replace namespaced objects.
 	rec = httptest.NewRecorder()
@@ -80,6 +87,28 @@ func TestInstallDefaultRuntimes(t *testing.T) {
 	}
 	if len(response.AlreadyPresent) != 2 {
 		t.Fatalf("alreadyPresent = %v, want policy and runtime", response.AlreadyPresent)
+	}
+}
+
+func TestCreateInstance_AutoStartsPersistentHarnessSession(t *testing.T) {
+	srv, _ := newInstanceTestServer(t)
+	runtime := &sympoziumv1alpha1.AgentRuntime{ObjectMeta: metav1.ObjectMeta{Name: "pi-session", Namespace: "default"}, Spec: sympoziumv1alpha1.AgentRuntimeSpec{ContractVersion: "v1alpha2", Session: &sympoziumv1alpha1.AgentRuntimeSession{Protocol: "openai-chat", Port: 8080}}}
+	if err := srv.client.Create(t.Context(), runtime); err != nil {
+		t.Fatal(err)
+	}
+	body, _ := json.Marshal(CreateInstanceRequest{Name: "persistent-agent", Provider: "lm-studio", Model: "local", BaseURL: "http://model.local/v1", RuntimeRef: runtime.Name})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/agents?namespace=default", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	srv.buildMux(nil, nil).ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var session sympoziumv1alpha1.HarnessSession
+	if err := srv.client.Get(t.Context(), types.NamespacedName{Name: "persistent-agent-chat", Namespace: "default"}, &session); err != nil {
+		t.Fatalf("get auto-created session: %v", err)
+	}
+	if session.Spec.AgentRef != "persistent-agent" || session.Spec.RuntimeRef != runtime.Name || session.Spec.DesiredState != "running" {
+		t.Fatalf("unexpected session: %#v", session.Spec)
 	}
 }
 

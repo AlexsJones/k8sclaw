@@ -487,6 +487,13 @@ func (s *Server) installDefaultRuntimes(w http.ResponseWriter, r *http.Request) 
 	}
 
 	for _, src := range sourceRuntimes.Items {
+		// The default product path is interactive. One-shot adapters remain
+		// supported as explicitly installed AgentRun runtimes, but copying them
+		// here made the Create → Harness picker promise a session they cannot
+		// provide.
+		if src.Spec.ContractVersion != "v1alpha2" || src.Spec.Session == nil || src.Spec.Session.Protocol != "openai-chat" {
+			continue
+		}
 		if src.Spec.Image == "" { // Defensive: never turn malformed catalog data into a target resource.
 			http.Error(w, "default harness catalog contains an invalid runtime", http.StatusInternalServerError)
 			return
@@ -944,6 +951,30 @@ func (s *Server) createAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// A persistent-capable Agent is usable only when its session exists. Create
+	// the deterministic session as part of the Agent creation path so every UI
+	// and API caller gets the same Agent-first lifecycle.
+	if req.RuntimeRef != "" {
+		var selectedRuntime sympoziumv1alpha1.AgentRuntime
+		if err := s.client.Get(r.Context(), types.NamespacedName{Name: req.RuntimeRef, Namespace: ns}, &selectedRuntime); err == nil &&
+			selectedRuntime.Spec.ContractVersion == "v1alpha2" && selectedRuntime.Spec.Session != nil && selectedRuntime.Spec.Session.Protocol == "openai-chat" {
+			session := &sympoziumv1alpha1.HarnessSession{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      defaultHarnessSessionName(req.Name),
+					Namespace: ns,
+					Labels: map[string]string{
+						"app.kubernetes.io/managed-by": "sympozium",
+						"sympozium.ai/agent":           req.Name,
+					},
+				},
+				Spec: sympoziumv1alpha1.HarnessSessionSpec{AgentRef: req.Name, RuntimeRef: req.RuntimeRef, DesiredState: "running"},
+			}
+			if err := s.client.Create(r.Context(), session); err != nil && !k8serrors.IsAlreadyExists(err) {
+				s.log.Error(err, "failed to create persistent harness session", "agent", req.Name, "runtime", req.RuntimeRef)
+			}
+		}
+	}
+
 	// Auto-create a heartbeat schedule when an interval is provided.
 	if req.HeartbeatInterval != "" {
 		cron := intervalToCronExpr(req.HeartbeatInterval)
@@ -973,6 +1004,14 @@ func (s *Server) createAgent(w http.ResponseWriter, r *http.Request) {
 
 	w.WriteHeader(http.StatusCreated)
 	writeJSON(w, inst)
+}
+
+func defaultHarnessSessionName(agentName string) string {
+	name := strings.TrimRight(agentName, "-")
+	if len(name) > 57 {
+		name = strings.TrimRight(name[:57], "-")
+	}
+	return name + "-chat"
 }
 
 // intervalToCronExpr converts a human-readable interval (e.g. "1h", "30m") to a cron expression.

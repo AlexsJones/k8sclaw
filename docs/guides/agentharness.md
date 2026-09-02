@@ -68,13 +68,12 @@ the current browser/device (bounded to the latest 200 turns) so a refresh does
 not make the conversation appear empty. It is deliberately **not** copied into
 CR status, ConfigMaps, or the browser-to-pod API.
 
-The first reference adapter is Pi's experimental `v1alpha2` mode. It keeps
-Pi's own conversation state inside the session pod and serializes turns; it
-continues to disable tools, skills, and prompt templates. If the pod restarts,
-its ephemeral adapter conversation state is lost even though this browser can
-still display the previous local transcript. Treat a session as a bounded
-interactive workspace, not durable Agent memory or a general exposed OpenAI
-gateway.
+The first reference adapter is Pi's experimental `v1alpha2` mode. It serializes
+turns and stores Pi's session state on the `HarnessSession`-owned PVC, so the
+conversation survives pod restart and explicit stop/resume. It continues to
+disable tools, skills, and prompt templates. Treat a session as a bounded
+interactive workspace, not durable platform Agent memory or a general exposed
+OpenAI gateway.
 
 For operators, the trust boundary is unchanged:
 
@@ -131,18 +130,22 @@ contract defines mediated equivalents. The historical/default
 
 ## Quickstart
 
-### Built-in Pi and Hermes catalog
+### Built-in persistent catalog
 
-The Helm chart installs the maintained experimental Pi and Hermes runtimes in
+The Helm chart installs the maintained experimental Pi persistent runtime in
 the chart namespace by default, just as it installs the Ensemble catalog. In
 the web UI, switch to that namespace (normally `sympozium-system`) and open
 **Agents → Harnesses**. The `harness-examples` policy permits only those exact
 digest-pinned images; select that policy and either runtime explicitly on an
 Agent before running it. No Agent or credential is created by the catalog.
 
-These examples are stateless model-call adapters. They deliberately provide no
-MCP/SkillPack tools, native tools, persona mapping, resume, subagents, or
-usage metrics. See the [adapter conformance report](https://github.com/sympozium-ai/harness-adapters/blob/main/docs/conformance.md)
+The default interactive catalog contains only session-capable runtimes. The
+one-shot Pi and Hermes adapters remain available as explicit AgentRun examples
+but are not installed or shown as default interactive harnesses. Persistent
+Hermes will join the default catalog after it implements and passes the
+`v1alpha2` session contract. Current session adapters deliberately provide no
+MCP/SkillPack tools, native tools, persona mapping, subagents, or trusted usage
+metrics. See the [adapter conformance report](https://github.com/sympozium-ai/harness-adapters/blob/main/docs/conformance.md)
 before enabling them.
 
 ### Bring your own adapter

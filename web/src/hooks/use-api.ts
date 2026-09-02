@@ -91,7 +91,7 @@ export function useCreateHarnessSession() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: api.harnessSessions.create,
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ["harness-sessions"] }); toast.success("Interactive harness session started"); },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ["harness-sessions"] }); toast.success("Persistent chat requested — waiting for readiness"); },
     onError: toastError,
   });
 }

@@ -120,25 +120,22 @@ export function Header() {
           </DialogHeader>
           {choosingHarness ? (
             <div className="space-y-3">
-              {(runtimes || []).length === 0 ? (
+              {(runtimes || []).filter((runtime) => runtime.spec.contractVersion === "v1alpha2" && runtime.spec.session?.protocol === "openai-chat").length === 0 ? (
                 <div className="space-y-3 rounded-lg border border-border p-4">
                   <p className="text-sm">No approved harnesses are installed in this namespace.</p>
-                  <p className="text-xs text-muted-foreground">Install the curated Pi and Hermes runtimes plus their approving policy. This creates persistent namespace resources and never accepts an arbitrary image.</p>
+                  <p className="text-xs text-muted-foreground">Install the curated persistent runtimes plus their approving policy. This never accepts an arbitrary image.</p>
                   <Button size="sm" onClick={() => installDefaultRuntimes.mutate()} disabled={installDefaultRuntimes.isPending}>{installDefaultRuntimes.isPending ? "Installing…" : "Install default harnesses"}</Button>
                 </div>
               ) : (
                 <div className="space-y-2">
-                  {(runtimes || []).map((runtime) => {
-                    const persistent = runtime.spec.contractVersion === "v1alpha2" && runtime.spec.session?.protocol === "openai-chat";
+                  {(runtimes || []).filter((runtime) => runtime.spec.contractVersion === "v1alpha2" && runtime.spec.session?.protocol === "openai-chat").map((runtime) => {
                     return <button key={runtime.metadata.name} className="w-full rounded-lg border border-border p-3 text-left transition-colors hover:border-amber-500/60 hover:bg-amber-500/5" onClick={() => {
                       setCreateOpen(false);
                       setChoosingHarness(false);
-                      navigate(persistent
-                        ? `/harnesses?start=${encodeURIComponent(runtime.metadata.name)}`
-                        : `/agents?create=1&runtime=${encodeURIComponent(runtime.metadata.name)}&policy=harness-examples`);
+                      navigate(`/agents?create=1&runtime=${encodeURIComponent(runtime.metadata.name)}&policy=harness-examples`);
                     }}>
                       <div className="flex items-center gap-2"><Shield className="h-4 w-4 text-amber-500" /><span className="font-medium">{runtime.metadata.name}</span></div>
-                      <p className="mt-1 text-xs text-muted-foreground">{persistent ? "Start a persistent session for an existing Agent." : "Create an Agent that uses this harness for one-shot runs."}</p>
+                      <p className="mt-1 text-xs text-muted-foreground">Create an Agent and automatically start its persistent chat.</p>
                     </button>;
                   })}
                 </div>
@@ -155,7 +152,7 @@ export function Header() {
             <button className="rounded-lg border border-border p-4 text-left transition-colors hover:border-primary/60 hover:bg-primary/5" onClick={() => setChoosingHarness(true)}>
               <Shield className="mb-3 h-5 w-5 text-amber-500" />
               <p className="font-medium">Harness</p>
-              <p className="mt-1 text-xs text-muted-foreground">Choose a trusted external runtime for one-shot or persistent execution.</p>
+              <p className="mt-1 text-xs text-muted-foreground">Create an Agent backed by a trusted persistent runtime.</p>
             </button>
           </div>
           </>}
