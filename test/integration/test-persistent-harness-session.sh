@@ -159,7 +159,13 @@ pass "stop removed the workload and preserved durable state"
 
 api_request PATCH "/api/v1/harness-sessions/${SESSION_NAME}" '{"desiredState":"running"}' >/dev/null
 wait_for_session_phase "$SESSION_NAME" Ready || fail "stopped session did not resume"
-RESUMED_RESPONSE="$(api_request POST "/api/v1/harness-sessions/${SESSION_NAME}/chat" "$SECOND_BODY")"
+RESUMED_RESPONSE=""
+for _ in $(seq 1 10); do
+  RESUMED_RESPONSE="$(api_request POST "/api/v1/harness-sessions/${SESSION_NAME}/chat" "$SECOND_BODY" 2>/dev/null || true)"
+  [[ -n "$RESUMED_RESPONSE" ]] && break
+  sleep 2
+done
+[[ -n "$RESUMED_RESPONSE" ]] || fail "session adapter remained unavailable after resume"
 RESUMED_TEXT="$(jq -r '.choices[0].message.content // ""' <<<"$RESUMED_RESPONSE")"
 [[ "$RESUMED_TEXT" == *"$MEMORY_TOKEN"* ]] || fail "conversation state did not survive stop/resume; response: ${RESUMED_TEXT}"
 pass "conversation state survived explicit stop/resume"
