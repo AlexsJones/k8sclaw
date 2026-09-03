@@ -3,6 +3,7 @@ package apiserver
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -32,13 +33,27 @@ func TestHarnessSessionAPI_CreateAndList(t *testing.T) {
 	if err := sympoziumv1alpha1.AddToScheme(scheme); err != nil {
 		t.Fatal(err)
 	}
-	server := NewServer(fake.NewClientBuilder().WithScheme(scheme).Build(), nil, nil, logr.Discard())
+	agent := &sympoziumv1alpha1.Agent{ObjectMeta: metav1.ObjectMeta{Name: "analyst", Namespace: "team-a", UID: "agent-uid"}}
+	server := NewServer(fake.NewClientBuilder().WithScheme(scheme).WithObjects(agent).Build(), nil, nil, logr.Discard())
 	handler := server.Handler(nil)
-	request := httptest.NewRequest(http.MethodPost, "/api/v1/harness-sessions?namespace=team-a", bytes.NewBufferString(`{"name":"analyst-session","agentRef":"analyst","runtimeRef":"pi-session","idleTimeout":"1h"}`))
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/harness-sessions?namespace=team-a", bytes.NewBufferString(`{"name":"orphan","agentRef":"missing","runtimeRef":"pi-session"}`))
 	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("create for a missing Agent status = %d, want %d", response.Code, http.StatusNotFound)
+	}
+	request = httptest.NewRequest(http.MethodPost, "/api/v1/harness-sessions?namespace=team-a", bytes.NewBufferString(`{"name":"analyst-session","agentRef":"analyst","runtimeRef":"pi-session","idleTimeout":"1h"}`))
+	response = httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
 	if response.Code != http.StatusCreated {
 		t.Fatalf("create status = %d: %s", response.Code, response.Body.String())
+	}
+	var created sympoziumv1alpha1.HarnessSession
+	if err := server.client.Get(context.Background(), client.ObjectKey{Name: "analyst-session", Namespace: "team-a"}, &created); err != nil {
+		t.Fatal(err)
+	}
+	if len(created.OwnerReferences) != 1 || created.OwnerReferences[0].Kind != "Agent" || created.OwnerReferences[0].UID != "agent-uid" {
+		t.Fatalf("session is not garbage-collected with its Agent: %#v", created.OwnerReferences)
 	}
 	request = httptest.NewRequest(http.MethodGet, "/api/v1/harness-sessions?namespace=team-a", nil)
 	response = httptest.NewRecorder()
@@ -168,5 +183,63 @@ func TestHarnessSessionChatReturnsRequestIDAndAudit(t *testing.T) {
 	}
 	if got.Status.RequestCount != 1 || got.Status.ActiveRequests != 0 || got.Status.LastRequestState != "succeeded" || got.Status.LastRequestID != response.Header().Get("X-Sympozium-Request-ID") {
 		t.Fatalf("chat audit does not match the response: %#v", got.Status)
+	}
+}
+
+func TestHarnessSessionAPI_RetryOfFailedSessionTriggersReconcile(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := sympoziumv1alpha1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	session := &sympoziumv1alpha1.HarnessSession{
+		ObjectMeta: metav1.ObjectMeta{Name: "analyst", Namespace: "team-a"},
+		Spec:       sympoziumv1alpha1.HarnessSessionSpec{AgentRef: "agent", RuntimeRef: "pi", DesiredState: "running"},
+		Status:     sympoziumv1alpha1.HarnessSessionStatus{Phase: "Failed"},
+	}
+	server := NewServer(fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(session).WithObjects(session).Build(), nil, nil, logr.Discard())
+	response := httptest.NewRecorder()
+	server.Handler(nil).ServeHTTP(response, httptest.NewRequest(http.MethodPatch, "/api/v1/harness-sessions/analyst?namespace=team-a", bytes.NewBufferString(`{"desiredState":"running"}`)))
+	if response.Code != http.StatusOK {
+		t.Fatalf("patch status = %d: %s", response.Code, response.Body.String())
+	}
+	var updated sympoziumv1alpha1.HarnessSession
+	if err := server.client.Get(context.Background(), client.ObjectKey{Name: "analyst", Namespace: "team-a"}, &updated); err != nil {
+		t.Fatal(err)
+	}
+	// An unchanged spec produces no watch event; the retry must still reach the controller.
+	if updated.Annotations[harnessSessionRetryAnnotation] == "" {
+		t.Fatalf("retry of a Failed session did not record a change for the controller: %#v", updated.ObjectMeta)
+	}
+}
+
+func TestHarnessSessionRequestAuditSurvivesConcurrentWriters(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := sympoziumv1alpha1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	session := &sympoziumv1alpha1.HarnessSession{ObjectMeta: metav1.ObjectMeta{Name: "analyst", Namespace: "team-a"}}
+	cl := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(session).WithObjects(session).Build()
+	server := NewServer(cl, nil, nil, logr.Discard())
+	const writers = 8
+	done := make(chan struct{})
+	for i := 0; i < writers; i++ {
+		go func(i int) {
+			defer func() { done <- struct{}{} }()
+			id := fmt.Sprintf("request-%d", i)
+			server.recordHarnessSessionRequest(context.Background(), "team-a", "analyst", id, "started", metav1.Now(), true)
+			server.recordHarnessSessionRequest(context.Background(), "team-a", "analyst", id, "succeeded", metav1.Now(), false)
+		}(i)
+	}
+	for i := 0; i < writers; i++ {
+		<-done
+	}
+	var got sympoziumv1alpha1.HarnessSession
+	if err := cl.Get(context.Background(), client.ObjectKey{Name: "analyst", Namespace: "team-a"}, &got); err != nil {
+		t.Fatal(err)
+	}
+	// Lost increments would either undercount requests or strand ActiveRequests
+	// above zero, which permanently blocks idle timeout.
+	if got.Status.RequestCount != writers || got.Status.ActiveRequests != 0 {
+		t.Fatalf("concurrent audit lost updates: requests=%d active=%d", got.Status.RequestCount, got.Status.ActiveRequests)
 	}
 }

@@ -9,6 +9,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -221,5 +222,176 @@ func TestResolveSessionModelInheritsSingleAgentCredential(t *testing.T) {
 	}
 	if model.Provider != "openai-compatible" || model.Model != "qwen" || model.AuthSecretRef != "model-key" {
 		t.Fatalf("unexpected inherited model: %#v", model)
+	}
+}
+
+func TestHarnessSessionUsesRecreateStrategyForSharedClaim(t *testing.T) {
+	scheme := harnessSessionTestScheme(t)
+	agent := &sympoziumv1alpha1.Agent{ObjectMeta: metav1.ObjectMeta{Name: "analyst", Namespace: "default"}, Spec: sympoziumv1alpha1.AgentSpec{AuthRefs: []sympoziumv1alpha1.SecretRef{{Provider: "openai-compatible", Secret: "model-key"}}}}
+	session := &sympoziumv1alpha1.HarnessSession{ObjectMeta: metav1.ObjectMeta{Name: "analyst-session", Namespace: "default"}, Spec: sympoziumv1alpha1.HarnessSessionSpec{AgentRef: "analyst", RuntimeRef: "pi-session"}}
+	cl := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(session).WithObjects(agent, readySessionRuntime(), session).Build()
+	r := &HarnessSessionReconciler{Client: cl, Scheme: scheme}
+	key := types.NamespacedName{Name: session.Name, Namespace: session.Namespace}
+	if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: key}); err != nil {
+		t.Fatal(err)
+	}
+	var deployment appsv1.Deployment
+	if err := cl.Get(context.Background(), key, &deployment); err != nil {
+		t.Fatal(err)
+	}
+	// A rolling update would wait forever for a ReadWriteOnce claim the old pod still holds.
+	if deployment.Spec.Strategy.Type != appsv1.RecreateDeploymentStrategyType {
+		t.Fatalf("strategy = %q, want Recreate for the RWO state claim", deployment.Spec.Strategy.Type)
+	}
+}
+
+func TestHarnessSessionDoesNotShrinkExpandedClaim(t *testing.T) {
+	scheme := harnessSessionTestScheme(t)
+	agent := &sympoziumv1alpha1.Agent{ObjectMeta: metav1.ObjectMeta{Name: "analyst", Namespace: "default"}, Spec: sympoziumv1alpha1.AgentSpec{AuthRefs: []sympoziumv1alpha1.SecretRef{{Provider: "openai-compatible", Secret: "model-key"}}}}
+	session := &sympoziumv1alpha1.HarnessSession{ObjectMeta: metav1.ObjectMeta{Name: "analyst-session", Namespace: "default"}, Spec: sympoziumv1alpha1.HarnessSessionSpec{AgentRef: "analyst", RuntimeRef: "pi-session"}}
+	claim := &corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{Name: session.Name, Namespace: session.Namespace, CreationTimestamp: metav1.Now()},
+		Spec:       corev1.PersistentVolumeClaimSpec{AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce}, Resources: corev1.VolumeResourceRequirements{Requests: corev1.ResourceList{corev1.ResourceStorage: resource.MustParse("5Gi")}}},
+	}
+	cl := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(session).WithObjects(agent, readySessionRuntime(), session, claim).Build()
+	r := &HarnessSessionReconciler{Client: cl, Scheme: scheme}
+	key := types.NamespacedName{Name: session.Name, Namespace: session.Namespace}
+	if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: key}); err != nil {
+		t.Fatal(err)
+	}
+	var got corev1.PersistentVolumeClaim
+	if err := cl.Get(context.Background(), key, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Spec.Resources.Requests.Storage().String() != "5Gi" {
+		t.Fatalf("reconcile shrank an operator-expanded claim to %s", got.Spec.Resources.Requests.Storage())
+	}
+	if len(got.OwnerReferences) != 1 || got.OwnerReferences[0].Name != session.Name {
+		t.Fatalf("existing claim was not adopted by the session: %#v", got.OwnerReferences)
+	}
+}
+
+func TestHarnessSessionResumeAfterIdleTimeoutRestartsIdleClock(t *testing.T) {
+	scheme := harnessSessionTestScheme(t)
+	agent := &sympoziumv1alpha1.Agent{ObjectMeta: metav1.ObjectMeta{Name: "analyst", Namespace: "default"}, Spec: sympoziumv1alpha1.AgentSpec{AuthRefs: []sympoziumv1alpha1.SecretRef{{Provider: "openai-compatible", Secret: "model-key"}}}}
+	staleActivity := metav1.NewTime(time.Now().Add(-2 * time.Hour))
+	session := &sympoziumv1alpha1.HarnessSession{
+		ObjectMeta: metav1.ObjectMeta{Name: "analyst-session", Namespace: "default"},
+		Spec:       sympoziumv1alpha1.HarnessSessionSpec{AgentRef: "analyst", RuntimeRef: "pi-session", DesiredState: "running", IdleTimeout: &metav1.Duration{Duration: time.Hour}},
+		Status:     sympoziumv1alpha1.HarnessSessionStatus{Phase: "Draining", LastActivityTime: &staleActivity, Conditions: []metav1.Condition{{Type: sympoziumv1alpha1.HarnessSessionReadyCondition, Status: metav1.ConditionFalse, Reason: "IdleTimeout"}}},
+	}
+	deployment := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: session.Name, Namespace: session.Namespace}, Status: appsv1.DeploymentStatus{ReadyReplicas: 1}}
+	cl := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(session).WithObjects(agent, readySessionRuntime(), session, deployment).Build()
+	r := &HarnessSessionReconciler{Client: cl, Scheme: scheme}
+	key := types.NamespacedName{Name: session.Name, Namespace: session.Namespace}
+	for i := 0; i < 2; i++ {
+		if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: key}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var got sympoziumv1alpha1.HarnessSession
+	if err := cl.Get(context.Background(), key, &got); err != nil {
+		t.Fatal(err)
+	}
+	// Before the fix the pre-stop activity time made the resumed session idle immediately.
+	if got.Spec.DesiredState != "running" || got.Status.Phase != "Ready" {
+		t.Fatalf("resumed session was stopped again by its stale activity time: state=%s phase=%s", got.Spec.DesiredState, got.Status.Phase)
+	}
+	if got.Status.LastActivityTime == nil || time.Since(got.Status.LastActivityTime.Time) > time.Minute {
+		t.Fatalf("becoming Ready did not restart the idle clock: %v", got.Status.LastActivityTime)
+	}
+}
+
+func TestHarnessSessionStaleActiveRequestDoesNotBlockIdleTimeout(t *testing.T) {
+	scheme := harnessSessionTestScheme(t)
+	lastActivity := metav1.NewTime(time.Now().Add(-2 * time.Hour))
+	staleStart := metav1.NewTime(time.Now().Add(-10 * time.Minute))
+	session := &sympoziumv1alpha1.HarnessSession{
+		ObjectMeta: metav1.ObjectMeta{Name: "crashed-proxy", Namespace: "default"},
+		Spec:       sympoziumv1alpha1.HarnessSessionSpec{DesiredState: "running", IdleTimeout: &metav1.Duration{Duration: time.Hour}},
+		// An API server that died mid-request leaves ActiveRequests behind. The
+		// start is older than any proxied request can live, so it must not pin
+		// the workload forever.
+		Status: sympoziumv1alpha1.HarnessSessionStatus{Phase: "Ready", LastActivityTime: &lastActivity, ActiveRequests: 1, LastRequestStartedAt: &staleStart},
+	}
+	cl := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(session).WithObjects(session).Build()
+	r := &HarnessSessionReconciler{Client: cl, Scheme: scheme}
+	key := types.NamespacedName{Name: session.Name, Namespace: session.Namespace}
+	if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: key}); err != nil {
+		t.Fatal(err)
+	}
+	var got sympoziumv1alpha1.HarnessSession
+	if err := cl.Get(context.Background(), key, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Spec.DesiredState != "stopped" || got.Status.ActiveRequests != 0 {
+		t.Fatalf("stale in-flight count blocked idle timeout: state=%s active=%d", got.Spec.DesiredState, got.Status.ActiveRequests)
+	}
+}
+
+func TestHarnessSessionFailedBindingStopsWorkloadAndRetries(t *testing.T) {
+	scheme := harnessSessionTestScheme(t)
+	session := &sympoziumv1alpha1.HarnessSession{
+		ObjectMeta: metav1.ObjectMeta{Name: "orphaned", Namespace: "default"},
+		Spec:       sympoziumv1alpha1.HarnessSessionSpec{AgentRef: "deleted-agent", RuntimeRef: "pi-session", DesiredState: "running"},
+		Status:     sympoziumv1alpha1.HarnessSessionStatus{Phase: "Ready", ResolvedImageDigest: "sha256:" + strings.Repeat("a", 64)},
+	}
+	claim := &corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{Name: session.Name, Namespace: session.Namespace}}
+	deployment := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: session.Name, Namespace: session.Namespace}}
+	service := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: session.Name, Namespace: session.Namespace}}
+	cl := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(session).WithObjects(readySessionRuntime(), session, claim, deployment, service).Build()
+	r := &HarnessSessionReconciler{Client: cl, Scheme: scheme}
+	key := types.NamespacedName{Name: session.Name, Namespace: session.Namespace}
+	result, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: key})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.RequeueAfter <= 0 {
+		t.Fatal("Failed session must be re-evaluated later; its Agent may simply not be visible yet")
+	}
+	var got sympoziumv1alpha1.HarnessSession
+	if err := cl.Get(context.Background(), key, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Status.Phase != "Failed" || !strings.Contains(got.Status.Conditions[0].Message, "deleted-agent") {
+		t.Fatalf("unexpected status: %#v", got.Status)
+	}
+	if got.Status.ResolvedImageDigest == "" {
+		t.Fatal("failure cleared the audit digest of the adapter that ran")
+	}
+	// The binding that authorised the credential is gone, so the workload must
+	// not keep serving; durable state stays for a corrected binding.
+	if err := cl.Get(context.Background(), key, deployment); err == nil {
+		t.Fatal("Failed session kept its Deployment running")
+	}
+	if err := cl.Get(context.Background(), key, service); err == nil {
+		t.Fatal("Failed session kept its Service")
+	}
+	if err := cl.Get(context.Background(), key, claim); err != nil {
+		t.Fatalf("Failed session lost its durable state: %v", err)
+	}
+}
+
+func TestHarnessSessionReportsStartupDiagnostics(t *testing.T) {
+	scheme := harnessSessionTestScheme(t)
+	agent := &sympoziumv1alpha1.Agent{ObjectMeta: metav1.ObjectMeta{Name: "analyst", Namespace: "default"}, Spec: sympoziumv1alpha1.AgentSpec{AuthRefs: []sympoziumv1alpha1.SecretRef{{Provider: "openai-compatible", Secret: "model-key"}}}}
+	session := &sympoziumv1alpha1.HarnessSession{ObjectMeta: metav1.ObjectMeta{Name: "analyst-session", Namespace: "default"}, Spec: sympoziumv1alpha1.HarnessSessionSpec{AgentRef: "analyst", RuntimeRef: "pi-session", DesiredState: "running"}}
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "analyst-session-abc", Namespace: "default", Labels: sessionWorkloadLabels(session)},
+		Status:     corev1.PodStatus{ContainerStatuses: []corev1.ContainerStatus{{Name: "harness", State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "ImagePullBackOff", Message: "Back-off pulling image"}}}}},
+	}
+	cl := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(session).WithObjects(agent, readySessionRuntime(), session, pod).Build()
+	r := &HarnessSessionReconciler{Client: cl, Scheme: scheme}
+	key := types.NamespacedName{Name: session.Name, Namespace: session.Namespace}
+	if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: key}); err != nil {
+		t.Fatal(err)
+	}
+	var got sympoziumv1alpha1.HarnessSession
+	if err := cl.Get(context.Background(), key, &got); err != nil {
+		t.Fatal(err)
+	}
+	condition := got.Status.Conditions[0]
+	if got.Status.Phase != "Pending" || condition.Reason != "ImagePullFailed" || !strings.Contains(condition.Message, "Back-off pulling image") {
+		t.Fatalf("startup failure was not surfaced: phase=%s reason=%s message=%q", got.Status.Phase, condition.Reason, condition.Message)
 	}
 }

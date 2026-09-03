@@ -110,6 +110,9 @@ func TestCreateInstance_AutoStartsPersistentHarnessSession(t *testing.T) {
 	if session.Spec.AgentRef != "persistent-agent" || session.Spec.RuntimeRef != runtime.Name || session.Spec.DesiredState != "running" {
 		t.Fatalf("unexpected session: %#v", session.Spec)
 	}
+	if len(session.OwnerReferences) != 1 || session.OwnerReferences[0].Kind != "Agent" || session.OwnerReferences[0].Name != "persistent-agent" {
+		t.Fatalf("auto-created session is not owned by its Agent: %#v", session.OwnerReferences)
+	}
 }
 
 func TestCreateInstance_NoHardcodedOTLPEndpoint(t *testing.T) {

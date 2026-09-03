@@ -59,7 +59,11 @@ spec:
                 description: |-
                   AgentRef is the Agent whose credential allowlist and model routing bound
                   this session. The controller rejects a missing Agent.
+                minLength: 1
                 type: string
+                x-kubernetes-validations:
+                - message: spec.agentRef is immutable
+                  rule: self == oldSelf
               desiredState:
                 default: running
                 description: |-
@@ -78,7 +82,11 @@ spec:
                 description: |-
                   RuntimeRef is an administrator-approved AgentRuntime implementing the
                   v1alpha2 persistent session contract.
+                minLength: 1
                 type: string
+                x-kubernetes-validations:
+                - message: spec.runtimeRef is immutable
+                  rule: self == oldSelf
             required:
             - agentRef
             - runtimeRef

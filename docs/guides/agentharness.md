@@ -88,6 +88,21 @@ compute. Activity is measured at the API proxy, and an in-flight request blocks
 idle shutdown. On timeout, the Deployment, Service, and NetworkPolicy are
 removed while the session CR and PVC remain available for Resume.
 
+A session belongs to its Agent. Sessions created through the API or by Agent
+creation carry an owner reference, so deleting the Agent garbage-collects the
+session, its workload, and its state claim; a credential-bearing harness pod
+never outlives the Agent that authorised it. `spec.agentRef` and
+`spec.runtimeRef` are immutable at the API level, so the recorded adapter
+provenance always describes the binding that actually ran.
+
+A session whose Agent, runtime, or credential binding is no longer valid moves
+to `Failed`, stops its workload, keeps its PVC, and is re-evaluated when the
+Agent or runtime changes and on a periodic retry. While a session is
+`Pending`, the `Ready` condition names the concrete obstacle: an image that
+cannot be pulled, an unschedulable pod, a Pending state claim, a crash-looping
+adapter, or a readiness probe that has not passed. The Agent Chat view shows
+that message under **Starting** together with a Stop action.
+
 For operators, the trust boundary is unchanged:
 
 - only a Ready, digest-pinned approved runtime can be selected;
