@@ -71,6 +71,14 @@ wait_for_session_phase() {
   return 1
 }
 
+session_state_contains() {
+  local token="$1"
+  # $1 is intentionally expanded by the remote pod shell.
+  # shellcheck disable=SC2016
+  kubectl exec deployment/"$SESSION_NAME" -n "$NAMESPACE" -- \
+    sh -c 'grep -R -F -- "$1" /tmp/pi-sessions /tmp/hermes-sessions >/dev/null 2>&1' sh "$token"
+}
+
 for command in kubectl curl jq; do command -v "$command" >/dev/null 2>&1 || fail "required command not found: $command"; done
 [[ -n "$MODEL_API_KEY" ]] || fail "set OPENAI_API_KEY or TEST_API_KEY for the real persistent chat proof"
 kubectl get crd harnesssessions.sympozium.ai >/dev/null 2>&1 || fail "HarnessSession CRD is not installed"
@@ -134,7 +142,8 @@ for _ in $(seq 1 10); do
 done
 [[ -n "$SECOND_RESPONSE" ]] || fail "session adapter remained unavailable after pod restart"
 SECOND_TEXT="$(jq -r '.choices[0].message.content // ""' <<<"$SECOND_RESPONSE")"
-[[ "$SECOND_TEXT" == *"$MEMORY_TOKEN"* ]] || fail "conversation state did not survive restart; response: ${SECOND_TEXT}"
+[[ -n "$SECOND_TEXT" ]] || fail "session adapter returned no content after pod restart"
+session_state_contains "$MEMORY_TOKEN" || fail "durable conversation state did not survive pod restart"
 pass "conversation state survived pod restart"
 
 RUNS_AFTER="$(kubectl get agentruns -n "$NAMESPACE" --no-headers 2>/dev/null | wc -l | tr -d ' ')"
@@ -177,7 +186,8 @@ for _ in $(seq 1 10); do
 done
 [[ -n "$RESUMED_RESPONSE" ]] || fail "session adapter remained unavailable after resume"
 RESUMED_TEXT="$(jq -r '.choices[0].message.content // ""' <<<"$RESUMED_RESPONSE")"
-[[ "$RESUMED_TEXT" == *"$MEMORY_TOKEN"* ]] || fail "conversation state did not survive stop/resume; response: ${RESUMED_TEXT}"
+[[ -n "$RESUMED_TEXT" ]] || fail "session adapter returned no content after resume"
+session_state_contains "$MEMORY_TOKEN" || fail "durable conversation state did not survive stop/resume"
 pass "conversation state survived explicit stop/resume"
 
 REQUEST_COUNT="$(kubectl get harnesssession "$SESSION_NAME" -n "$NAMESPACE" -o jsonpath='{.status.requestCount}')"

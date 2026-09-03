@@ -24,6 +24,7 @@ require (
 	github.com/openai/openai-go/v3 v3.22.0
 	github.com/prometheus/client_golang v1.23.2
 	github.com/robfig/cron/v3 v3.0.1
+	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2
 	github.com/spf13/cobra v1.10.2
 	github.com/sympozium-ai/llmfit-dra/api v0.0.0-20260708145247-787d849d84af
 	go.mau.fi/whatsmeow v0.0.0-20260219150138-7ae702b1eed4
@@ -171,7 +172,6 @@ require (
 	github.com/rs/zerolog v1.34.0 // indirect
 	github.com/rubenv/sql-migrate v1.8.1 // indirect
 	github.com/russross/blackfriday/v2 v2.1.0 // indirect
-	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2 // indirect
 	github.com/shopspring/decimal v1.4.0 // indirect
 	github.com/sirupsen/logrus v1.9.3 // indirect
 	github.com/spf13/cast v1.7.0 // indirect
