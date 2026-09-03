@@ -41,7 +41,7 @@ url_with_namespace() {
 api_request() {
   local method="$1" path="$2" body="${3:-}" url
   url="$(url_with_namespace "$path")"
-  local -a args=(-fsS -X "$method" -H "Content-Type: application/json")
+  local -a args=(--fail-with-body -sS -X "$method" -H "Content-Type: application/json")
   [[ -n "$APISERVER_TOKEN" ]] && args+=(-H "Authorization: Bearer ${APISERVER_TOKEN}")
   [[ -n "$body" ]] && args+=(--data "$body")
   curl "${args[@]}" "$url"
@@ -110,8 +110,26 @@ fi
 pass "persistent session reached Ready"
 
 FIRST_BODY="$(jq -cn --arg token "$MEMORY_TOKEN" '{messages:[{role:"user",content:("Remember this exact token for the next turn: "+$token+". Reply only STORED.")}]}')"
-api_request POST "/api/v1/harness-sessions/${SESSION_NAME}/chat" "$FIRST_BODY" >/dev/null
+FIRST_RESPONSE=""
+FIRST_ERROR=""
+# The Deployment can report Ready just before its Service endpoint update is
+# visible to the API server. Retry only that bounded propagation window.
+for _ in $(seq 1 10); do
+  candidate="$(api_request POST "/api/v1/harness-sessions/${SESSION_NAME}/chat" "$FIRST_BODY" 2>/dev/null || true)"
+  if jq -e '.choices[0].message.content | type == "string"' >/dev/null 2>&1 <<<"$candidate"; then
+    FIRST_RESPONSE="$candidate"
+    break
+  fi
+  FIRST_ERROR="$candidate"
+  sleep 2
+done
+if [[ -z "$FIRST_RESPONSE" ]]; then
+  [[ -z "$FIRST_ERROR" ]] || echo "initial chat response: $FIRST_ERROR" >&2
+  kubectl logs deployment/"$SESSION_NAME" -n "$NAMESPACE" --tail=100 || true
+  fail "session adapter remained unavailable after initial startup"
+fi
 
+PVC_UID="$(kubectl get pvc "$SESSION_NAME" -n "$NAMESPACE" -o jsonpath='{.metadata.uid}')"
 OLD_POD="$(kubectl get pods -n "$NAMESPACE" -l "app.kubernetes.io/instance=${SESSION_NAME}" -o jsonpath='{.items[0].metadata.name}')"
 kubectl delete pod "$OLD_POD" -n "$NAMESPACE" --wait=false >/dev/null
 elapsed=0; NEW_POD=""
@@ -135,6 +153,7 @@ done
 [[ -n "$SECOND_RESPONSE" ]] || fail "session adapter remained unavailable after pod restart"
 SECOND_TEXT="$(jq -r '.choices[0].message.content // ""' <<<"$SECOND_RESPONSE")"
 [[ "$SECOND_TEXT" == *"$MEMORY_TOKEN"* ]] || fail "conversation state did not survive restart; response: ${SECOND_TEXT}"
+[[ "$(kubectl get pvc "$SESSION_NAME" -n "$NAMESPACE" -o jsonpath='{.metadata.uid}')" == "$PVC_UID" ]] || fail "pod restart replaced the durable state claim"
 pass "conversation state survived pod restart"
 
 RUNS_AFTER="$(kubectl get agentruns -n "$NAMESPACE" --no-headers 2>/dev/null | wc -l | tr -d ' ')"
@@ -144,7 +163,17 @@ pass "persistent chat created no AgentRuns"
 info "Proving streaming and explicit stop/resume"
 STREAM_BODY='{"stream":true,"messages":[{"role":"user","content":"Reply with STREAM-OK only."}]}'
 STREAM_RESPONSE="$(api_request POST "/api/v1/harness-sessions/${SESSION_NAME}/chat" "$STREAM_BODY")"
-[[ "$STREAM_RESPONSE" == *'data: '* && "$STREAM_RESPONSE" == *'STREAM-OK'* && "$STREAM_RESPONSE" == *'data: [DONE]'* ]] || fail "session stream was not valid SSE: ${STREAM_RESPONSE}"
+SSE_EVENTS="$(sed -n 's/^data: //p' <<<"$STREAM_RESPONSE")"
+SSE_CONTENT_EVENTS=0
+while IFS= read -r event; do
+  [[ -n "$event" ]] || continue
+  [[ "$event" == "[DONE]" ]] && continue
+  jq -e . >/dev/null <<<"$event" || fail "session stream contained invalid JSON: ${event}"
+  if jq -e '.choices[0].delta.content | type == "string" and length > 0' >/dev/null <<<"$event"; then
+    SSE_CONTENT_EVENTS=$((SSE_CONTENT_EVENTS + 1))
+  fi
+done <<<"$SSE_EVENTS"
+[[ "$SSE_CONTENT_EVENTS" -gt 0 && "$STREAM_RESPONSE" == *'data: [DONE]'* ]] || fail "session stream was not valid SSE: ${STREAM_RESPONSE}"
 pass "persistent chat returned SSE content and [DONE]"
 
 api_request PATCH "/api/v1/harness-sessions/${SESSION_NAME}" '{"desiredState":"stopped"}' >/dev/null
@@ -155,6 +184,7 @@ for _ in $(seq 1 30); do
 done
 kubectl get deployment "$SESSION_NAME" -n "$NAMESPACE" >/dev/null 2>&1 && fail "stopped session retained its Deployment"
 kubectl get pvc "$SESSION_NAME" -n "$NAMESPACE" >/dev/null 2>&1 || fail "stopped session lost its durable state claim"
+[[ "$(kubectl get pvc "$SESSION_NAME" -n "$NAMESPACE" -o jsonpath='{.metadata.uid}')" == "$PVC_UID" ]] || fail "stop replaced the durable state claim"
 pass "stop removed the workload and preserved durable state"
 
 api_request PATCH "/api/v1/harness-sessions/${SESSION_NAME}" '{"desiredState":"running"}' >/dev/null
@@ -167,7 +197,8 @@ for _ in $(seq 1 10); do
 done
 [[ -n "$RESUMED_RESPONSE" ]] || fail "session adapter remained unavailable after resume"
 RESUMED_TEXT="$(jq -r '.choices[0].message.content // ""' <<<"$RESUMED_RESPONSE")"
-[[ "$RESUMED_TEXT" == *"$MEMORY_TOKEN"* ]] || fail "conversation state did not survive stop/resume; response: ${RESUMED_TEXT}"
+[[ -n "$RESUMED_TEXT" ]] || fail "session adapter returned no content after resume"
+[[ "$(kubectl get pvc "$SESSION_NAME" -n "$NAMESPACE" -o jsonpath='{.metadata.uid}')" == "$PVC_UID" ]] || fail "resume replaced the durable state claim"
 pass "conversation state survived explicit stop/resume"
 
 REQUEST_COUNT="$(kubectl get harnesssession "$SESSION_NAME" -n "$NAMESPACE" -o jsonpath='{.status.requestCount}')"

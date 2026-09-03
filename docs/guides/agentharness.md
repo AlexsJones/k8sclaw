@@ -94,6 +94,8 @@ For operators, the trust boundary is unchanged:
 - the backing Agent must explicitly allow the model credential the runtime
   requests;
 - model secret keys are injected individually from the existing allowlist;
+- remote MCP servers and their credentials are rejected for external adapters;
+  SkillPack tools use the bounded, policy-enforcing loopback MCP server;
 - the session pod has no service-account token, privilege escalation, or
   writable root filesystem; and
 - only Sympozium's API server proxies the fixed `/v1/chat/completions` target,

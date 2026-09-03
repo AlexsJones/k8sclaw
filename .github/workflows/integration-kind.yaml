@@ -12,7 +12,7 @@ jobs:
   integration-kind:
     name: Kind API integration suite
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 120
     env:
       REGISTRY: ghcr.io/sympozium-ai/sympozium
       TAG: latest
@@ -82,6 +82,73 @@ jobs:
 
       - name: Run API smoke tests
         run: bash ./test/integration/test-api-smoke.sh
+
+      - name: Start the in-cluster test model
+        run: |
+          set -euo pipefail
+          kubectl apply -f - <<'EOF'
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: ollama
+          spec:
+            replicas: 1
+            selector:
+              matchLabels:
+                app: ollama
+            template:
+              metadata:
+                labels:
+                  app: ollama
+              spec:
+                containers:
+                  - name: ollama
+                    image: docker.io/ollama/ollama:0.12.10@sha256:e8c3d1f6ad16323bc40dc63eff0701d4fc32113f75a86b54b3e836eef8290de6
+                    env:
+                      - name: OLLAMA_HOST
+                        value: 0.0.0.0:8080
+                    ports:
+                      - containerPort: 8080
+                    resources:
+                      requests:
+                        cpu: 500m
+                        memory: 1Gi
+                      limits:
+                        memory: 3Gi
+                    volumeMounts:
+                      - name: models
+                        mountPath: /root/.ollama
+                volumes:
+                  - name: models
+                    emptyDir: {}
+          ---
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: ollama
+          spec:
+            selector:
+              app: ollama
+            ports:
+              - name: http
+                port: 8080
+                targetPort: 8080
+          EOF
+          kubectl rollout status deployment/ollama --timeout=300s
+          kubectl exec deployment/ollama -- ollama pull qwen2.5:1.5b
+
+      - name: Run persistent Pi and Hermes real-model smoke tests
+        env:
+          TEST_PROVIDER: openai
+          TEST_MODEL: qwen2.5:1.5b
+          TEST_BASE_URL: http://ollama.default.svc.cluster.local:8080/v1
+          TEST_API_KEY: ollama
+        run: |
+          set -euo pipefail
+          PERSISTENT_HARNESS_RUNTIME=pi-session-v0-84-4 \
+            bash ./test/integration/test-persistent-harness-session.sh
+          PERSISTENT_HARNESS_RUNTIME=hermes-session-v0-20-6 \
+            bash ./test/integration/test-persistent-harness-session.sh
 
       - name: Dump cluster state on failure
         if: failure()

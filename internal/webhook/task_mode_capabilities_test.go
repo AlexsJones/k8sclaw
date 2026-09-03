@@ -514,8 +514,9 @@ func TestPolicyEnforcer_DeniesReservedMCPServerName(t *testing.T) {
 	}
 }
 
-// Ordinary names must still be admitted.
-func TestPolicyEnforcer_AllowsOrdinaryMCPServerName(t *testing.T) {
+// An ordinary remote MCP name is still refused for a harness because the
+// credential boundary applies to every remote endpoint, not only reserved names.
+func TestPolicyEnforcer_DeniesRemoteMCPForHarness(t *testing.T) {
 	scheme := runtime.NewScheme()
 	if err := sympoziumv1alpha1.AddToScheme(scheme); err != nil {
 		t.Fatalf("add scheme: %v", err)
@@ -539,7 +540,7 @@ func TestPolicyEnforcer_AllowsOrdinaryMCPServerName(t *testing.T) {
 	pe := &PolicyEnforcer{Client: cl, Log: logr.Discard(), Decoder: decoderFor(t, scheme)}
 
 	resp := pe.Handle(context.Background(), admissionRequestFor(t, capabilityRun(harnessTaskSpec(nil))))
-	if !resp.Allowed {
-		t.Fatalf("expected ALLOW for an ordinary server name; denied: %s", resp.Result.Message)
+	if resp.Allowed || !strings.Contains(resp.Result.Message, "remote MCP credentials are never exposed") {
+		t.Fatalf("expected remote MCP boundary denial; got allowed=%v message=%s", resp.Allowed, resp.Result.Message)
 	}
 }

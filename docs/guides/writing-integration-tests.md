@@ -38,6 +38,11 @@ kubectl create secret generic inttest-openai-key --from-literal=OPENAI_API_KEY=s
 OPENAI_API_KEY=... ./test/integration/test-persistent-harness-session.sh
 ```
 
+The scheduled Kind workflow runs that persistent suite against both maintained
+Pi and Hermes runtimes using a pinned Ollama image and a small model served
+inside the test cluster. It needs no external model credentials, and a failure
+in either adapter fails the scheduled workflow.
+
 ## How Integration Tests Work
 
 Each test follows the same pattern:

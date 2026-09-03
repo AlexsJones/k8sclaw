@@ -266,6 +266,13 @@ that race intermittently.
 It is an ordinary MCP server, and it appears in the MCP registry the harness
 already reads as one more entry named `sympozium-skills`.
 
+Operator-configured remote MCP servers are deliberately different: their
+registries can contain arbitrary endpoints, headers, and Secret-derived
+credentials. Harness AgentRuns that inherit `Agent.spec.mcpServers` are
+rejected before pod creation. External adapters receive only the trusted
+loopback SkillPack registry; remote MCP remains unavailable until Sympozium
+provides an equally trusted local mediator.
+
 !!! warning "`sympozium*` is a reserved name prefix"
     A harness namespaces tools by server name, so an operator server also called
     `sympozium-skills` would shadow this one — and the agent's SkillPack tool
