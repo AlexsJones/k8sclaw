@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.56](https://github.com/sympozium-ai/sympozium/compare/v0.10.55...v0.10.56) (2026-09-03)
+
+
+### Bug Fixes
+
+* **harness:** harden persistent session lifecycle ([#417](https://github.com/sympozium-ai/sympozium/issues/417)) ([73d24f2](https://github.com/sympozium-ai/sympozium/commit/73d24f2cfa9d7c11e1fdfc6e1d69d1d7d469566e))
+
 ## [0.10.55](https://github.com/sympozium-ai/sympozium/compare/v0.10.54...v0.10.55) (2026-09-02)
 
 
