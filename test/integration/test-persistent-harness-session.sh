@@ -118,7 +118,10 @@ for _ in $(seq 1 10); do
   [[ -n "$FIRST_RESPONSE" ]] && break
   sleep 2
 done
-[[ -n "$FIRST_RESPONSE" ]] || fail "session adapter remained unavailable after initial startup"
+if [[ -z "$FIRST_RESPONSE" ]]; then
+  kubectl logs deployment/"$SESSION_NAME" -n "$NAMESPACE" --tail=100 || true
+  fail "session adapter remained unavailable after initial startup"
+fi
 
 PVC_UID="$(kubectl get pvc "$SESSION_NAME" -n "$NAMESPACE" -o jsonpath='{.metadata.uid}')"
 OLD_POD="$(kubectl get pods -n "$NAMESPACE" -l "app.kubernetes.io/instance=${SESSION_NAME}" -o jsonpath='{.items[0].metadata.name}')"

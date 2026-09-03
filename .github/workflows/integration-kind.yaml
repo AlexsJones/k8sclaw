@@ -114,7 +114,7 @@ jobs:
                         cpu: 500m
                         memory: 1Gi
                       limits:
-                        memory: 2Gi
+                        memory: 3Gi
                     volumeMounts:
                       - name: models
                         mountPath: /root/.ollama
@@ -135,12 +135,12 @@ jobs:
                 targetPort: 8080
           EOF
           kubectl rollout status deployment/ollama --timeout=300s
-          kubectl exec deployment/ollama -- ollama pull qwen2.5:0.5b
+          kubectl exec deployment/ollama -- ollama pull qwen2.5:1.5b
 
       - name: Run persistent Pi and Hermes real-model smoke tests
         env:
           TEST_PROVIDER: openai
-          TEST_MODEL: qwen2.5:0.5b
+          TEST_MODEL: qwen2.5:1.5b
           TEST_BASE_URL: http://ollama.default.svc.cluster.local:8080/v1
           TEST_API_KEY: ollama
         run: |
