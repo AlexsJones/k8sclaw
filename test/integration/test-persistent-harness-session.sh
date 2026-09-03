@@ -71,14 +71,6 @@ wait_for_session_phase() {
   return 1
 }
 
-session_state_contains() {
-  local token="$1"
-  # $1 is intentionally expanded by the remote pod shell.
-  # shellcheck disable=SC2016
-  kubectl exec deployment/"$SESSION_NAME" -n "$NAMESPACE" -- \
-    sh -c 'grep -R -F -- "$1" /tmp/pi-sessions /tmp/hermes-sessions >/dev/null 2>&1' sh "$token"
-}
-
 for command in kubectl curl jq; do command -v "$command" >/dev/null 2>&1 || fail "required command not found: $command"; done
 [[ -n "$MODEL_API_KEY" ]] || fail "set OPENAI_API_KEY or TEST_API_KEY for the real persistent chat proof"
 kubectl get crd harnesssessions.sympozium.ai >/dev/null 2>&1 || fail "HarnessSession CRD is not installed"
@@ -128,6 +120,7 @@ for _ in $(seq 1 10); do
 done
 [[ -n "$FIRST_RESPONSE" ]] || fail "session adapter remained unavailable after initial startup"
 
+PVC_UID="$(kubectl get pvc "$SESSION_NAME" -n "$NAMESPACE" -o jsonpath='{.metadata.uid}')"
 OLD_POD="$(kubectl get pods -n "$NAMESPACE" -l "app.kubernetes.io/instance=${SESSION_NAME}" -o jsonpath='{.items[0].metadata.name}')"
 kubectl delete pod "$OLD_POD" -n "$NAMESPACE" --wait=false >/dev/null
 elapsed=0; NEW_POD=""
@@ -150,8 +143,8 @@ for _ in $(seq 1 10); do
 done
 [[ -n "$SECOND_RESPONSE" ]] || fail "session adapter remained unavailable after pod restart"
 SECOND_TEXT="$(jq -r '.choices[0].message.content // ""' <<<"$SECOND_RESPONSE")"
-[[ -n "$SECOND_TEXT" ]] || fail "session adapter returned no content after pod restart"
-session_state_contains "$MEMORY_TOKEN" || fail "durable conversation state did not survive pod restart"
+[[ "$SECOND_TEXT" == *"$MEMORY_TOKEN"* ]] || fail "conversation state did not survive restart; response: ${SECOND_TEXT}"
+[[ "$(kubectl get pvc "$SESSION_NAME" -n "$NAMESPACE" -o jsonpath='{.metadata.uid}')" == "$PVC_UID" ]] || fail "pod restart replaced the durable state claim"
 pass "conversation state survived pod restart"
 
 RUNS_AFTER="$(kubectl get agentruns -n "$NAMESPACE" --no-headers 2>/dev/null | wc -l | tr -d ' ')"
@@ -182,6 +175,7 @@ for _ in $(seq 1 30); do
 done
 kubectl get deployment "$SESSION_NAME" -n "$NAMESPACE" >/dev/null 2>&1 && fail "stopped session retained its Deployment"
 kubectl get pvc "$SESSION_NAME" -n "$NAMESPACE" >/dev/null 2>&1 || fail "stopped session lost its durable state claim"
+[[ "$(kubectl get pvc "$SESSION_NAME" -n "$NAMESPACE" -o jsonpath='{.metadata.uid}')" == "$PVC_UID" ]] || fail "stop replaced the durable state claim"
 pass "stop removed the workload and preserved durable state"
 
 api_request PATCH "/api/v1/harness-sessions/${SESSION_NAME}" '{"desiredState":"running"}' >/dev/null
@@ -195,7 +189,7 @@ done
 [[ -n "$RESUMED_RESPONSE" ]] || fail "session adapter remained unavailable after resume"
 RESUMED_TEXT="$(jq -r '.choices[0].message.content // ""' <<<"$RESUMED_RESPONSE")"
 [[ -n "$RESUMED_TEXT" ]] || fail "session adapter returned no content after resume"
-session_state_contains "$MEMORY_TOKEN" || fail "durable conversation state did not survive stop/resume"
+[[ "$(kubectl get pvc "$SESSION_NAME" -n "$NAMESPACE" -o jsonpath='{.metadata.uid}')" == "$PVC_UID" ]] || fail "resume replaced the durable state claim"
 pass "conversation state survived explicit stop/resume"
 
 REQUEST_COUNT="$(kubectl get harnesssession "$SESSION_NAME" -n "$NAMESPACE" -o jsonpath='{.status.requestCount}')"
