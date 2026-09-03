@@ -41,7 +41,7 @@ url_with_namespace() {
 api_request() {
   local method="$1" path="$2" body="${3:-}" url
   url="$(url_with_namespace "$path")"
-  local -a args=(-fsS -X "$method" -H "Content-Type: application/json")
+  local -a args=(--fail-with-body -sS -X "$method" -H "Content-Type: application/json")
   [[ -n "$APISERVER_TOKEN" ]] && args+=(-H "Authorization: Bearer ${APISERVER_TOKEN}")
   [[ -n "$body" ]] && args+=(--data "$body")
   curl "${args[@]}" "$url"
@@ -111,14 +111,20 @@ pass "persistent session reached Ready"
 
 FIRST_BODY="$(jq -cn --arg token "$MEMORY_TOKEN" '{messages:[{role:"user",content:("Remember this exact token for the next turn: "+$token+". Reply only STORED.")}]}')"
 FIRST_RESPONSE=""
+FIRST_ERROR=""
 # The Deployment can report Ready just before its Service endpoint update is
 # visible to the API server. Retry only that bounded propagation window.
 for _ in $(seq 1 10); do
-  FIRST_RESPONSE="$(api_request POST "/api/v1/harness-sessions/${SESSION_NAME}/chat" "$FIRST_BODY" 2>/dev/null || true)"
-  [[ -n "$FIRST_RESPONSE" ]] && break
+  candidate="$(api_request POST "/api/v1/harness-sessions/${SESSION_NAME}/chat" "$FIRST_BODY" 2>/dev/null || true)"
+  if jq -e '.choices[0].message.content | type == "string"' >/dev/null 2>&1 <<<"$candidate"; then
+    FIRST_RESPONSE="$candidate"
+    break
+  fi
+  FIRST_ERROR="$candidate"
   sleep 2
 done
 if [[ -z "$FIRST_RESPONSE" ]]; then
+  [[ -z "$FIRST_ERROR" ]] || echo "initial chat response: $FIRST_ERROR" >&2
   kubectl logs deployment/"$SESSION_NAME" -n "$NAMESPACE" --tail=100 || true
   fail "session adapter remained unavailable after initial startup"
 fi
