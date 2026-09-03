@@ -22,6 +22,14 @@ regenerates `config/crd/bases/` **and** syncs both chart copies
 drift (`make helm-sync-check`). Never hand-edit generated CRD YAML or
 `zz_generated.deepcopy.go`.
 
+## Updating the Pi/Hermes example adapter versions
+`charts/sympozium/values.yaml`'s `harnessExamples` block is the only file to
+edit for an adapter's name, image digest, or default enablement — the
+`--reuse-values` fallback dict in `charts/sympozium/templates/harness-examples.yaml`
+is generated from it. Run **`make helm-sync`** after editing it; `make
+helm-sync-check` (CI) fails if the two have drifted. Never hand-edit the block
+between the `sync-harness-defaults:begin`/`:end` markers.
+
 ## Naming — these renames recur as bugs
 - The CRD kind is **`Agent`** (formerly `SympoziumInstance` — do not use).
 - AgentRun/Schedule reference an agent via **`agentRef`** + **`agentId`** (not `instanceRef`/`agentID`).

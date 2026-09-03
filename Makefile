@@ -455,7 +455,7 @@ db-migrate: ## Run database migrations
 
 ##@ Helm
 
-helm-sync: ## Sync CRDs and appVersion into the Helm charts
+helm-sync: ## Sync CRDs, appVersion, and generated defaults into the Helm charts
 	@echo "Syncing CRDs to charts/sympozium/crds/..."
 	@mkdir -p charts/sympozium/crds
 	cp config/crd/bases/*.yaml charts/sympozium/crds/
@@ -463,9 +463,11 @@ helm-sync: ## Sync CRDs and appVersion into the Helm charts
 	@mkdir -p charts/sympozium-crds/templates
 	@rm -f charts/sympozium-crds/templates/sympozium.ai_*.yaml
 	cp config/crd/bases/*.yaml charts/sympozium-crds/templates/
+	@echo "Syncing harness-examples.yaml reuse-values fallback from values.yaml..."
+	go run hack/sync-harness-defaults.go
 	@echo "Done."
 
-helm-sync-check: ## Check that Helm chart CRDs are in sync (CI use)
+helm-sync-check: ## Check that Helm charts are in sync (CI use)
 	@diff -qr config/crd/bases/ charts/sympozium/crds/ > /dev/null 2>&1 \
 		|| (echo "ERROR: Helm chart CRDs are out of sync. Run 'make helm-sync'" && exit 1)
 	@tmp=$$(mktemp -d); \
@@ -476,7 +478,17 @@ helm-sync-check: ## Check that Helm chart CRDs are in sync (CI use)
 		&& (echo "ERROR: sympozium-crds chart templates are out of sync. Run 'make helm-sync'" && rm -rf $$tmp && exit 1) \
 		|| true; \
 	rm -rf $$tmp
-	@echo "Helm chart CRDs are in sync."
+	@tmp=$$(mktemp); \
+	cp charts/sympozium/templates/harness-examples.yaml $$tmp; \
+	go run hack/sync-harness-defaults.go > /dev/null; \
+	if ! diff -q $$tmp charts/sympozium/templates/harness-examples.yaml > /dev/null; then \
+		echo "ERROR: harness-examples.yaml reuse-values fallback is out of sync with values.yaml. Run 'make helm-sync'"; \
+		cp $$tmp charts/sympozium/templates/harness-examples.yaml; \
+		rm -f $$tmp; \
+		exit 1; \
+	fi; \
+	rm -f $$tmp
+	@echo "Helm charts are in sync."
 
 helm-lint: ## Lint the Helm charts
 	helm lint charts/sympozium/
