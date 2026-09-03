@@ -118,7 +118,15 @@ fi
 pass "persistent session reached Ready"
 
 FIRST_BODY="$(jq -cn --arg token "$MEMORY_TOKEN" '{messages:[{role:"user",content:("Remember this exact token for the next turn: "+$token+". Reply only STORED.")}]}')"
-api_request POST "/api/v1/harness-sessions/${SESSION_NAME}/chat" "$FIRST_BODY" >/dev/null
+FIRST_RESPONSE=""
+# The Deployment can report Ready just before its Service endpoint update is
+# visible to the API server. Retry only that bounded propagation window.
+for _ in $(seq 1 10); do
+  FIRST_RESPONSE="$(api_request POST "/api/v1/harness-sessions/${SESSION_NAME}/chat" "$FIRST_BODY" 2>/dev/null || true)"
+  [[ -n "$FIRST_RESPONSE" ]] && break
+  sleep 2
+done
+[[ -n "$FIRST_RESPONSE" ]] || fail "session adapter remained unavailable after initial startup"
 
 OLD_POD="$(kubectl get pods -n "$NAMESPACE" -l "app.kubernetes.io/instance=${SESSION_NAME}" -o jsonpath='{.items[0].metadata.name}')"
 kubectl delete pod "$OLD_POD" -n "$NAMESPACE" --wait=false >/dev/null
