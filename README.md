@@ -27,7 +27,7 @@
 </p>
 
 <p align="center">
-  <img src="demo.gif" alt="Sympozium dashboard" width="800px;">
+  <img src="docs/assets/family-stack.gif" alt="Sympozium family stack — coordination, models, isolation, energy, Kubernetes" width="800">
 </p>
 
 ---
@@ -67,6 +67,12 @@ sympozium install          # deploys CRDs, controllers, and built-in Ensembles
 sympozium                  # launch the TUI — go to Ensembles tab, press Enter to onboard
 sympozium serve            # open the web dashboard (port-forwards to the in-cluster UI)
 ```
+
+### What it looks like
+
+<p align="center">
+  <img src="demo.gif" alt="Sympozium dashboard" width="800">
+</p>
 
 ### Advanced: Helm Chart
 
