@@ -1,8 +1,15 @@
 {{- /*
 Existing Helm releases upgraded with --reuse-values do not contain this new
-value block. Keep defaults here as well as values.yaml so those upgrades gain
-the catalog instead of failing on a nil map.
+value block. Keep a full fallback default here so those upgrades still gain
+the catalog, and so a partially-stale reused values object (missing only a
+newer adapter key) still falls back per-field instead of erroring.
+
+This block is generated from charts/sympozium/values.yaml's harnessExamples
+section — values.yaml is the only file to edit for an adapter name/image/
+enabled change. Run `make helm-sync` after editing it, and `make
+helm-sync-check` (part of CI) fails if this block has drifted.
 */}}
+{{/* sync-harness-defaults:begin */}}
 {{- $defaults := dict
   "enabled" true
   "policy" (dict "name" "harness-examples")
@@ -23,6 +30,7 @@ the catalog instead of failing on a nil map.
     "name" "hermes-session-v0-20-6"
     "image" "ghcr.io/sympozium-ai/harness-adapters/hermes@sha256:70c643b287b4a74583c7fedafd60e853579a36380a652a3d39ab0ae8c86e2d3b")
 }}
+{{/* sync-harness-defaults:end */}}
 {{- $examples := mergeOverwrite $defaults (default (dict) .Values.harnessExamples) }}
 {{- if $examples.enabled }}
 {{- if not (or $examples.pi.enabled $examples.piSession.enabled $examples.hermes.enabled $examples.hermesSession.enabled) }}
