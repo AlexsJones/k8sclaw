@@ -33,6 +33,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	sympoziumv1alpha1 "github.com/sympozium-ai/sympozium/api/v1alpha1"
 	"github.com/sympozium-ai/sympozium/internal/agentedit"
@@ -968,6 +969,12 @@ func (s *Server) createAgent(w http.ResponseWriter, r *http.Request) {
 					},
 				},
 				Spec: sympoziumv1alpha1.HarnessSessionSpec{AgentRef: req.Name, RuntimeRef: req.RuntimeRef, DesiredState: "running"},
+			}
+			// Owning the session by the Agent lets Kubernetes garbage collection
+			// remove it, its workload, and its state claim with the Agent, so a
+			// deleted Agent never leaves a credential-bearing harness pod behind.
+			if err := controllerutil.SetOwnerReference(inst, session, s.client.Scheme()); err != nil {
+				s.log.Error(err, "failed to bind persistent harness session to its Agent", "agent", req.Name)
 			}
 			if err := s.client.Create(r.Context(), session); err != nil && !k8serrors.IsAlreadyExists(err) {
 				s.log.Error(err, "failed to create persistent harness session", "agent", req.Name, "runtime", req.RuntimeRef)

@@ -14,8 +14,10 @@ import (
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	sympoziumv1alpha1 "github.com/sympozium-ai/sympozium/api/v1alpha1"
 )
@@ -29,6 +31,14 @@ var harnessSessionProxyClient = &http.Client{
 		return http.ErrUseLastResponse
 	},
 }
+
+// harnessSessionAuditBackoff gives concurrent chat requests, which all patch
+// the same status object under optimistic locking, enough attempts to land
+// without dropping an audit record. It stays bounded to well under a second.
+var harnessSessionAuditBackoff = wait.Backoff{Steps: 15, Duration: 10 * time.Millisecond, Factor: 1.2, Jitter: 0.2}
+
+// harnessSessionRetryAnnotation records an explicit retry of a Failed session.
+const harnessSessionRetryAnnotation = "sympozium.ai/retry-requested-at"
 
 type CreateHarnessSessionRequest struct {
 	Name        string `json:"name"`
@@ -85,7 +95,21 @@ func (s *Server) createHarnessSession(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "name, agentRef, and runtimeRef are required", http.StatusBadRequest)
 		return
 	}
-	session := &sympoziumv1alpha1.HarnessSession{ObjectMeta: metav1.ObjectMeta{Name: request.Name, Namespace: requestNamespace(r)}, Spec: sympoziumv1alpha1.HarnessSessionSpec{AgentRef: request.AgentRef, RuntimeRef: request.RuntimeRef, DesiredState: "running"}}
+	ns := requestNamespace(r)
+	var agent sympoziumv1alpha1.Agent
+	if err := s.client.Get(r.Context(), types.NamespacedName{Name: request.AgentRef, Namespace: ns}, &agent); err != nil {
+		if k8serrors.IsNotFound(err) {
+			http.Error(w, "Agent not found", http.StatusNotFound)
+		} else {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		}
+		return
+	}
+	session := &sympoziumv1alpha1.HarnessSession{ObjectMeta: metav1.ObjectMeta{Name: request.Name, Namespace: ns, Labels: map[string]string{"app.kubernetes.io/managed-by": "sympozium", "sympozium.ai/agent": agent.Name}}, Spec: sympoziumv1alpha1.HarnessSessionSpec{AgentRef: request.AgentRef, RuntimeRef: request.RuntimeRef, DesiredState: "running"}}
+	if err := controllerutil.SetOwnerReference(&agent, session, s.client.Scheme()); err != nil {
+		http.Error(w, "could not bind session to Agent: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
 	if request.IdleTimeout != "" {
 		duration, err := time.ParseDuration(request.IdleTimeout)
 		if err != nil || duration <= 0 {
@@ -125,6 +149,15 @@ func (s *Server) patchHarnessSession(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 		}
 		return
+	}
+	if request.DesiredState == "running" && session.Spec.DesiredState == "running" && session.Status.Phase == "Failed" {
+		// Retrying a Failed session leaves the spec unchanged, which would not
+		// produce a watch event. Record the retry so the controller re-evaluates
+		// the Agent and runtime binding now instead of at its next periodic check.
+		if session.Annotations == nil {
+			session.Annotations = map[string]string{}
+		}
+		session.Annotations[harnessSessionRetryAnnotation] = time.Now().UTC().Format(time.RFC3339)
 	}
 	session.Spec.DesiredState = request.DesiredState
 	if err := s.client.Update(r.Context(), session); err != nil {
@@ -246,7 +279,7 @@ func (s *Server) chatHarnessSession(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) recordHarnessSessionRequest(ctx context.Context, namespace, name, requestID, state string, at metav1.Time, started bool) {
-	err := retry.RetryOnConflict(retry.DefaultBackoff, func() error {
+	err := retry.RetryOnConflict(harnessSessionAuditBackoff, func() error {
 		var session sympoziumv1alpha1.HarnessSession
 		if err := s.client.Get(ctx, types.NamespacedName{Namespace: namespace, Name: name}, &session); err != nil {
 			return err
@@ -270,7 +303,10 @@ func (s *Server) recordHarnessSessionRequest(ctx context.Context, namespace, nam
 				session.Status.ErrorCount++
 			}
 		}
-		return s.client.Status().Patch(ctx, &session, client.MergeFrom(before))
+		// Optimistic locking makes the retry loop real: without it two concurrent
+		// requests could both read the same counters and one increment would be
+		// lost, leaving ActiveRequests permanently wrong and idle timeout blocked.
+		return s.client.Status().Patch(ctx, &session, client.MergeFromWithOptions(before, client.MergeFromWithOptimisticLock{}))
 	})
 	if err != nil && !k8serrors.IsNotFound(err) {
 		s.log.Error(err, "could not record harness session request", "session", types.NamespacedName{Namespace: namespace, Name: name}, "requestID", requestID, "state", state)

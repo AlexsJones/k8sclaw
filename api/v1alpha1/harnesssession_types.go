@@ -32,10 +32,14 @@ type HarnessSession struct {
 type HarnessSessionSpec struct {
 	// AgentRef is the Agent whose credential allowlist and model routing bound
 	// this session. The controller rejects a missing Agent.
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="spec.agentRef is immutable"
 	AgentRef string `json:"agentRef"`
 
 	// RuntimeRef is an administrator-approved AgentRuntime implementing the
 	// v1alpha2 persistent session contract.
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="spec.runtimeRef is immutable"
 	RuntimeRef string `json:"runtimeRef"`
 
 	// DesiredState starts or stops the session. Stopping removes the Deployment
