@@ -449,6 +449,13 @@ celln:
   enabled: true
   # -- URL of the celln-router Service. The controller POSTs here.
   routerUrl: "http://celln-router.celln-system.svc.cluster.local:8787"
+  # -- Existing Secret in the controller namespace, key `token`, containing
+  # the dispatcher's bearer credential (at least 24 bytes). No token is generated
+  # or inferred from model credentials. Missing configuration refuses dispatch.
+  tokenSecret: ""
+  # -- Explicitly permit a plaintext non-loopback router URL. Prefer an HTTPS
+  # endpoint; cluster networking alone does not encrypt the bearer credential.
+  allowInsecureHttp: false
   # -- API key for your chosen LLM provider. Set ONE of these.
   # The key file is mounted at /etc/celln/agent-key on the host dispatcher.
   # If none are set, the dispatcher will use auto-discovery (ollama) or

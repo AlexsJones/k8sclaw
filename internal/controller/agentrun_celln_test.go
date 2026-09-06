@@ -20,7 +20,9 @@ import (
 
 // newTestCellnRun builds a minimal AgentRun suitable for driving
 // reconcilePendingCelln / reconcileRunningCelln directly.
-func newTestCellnRun(name string, uid types.UID) *sympoziumv1alpha1.AgentRun {
+func newTestCellnRun(t *testing.T, name string, uid types.UID) *sympoziumv1alpha1.AgentRun {
+	t.Helper()
+	configureCellnToken(t)
 	return &sympoziumv1alpha1.AgentRun{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
@@ -44,7 +46,7 @@ func TestReconcilePendingCelln_ActionIDUniquePerUID(t *testing.T) {
 	defer srv.Close()
 	t.Setenv("CELLN_ROUTER_URL", srv.URL)
 
-	runA := newTestCellnRun("dup-name", types.UID("uid-aaaa"))
+	runA := newTestCellnRun(t, "dup-name", types.UID("uid-aaaa"))
 	rA := newAgentRunTestReconciler(t, runA)
 	if _, err := rA.reconcilePendingCelln(context.Background(), logr.Discard(), runA); err != nil {
 		t.Fatalf("reconcilePendingCelln (run A): %v", err)
@@ -54,7 +56,7 @@ func TestReconcilePendingCelln_ActionIDUniquePerUID(t *testing.T) {
 		t.Fatalf("get stored run A: %v", err)
 	}
 
-	runB := newTestCellnRun("dup-name", types.UID("uid-bbbb"))
+	runB := newTestCellnRun(t, "dup-name", types.UID("uid-bbbb"))
 	rB := newAgentRunTestReconciler(t, runB)
 	if _, err := rB.reconcilePendingCelln(context.Background(), logr.Discard(), runB); err != nil {
 		t.Fatalf("reconcilePendingCelln (run B): %v", err)
@@ -88,7 +90,7 @@ func TestReconcileRunningCelln_DeadlineExceeded_FailsRun(t *testing.T) {
 	defer srv.Close()
 	t.Setenv("CELLN_ROUTER_URL", srv.URL)
 
-	run := newTestCellnRun("wedged-run", types.UID("uid-cccc"))
+	run := newTestCellnRun(t, "wedged-run", types.UID("uid-cccc"))
 	run.Spec.Timeout = &metav1.Duration{Duration: 10 * time.Second}
 	run.Status.Phase = sympoziumv1alpha1.AgentRunPhaseRunning
 	run.Status.CellnActionID = "wedged-run-uid-cccc"
@@ -123,7 +125,7 @@ func TestReconcilePendingCelln_RouterUnreachable_RequeuesWithoutError(t *testing
 	// without any real network I/O, so this fails fast and deterministically.
 	t.Setenv("CELLN_ROUTER_URL", "http://127.0.0.1:1")
 
-	run := newTestCellnRun("unreachable-run", types.UID("uid-dddd"))
+	run := newTestCellnRun(t, "unreachable-run", types.UID("uid-dddd"))
 	r := newAgentRunTestReconciler(t, run)
 
 	result, err := r.reconcilePendingCelln(context.Background(), logr.Discard(), run)
@@ -138,7 +140,7 @@ func TestReconcilePendingCelln_RouterUnreachable_RequeuesWithoutError(t *testing
 func TestReconcileRunningCelln_RouterUnreachable_RequeuesWithoutError(t *testing.T) {
 	t.Setenv("CELLN_ROUTER_URL", "http://127.0.0.1:1")
 
-	run := newTestCellnRun("unreachable-poll-run", types.UID("uid-eeee"))
+	run := newTestCellnRun(t, "unreachable-poll-run", types.UID("uid-eeee"))
 	run.Status.Phase = sympoziumv1alpha1.AgentRunPhaseRunning
 	run.Status.CellnActionID = "unreachable-poll-run-uid-eeee"
 	started := metav1.NewTime(time.Now())
@@ -169,7 +171,7 @@ func TestReconcilePendingCelln_PostsAWellFormedForgeExecutionRequest(t *testing.
 	defer srv.Close()
 	t.Setenv("CELLN_ROUTER_URL", srv.URL)
 
-	run := newTestCellnRun("well-formed", types.UID("uid-ffff"))
+	run := newTestCellnRun(t, "well-formed", types.UID("uid-ffff"))
 	run.Spec.Task = sympoziumv1alpha1.NewStringTask("write a haiku generator")
 	run.Spec.Timeout = &metav1.Duration{Duration: 45 * time.Second}
 
@@ -222,7 +224,7 @@ func TestReconcileRunningCelln_SucceededSetsResultFromExecutionRecordOutput(t *t
 	defer srv.Close()
 	t.Setenv("CELLN_ROUTER_URL", srv.URL)
 
-	run := newTestCellnRun("succeeded-run", types.UID("uid-9999"))
+	run := newTestCellnRun(t, "succeeded-run", types.UID("uid-9999"))
 	run.Status.Phase = sympoziumv1alpha1.AgentRunPhaseRunning
 	run.Status.CellnActionID = "succeeded-run-uid-9999"
 	started := metav1.NewTime(time.Now())

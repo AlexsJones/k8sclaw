@@ -87,8 +87,6 @@ func cellnActionID(agentRun *sympoziumv1alpha1.AgentRun) string {
 	return agentRun.Name + "-" + string(agentRun.UID)
 }
 
-var cellnHTTPClient = &http.Client{Timeout: 30 * time.Second}
-
 // executionRequest mirrors celln.dev/v1alpha1's ExecutionRequest, forge
 // variant only. Field names/JSON tags must match crates/celln-spec exactly.
 type executionRequest struct {
@@ -161,7 +159,6 @@ func (r *AgentRunReconciler) reconcilePendingCelln(
 ) (ctrl.Result, error) {
 	log.Info("Dispatching AgentRun to Celln backend")
 
-	routerURL := cellnRouterURL()
 	task := agentRun.Spec.Task.GetPrompt()
 	if task == "" {
 		return ctrl.Result{}, r.failRun(ctx, agentRun, "Celln backend requires a string-form task")
@@ -193,8 +190,7 @@ func (r *AgentRunReconciler) reconcilePendingCelln(
 		return ctrl.Result{}, r.failRun(ctx, agentRun, fmt.Sprintf("Celln: marshal execution request: %v", err))
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		routerURL+"/v1/executions", bytes.NewReader(body))
+	req, err := cellnRequest(ctx, http.MethodPost, "/v1/executions", bytes.NewReader(body))
 	if err != nil {
 		return ctrl.Result{}, r.failRun(ctx, agentRun, fmt.Sprintf("Celln: build request: %v", err))
 	}
@@ -202,7 +198,7 @@ func (r *AgentRunReconciler) reconcilePendingCelln(
 
 	resp, err := cellnHTTPClient.Do(req)
 	if err != nil {
-		log.Error(err, "Celln router unreachable", "url", routerURL)
+		log.Error(err, "Celln router unreachable")
 		// Return a nil error so controller-runtime honors RequeueAfter as a
 		// fixed 10s retry cadence, rather than routing through its own
 		// rate-limited workqueue backoff (which ignores Result when err != nil
@@ -241,7 +237,6 @@ func (r *AgentRunReconciler) reconcileRunningCelln(
 	log logr.Logger,
 	agentRun *sympoziumv1alpha1.AgentRun,
 ) (ctrl.Result, error) {
-	routerURL := cellnRouterURL()
 	actionID := agentRun.Status.CellnActionID
 	if actionID == "" {
 		return ctrl.Result{}, r.failRun(ctx, agentRun, "Celln execution ID missing from status")
@@ -263,15 +258,14 @@ func (r *AgentRunReconciler) reconcileRunningCelln(
 		}
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
-		routerURL+"/v1/executions/"+actionID, nil)
+	req, err := cellnRequest(ctx, http.MethodGet, "/v1/executions/"+actionID, nil)
 	if err != nil {
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
 
 	resp, err := cellnHTTPClient.Do(req)
 	if err != nil {
-		log.Error(err, "Celln router unreachable during poll", "url", routerURL)
+		log.Error(err, "Celln router unreachable during poll")
 		// nil error so controller-runtime honors RequeueAfter as a fixed 10s
 		// retry cadence instead of its own workqueue backoff (see the
 		// matching comment in reconcilePendingCelln).

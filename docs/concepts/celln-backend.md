@@ -31,6 +31,25 @@ spec:
 
 ## How It Works
 
+### Dispatcher authentication
+
+The controller requires `CELLN_TOKEN_FILE`, an operator-provisioned file
+containing the Celln bearer credential (at least 24 bytes). This is distinct
+from model-provider credentials and is never read from AgentRun task text.
+The file is re-read for each POST/GET so mounted Secret rotation takes effect.
+Redirects are refused rather than forwarding credentials or changing methods.
+
+With Helm, create the Secret in the **controller namespace** with key `token`
+and set `celln.tokenSecret` to its name. The token must match the selected
+dispatcher/router's configured credential. Prefer an HTTPS `celln.routerUrl`;
+non-loopback plaintext requires explicit `celln.allowInsecureHttp: true` (or
+`CELLN_ALLOW_INSECURE_HTTP=true` outside Helm). This opt-in does not encrypt
+traffic. Missing or invalid credentials refuse dispatch without backend fallback.
+
+These settings configure the controller client; they do not distribute a
+credential to host dispatchers or make legacy installer images compatible.
+Operators must configure both ends deliberately.
+
 ```
 AgentRun (backend: celln)
   │

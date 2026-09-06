@@ -127,6 +127,12 @@ spec:
             {{- if .Values.celln.enabled }}
             - name: CELLN_ROUTER_URL
               value: {{ .Values.celln.routerUrl | quote }}
+            - name: CELLN_ALLOW_INSECURE_HTTP
+              value: {{ .Values.celln.allowInsecureHttp | quote }}
+            {{- if .Values.celln.tokenSecret }}
+            - name: CELLN_TOKEN_FILE
+              value: /etc/sympozium/celln/token
+            {{- end }}
             {{- end }}
             {{- if .Values.pricing.enabled }}
             - name: SYMPOZIUM_PRICING_CONFIGMAP
@@ -157,6 +163,21 @@ spec:
             {{- toYaml .Values.controller.resources | nindent 12 }}
           securityContext:
             {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          {{- if and .Values.celln.enabled .Values.celln.tokenSecret }}
+          volumeMounts:
+            - name: celln-token
+              mountPath: /etc/sympozium/celln
+              readOnly: true
+          {{- end }}
+      {{- if and .Values.celln.enabled .Values.celln.tokenSecret }}
+      volumes:
+        - name: celln-token
+          secret:
+            secretName: {{ .Values.celln.tokenSecret | quote }}
+            items:
+              - key: token
+                path: token
+      {{- end }}
       {{- with .Values.controller.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}
