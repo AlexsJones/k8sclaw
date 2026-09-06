@@ -216,8 +216,11 @@ func TestReconcileRunningCelln_SucceededSetsResultFromExecutionRecordOutput(t *t
 			Phase:     "Succeeded",
 			Output:    "42",
 			Receipt: &executionReceipt{
+				APIVersion: "celln.dev/v1alpha1", RequestID: "succeeded-run-uid-9999", Phase: "succeeded", Node: "test-node",
+				StartedAt: "2026-09-06T00:00:00Z", CompletedAt: "2026-09-06T00:00:01Z",
 				CellID:   "cell-abc123",
-				Resolved: executionResolved{Tools: []string{"blake3:deadbeef"}},
+				Resolved: executionResolved{Tools: []string{testCellnHash}},
+				Output:   &executionOutput{Hash: testCellnHash, MediaType: "text/plain", Bytes: 2},
 			},
 		})
 	}))
@@ -227,6 +230,8 @@ func TestReconcileRunningCelln_SucceededSetsResultFromExecutionRecordOutput(t *t
 	run := newTestCellnRun(t, "succeeded-run", types.UID("uid-9999"))
 	run.Status.Phase = sympoziumv1alpha1.AgentRunPhaseRunning
 	run.Status.CellnActionID = "succeeded-run-uid-9999"
+	frozen, _ := json.Marshal(testFrozenCellnRequest(run))
+	run.Status.CellnRequest = string(frozen)
 	started := metav1.NewTime(time.Now())
 	run.Status.StartedAt = &started
 
@@ -244,6 +249,9 @@ func TestReconcileRunningCelln_SucceededSetsResultFromExecutionRecordOutput(t *t
 	}
 	if stored.Status.Result != "42" {
 		t.Errorf("expected status.result to come from the executionRecord's own Output field, got %q", stored.Status.Result)
+	}
+	if stored.Status.CellnReceipt == "" {
+		t.Fatal("validated receipt was not persisted")
 	}
 }
 

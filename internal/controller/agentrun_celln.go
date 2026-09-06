@@ -70,6 +70,12 @@ func cellnRouterURL() string {
 // reconcileRunningCelln. Kept as a single helper so the default can't drift
 // between the two call sites.
 func cellnEffectiveTimeout(agentRun *sympoziumv1alpha1.AgentRun) time.Duration {
+	if agentRun.Status.CellnRequest != "" {
+		var frozen executionRequest
+		if json.Unmarshal([]byte(agentRun.Status.CellnRequest), &frozen) == nil && frozen.Capabilities.TimeoutMs > 0 && frozen.Capabilities.TimeoutMs <= uint64((24*time.Hour)/time.Millisecond) {
+			return time.Duration(frozen.Capabilities.TimeoutMs) * time.Millisecond
+		}
+	}
 	if agentRun.Spec.Timeout != nil {
 		return agentRun.Spec.Timeout.Duration
 	}
@@ -90,12 +96,16 @@ func cellnActionID(agentRun *sympoziumv1alpha1.AgentRun) string {
 // executionRequest mirrors celln.dev/v1alpha1's ExecutionRequest, forge
 // variant only. Field names/JSON tags must match crates/celln-spec exactly.
 type executionRequest struct {
-	APIVersion   string              `json:"apiVersion"`
-	ID           string              `json:"id"`
-	Workload     executionWorkload   `json:"workload"`
-	Forge        *executionForge     `json:"forge,omitempty"`
-	Capabilities executionCapability `json:"capabilities"`
-	Execution    executionPolicy     `json:"execution"`
+	APIVersion   string                               `json:"apiVersion"`
+	ID           string                               `json:"id"`
+	Workload     executionWorkload                    `json:"workload"`
+	Forge        *executionForge                      `json:"forge,omitempty"`
+	Mote         *sympoziumv1alpha1.CellnImmutableRef `json:"mote,omitempty"`
+	Tools        []sympoziumv1alpha1.CellnToolRef     `json:"tools,omitempty"`
+	Inputs       []sympoziumv1alpha1.CellnInput       `json:"inputs,omitempty"`
+	Invocation   *sympoziumv1alpha1.CellnInvocation   `json:"invocation,omitempty"`
+	Capabilities executionCapability                  `json:"capabilities"`
+	Execution    executionPolicy                      `json:"execution"`
 }
 
 type executionWorkload struct {
@@ -108,10 +118,11 @@ type executionForge struct {
 }
 
 type executionCapability struct {
-	Workspace   string `json:"workspace"`
-	TimeoutMs   uint64 `json:"timeoutMs"`
-	MemoryBytes uint64 `json:"memoryBytes"`
-	OutputBytes uint64 `json:"outputBytes"`
+	Workspace   string   `json:"workspace"`
+	Egress      []string `json:"egress,omitempty"`
+	TimeoutMs   uint64   `json:"timeoutMs"`
+	MemoryBytes uint64   `json:"memoryBytes"`
+	OutputBytes uint64   `json:"outputBytes"`
 }
 
 type executionPolicy struct {
@@ -135,18 +146,27 @@ type executionRecord struct {
 // decoded for the fields worth logging — Sympozium doesn't persist
 // provenance on AgentRun.status beyond what already exists (Result).
 type executionReceipt struct {
-	CellID   string            `json:"cellId"`
-	Resolved executionResolved `json:"resolved"`
-	Output   *executionOutput  `json:"output,omitempty"`
+	APIVersion  string            `json:"apiVersion"`
+	RequestID   string            `json:"requestId"`
+	Phase       string            `json:"phase"`
+	Node        string            `json:"node"`
+	StartedAt   string            `json:"startedAt"`
+	CompletedAt string            `json:"completedAt"`
+	CellID      string            `json:"cellId"`
+	Resolved    executionResolved `json:"resolved"`
+	Output      *executionOutput  `json:"output,omitempty"`
 }
 
 type executionResolved struct {
-	Tools []string `json:"tools,omitempty"`
+	Mote   *string  `json:"mote,omitempty"`
+	Tools  []string `json:"tools,omitempty"`
+	Inputs []string `json:"inputs,omitempty"`
 }
 
 type executionOutput struct {
-	Hash  string `json:"hash"`
-	Bytes uint64 `json:"bytes"`
+	Hash      string `json:"hash"`
+	MediaType string `json:"mediaType"`
+	Bytes     uint64 `json:"bytes"`
 }
 
 // reconcilePendingCelln dispatches a pending AgentRun to the Celln router.
@@ -160,7 +180,7 @@ func (r *AgentRunReconciler) reconcilePendingCelln(
 	log.Info("Dispatching AgentRun to Celln backend")
 
 	task := agentRun.Spec.Task.GetPrompt()
-	if task == "" {
+	if task == "" && agentRun.Spec.Celln == nil && agentRun.Status.CellnRequest == "" {
 		return ctrl.Result{}, r.failRun(ctx, agentRun, "Celln backend requires a string-form task")
 	}
 
@@ -184,10 +204,37 @@ func (r *AgentRunReconciler) reconcilePendingCelln(
 			RequireHardwareIsolation: true,
 		},
 	}
+	if pinned := agentRun.Spec.Celln; pinned != nil && agentRun.Status.CellnRequest == "" {
+		request.Forge = nil
+		request.Mote = &pinned.Mote
+		request.Tools = pinned.Tools
+		request.Inputs = pinned.Inputs
+		request.Invocation = &pinned.Invocation
+		request.Execution.Lane = pinned.Lane
+		request.Capabilities.Workspace = pinned.Capabilities.Workspace
+		request.Capabilities.Egress = pinned.Capabilities.Egress
+		if pinned.Capabilities.MemoryBytes <= 0 || pinned.Capabilities.OutputBytes <= 0 {
+			return ctrl.Result{}, r.failRun(ctx, agentRun, "Celln: limits must be positive")
+		}
+		request.Capabilities.MemoryBytes = uint64(pinned.Capabilities.MemoryBytes)
+		request.Capabilities.OutputBytes = uint64(pinned.Capabilities.OutputBytes)
+	}
+	if agentRun.Status.CellnRequest != "" {
+		request = executionRequest{}
+		if err := json.Unmarshal([]byte(agentRun.Status.CellnRequest), &request); err != nil || request.ID != id {
+			return ctrl.Result{}, r.failRun(ctx, agentRun, "Celln: invalid frozen request")
+		}
+	}
+	if err := validateCellnRequest(request); err != nil {
+		return ctrl.Result{}, r.failRun(ctx, agentRun, err.Error())
+	}
 
 	body, err := json.Marshal(request)
 	if err != nil {
 		return ctrl.Result{}, r.failRun(ctx, agentRun, fmt.Sprintf("Celln: marshal execution request: %v", err))
+	}
+	if len(body) > 131072 {
+		return ctrl.Result{}, r.failRun(ctx, agentRun, "Celln: request exceeds controller bound")
 	}
 
 	req, err := cellnRequest(ctx, http.MethodPost, "/v1/executions", bytes.NewReader(body))
@@ -195,6 +242,16 @@ func (r *AgentRunReconciler) reconcilePendingCelln(
 		return ctrl.Result{}, r.failRun(ctx, agentRun, fmt.Sprintf("Celln: build request: %v", err))
 	}
 	req.Header.Set("Content-Type", "application/json")
+	// Freeze before any network side effect. A crash/retry reuses the same
+	// request bytes and ID instead of applying a later mutable spec change.
+	if agentRun.Status.CellnRequest == "" {
+		if err := r.updateStatusWithRetry(ctx, agentRun, func(ar *sympoziumv1alpha1.AgentRun) {
+			ar.Status.CellnRequest = string(body)
+			ar.Status.CellnActionID = id
+		}); err != nil {
+			return ctrl.Result{}, err
+		}
+	}
 
 	resp, err := cellnHTTPClient.Do(req)
 	if err != nil {
@@ -285,9 +342,21 @@ func (r *AgentRunReconciler) reconcileRunningCelln(
 	}
 
 	var record executionRecord
-	if err := json.NewDecoder(resp.Body).Decode(&record); err != nil {
+	response, readErr := io.ReadAll(io.LimitReader(resp.Body, 262145))
+	if readErr != nil || len(response) > 262144 {
+		return ctrl.Result{}, r.failRun(ctx, agentRun, "Celln: execution response exceeds controller bound or cannot be read")
+	}
+	decoder := json.NewDecoder(bytes.NewReader(response))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&record); err != nil {
 		log.Error(err, "Failed to decode Celln execution record")
 		return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+	}
+	if decoder.Decode(new(any)) != io.EOF {
+		return ctrl.Result{}, r.failRun(ctx, agentRun, "Celln: trailing execution response data")
+	}
+	if record.RequestID != actionID {
+		return ctrl.Result{}, r.failRun(ctx, agentRun, "Celln: mismatched execution record identity")
 	}
 
 	log.Info("Celln execution status", "phase", record.Phase)
@@ -300,11 +369,16 @@ func (r *AgentRunReconciler) reconcileRunningCelln(
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 
 	case "Succeeded":
+		if err := validateCellnReceipt(agentRun, record); err != nil {
+			return ctrl.Result{}, r.failRun(ctx, agentRun, err.Error())
+		}
+		receiptJSON, _ := json.Marshal(record.Receipt)
 		now := metav1.Time{Time: time.Now()}
 		if err := r.updateStatusWithRetry(ctx, agentRun, func(ar *sympoziumv1alpha1.AgentRun) {
 			ar.Status.Phase = sympoziumv1alpha1.AgentRunPhaseSucceeded
 			ar.Status.CompletedAt = &now
 			ar.Status.Result = record.Output
+			ar.Status.CellnReceipt = string(receiptJSON)
 		}); err != nil {
 			log.Error(err, "Failed to persist Celln Succeeded status")
 			return ctrl.Result{RequeueAfter: 5 * time.Second}, err
@@ -318,6 +392,17 @@ func (r *AgentRunReconciler) reconcileRunningCelln(
 		return ctrl.Result{}, nil
 
 	case "Failed", "Refused", "Cancelled":
+		if record.Receipt != nil {
+			if err := validateCellnReceipt(agentRun, record); err != nil {
+				return ctrl.Result{}, r.failRun(ctx, agentRun, err.Error())
+			}
+			receiptJSON, _ := json.Marshal(record.Receipt)
+			if err := r.updateStatusWithRetry(ctx, agentRun, func(ar *sympoziumv1alpha1.AgentRun) {
+				ar.Status.CellnReceipt = string(receiptJSON)
+			}); err != nil {
+				return ctrl.Result{}, err
+			}
+		}
 		return ctrl.Result{}, r.failRun(ctx, agentRun,
 			fmt.Sprintf("Celln execution %s: %s", record.Phase, record.Reason))
 
