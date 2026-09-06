@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"testing"
 
 	"github.com/go-logr/logr"
@@ -13,6 +14,28 @@ import (
 )
 
 const testCellnHash = "blake3:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+
+func TestCellnReceiptPreservesNullAndEmptyFields(t *testing.T) {
+	wire := `{"apiVersion":"celln.dev/v1alpha1","requestId":"id","phase":"succeeded","node":"node","cellId":"cell","resolved":{"mote":null,"tools":[],"inputs":[]},"output":null,"startedAt":"2026-09-06T00:00:00Z","completedAt":"2026-09-06T00:00:01Z"}`
+	var receipt executionReceipt
+	if err := json.Unmarshal([]byte(wire), &receipt); err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := json.Marshal(receipt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var before, after any
+	if err := json.Unmarshal([]byte(wire), &before); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(encoded, &after); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(before, after) {
+		t.Fatalf("receipt contract changed during persistence: %s", encoded)
+	}
+}
 
 func testFrozenCellnRequest(run *sympoziumv1alpha1.AgentRun) executionRequest {
 	return executionRequest{APIVersion: "celln.dev/v1alpha1", ID: cellnActionID(run), Workload: executionWorkload{ID: run.Spec.AgentRef, Caller: "test"}, Forge: &executionForge{Task: "original"}, Capabilities: executionCapability{Workspace: "none", TimeoutMs: 90000, MemoryBytes: cellnMemoryBytes, OutputBytes: cellnOutputBytes}, Execution: executionPolicy{Lane: "agent", RequireHardwareIsolation: true}}
@@ -27,6 +50,7 @@ func TestCellnPinnedRequestAndFrozenRetry(t *testing.T) {
 		Invocation:   sympoziumv1alpha1.CellnInvocation{Alias: "/tool", Args: []string{"original"}},
 		Capabilities: sympoziumv1alpha1.CellnCapabilities{Workspace: "read-only", MemoryBytes: cellnMemoryBytes, OutputBytes: cellnOutputBytes}, Lane: "tool",
 	}
+	run.Spec.Task = nil
 	var requests []executionRequest
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer "+testCellnToken {
@@ -41,8 +65,11 @@ func TestCellnPinnedRequestAndFrozenRetry(t *testing.T) {
 	}))
 	defer srv.Close()
 	t.Setenv("CELLN_ROUTER_URL", srv.URL)
-	r := newAgentRunTestReconciler(t, run)
-	if _, err := r.reconcilePendingCelln(context.Background(), logr.Discard(), run); err != nil {
+	agent := parityAgent()
+	agent.Name = run.Spec.AgentRef
+	agent.Namespace = run.Namespace
+	r := newAgentRunTestReconciler(t, run, agent)
+	if _, err := r.reconcilePending(context.Background(), logr.Discard(), run); err != nil {
 		t.Fatal(err)
 	}
 	var stored sympoziumv1alpha1.AgentRun
