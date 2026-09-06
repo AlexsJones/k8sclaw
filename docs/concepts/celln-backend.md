@@ -53,16 +53,16 @@ Operators must configure both ends deliberately.
 ```
 AgentRun (backend: celln)
   │
-  ├─ Controller POSTs {id, task, timeout} to CELLN_ROUTER_URL
+  ├─ Controller POSTs a celln.dev/v1alpha1 ExecutionRequest to CELLN_ROUTER_URL
   │   (celln-router.celln-system.svc.cluster.local:8787)
   │
   ├─ Router (one pod per KVM node) forwards to the host-level
   │   celln dispatcher — a systemd service on that node, installed
   │   by the celln-installer DaemonSet
   │
-  └─ Dispatcher asks its configured AI provider to write a program,
-     attests and seals it into a real KVM cell, runs it, and returns
-     the bounded output. status.cellnActionId tracks the poll.
+  └─ Dispatcher verifies the pinned program (or forges one for task-only
+     requests), seals a KVM cell from a warm mote, runs it, and returns
+     a receipt plus bounded display output. status.cellnActionId tracks the poll.
 ```
 
 The installer and router only schedule onto nodes labeled `celln.dev/kvm: "true"` — Celln needs `/dev/kvm` and is not a container-level isolation mechanism, so it can't run on arbitrary nodes the way the `job` backend can.
@@ -112,14 +112,14 @@ sympozium install --enable-hermetic-workloads
 ```
 
 ```yaml
-# values.yaml — the master switch, false by default
+# values.yaml — explicitly disable the chart's default-enabled integration
 celln:
   enabled: false
 ```
 
-When `false` (the default), no `celln-system` namespace, installer, or router is deployed, and the controller/apiserver aren't given a router URL — zero footprint.
+When `false`, no `celln-system` namespace, installer, or router is deployed, and the controller/apiserver aren't given a router URL or credential mount.
 
-**Disabling it does not remove `"celln"` as a valid `backend` value on the CRD.** A run submitted with `backend: celln` while disabled will still be admitted; the controller will attempt to reach the router at the default in-cluster DNS name, fail to resolve it, and the run transitions to `Failed` with a router-unreachable error. If you disable Celln after enabling it, communicate that to whoever authors `AgentRun`s or agent defaults that set `backend: celln` — or watch for the live banner on the Runs page, which flags exactly this case.
+**Disabling it does not remove `"celln"` as a valid `backend` value on the CRD.** A run submitted while disabled is still schema-valid but refuses when the controller lacks the required transport configuration. There is no fallback to a Job. Communicate configuration changes to authors of Celln-backed runs.
 
 ## Enabling Celln: the AI provider requirement
 
@@ -153,6 +153,15 @@ If none of the above is true on a given KVM node, that node's dispatcher is stil
 | Everything configured | Run dispatches, executes in a real sealed cell, and returns a bounded result. |
 
 ## See Also
+
+For a repeatable static-program proof, use Celln's `make conformance-kvm` with
+`CELLN_SYMPOZIUM_PROOF` pointing to this repository's
+`test/integration/test-celln-real-controller.sh` and `CELLN_KIND_BIN` pointing to
+Kind. The script uses a fresh Podman-backed Kind cluster and isolated kubeconfig,
+builds the production controller, and records actual AgentRun status plus Celln
+receipts/audits. It never uses the existing Kubernetes context and needs no model
+credential. The controller and KVM dispatcher run on the host; Kind supplies the
+real Kubernetes API, not nested hardware isolation.
 
 - [Celln repository](https://github.com/sympozium-ai/celln) — the execution runtime itself: the cell/tool-lending model, hardware isolation guarantees, and `scripts/setup-host.sh` (what the installer DaemonSet runs on each node).
 - [Custom Resources](custom-resources.md) — the `AgentRun.spec.backend` field.

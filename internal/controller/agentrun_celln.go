@@ -154,13 +154,13 @@ type executionReceipt struct {
 	CompletedAt string            `json:"completedAt"`
 	CellID      string            `json:"cellId"`
 	Resolved    executionResolved `json:"resolved"`
-	Output      *executionOutput  `json:"output,omitempty"`
+	Output      *executionOutput  `json:"output"`
 }
 
 type executionResolved struct {
-	Mote   *string  `json:"mote,omitempty"`
-	Tools  []string `json:"tools,omitempty"`
-	Inputs []string `json:"inputs,omitempty"`
+	Mote   *string  `json:"mote"`
+	Tools  []string `json:"tools"`
+	Inputs []string `json:"inputs"`
 }
 
 type executionOutput struct {

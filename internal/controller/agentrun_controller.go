@@ -694,7 +694,7 @@ func (r *AgentRunReconciler) reconcilePending(ctx context.Context, log logr.Logg
 	// inside the agent-runner. Fail fast with a clear status.error so the
 	// operator sees why the run never started instead of a runtime crash.
 	// PR #302 review (issuecomment 5033007953) — second smaller ask.
-	if agentRun.Spec.Task == nil {
+	if agentRun.Spec.Task == nil && !(agentRun.Spec.Backend == "celln" && agentRun.Spec.Celln != nil) {
 		return ctrl.Result{}, r.failRun(ctx, agentRun,
 			"spec.task is required and must not be empty; provide a string prompt (Path A) or a {mode, tool, parameters} object (Path B)")
 	}
