@@ -120,6 +120,125 @@ spec:
                   cluster info, k8s resources) and one minimal LLM call to verify
                   provider connectivity, then outputs a structured JSON result.
                 type: boolean
+              celln:
+                description: |-
+                  Celln names an immutable program and bounded data for backend=celln.
+                  When present, task text is not sent to a model and cannot select code.
+                  The Celln operator must independently approve every referenced artifact.
+                properties:
+                  capabilities:
+                    properties:
+                      egress:
+                        items:
+                          type: string
+                        maxItems: 32
+                        type: array
+                      memoryBytes:
+                        description: Timeout is supplied by AgentRun.spec.timeout,
+                          not this object.
+                        format: int64
+                        maximum: 268435456
+                        minimum: 1
+                        type: integer
+                      outputBytes:
+                        format: int64
+                        maximum: 65536
+                        minimum: 1
+                        type: integer
+                      workspace:
+                        enum:
+                        - none
+                        - read-only
+                        - read-write
+                        type: string
+                    required:
+                    - memoryBytes
+                    - outputBytes
+                    - workspace
+                    type: object
+                  inputs:
+                    items:
+                      properties:
+                        bytes:
+                          format: int64
+                          maximum: 65536
+                          minimum: 1
+                          type: integer
+                        hash:
+                          pattern: ^blake3:[0-9a-f]{64}$
+                          type: string
+                        mediaType:
+                          minLength: 1
+                          type: string
+                        name:
+                          pattern: ^[a-z0-9._-]{1,64}$
+                          type: string
+                      required:
+                      - bytes
+                      - hash
+                      - mediaType
+                      - name
+                      type: object
+                    maxItems: 16
+                    type: array
+                  invocation:
+                    properties:
+                      alias:
+                        type: string
+                      args:
+                        items:
+                          type: string
+                        maxItems: 128
+                        type: array
+                    required:
+                    - alias
+                    type: object
+                  lane:
+                    description: Lane never promotes an agent-authored artifact to
+                      tool authority.
+                    enum:
+                    - agent
+                    - tool
+                    type: string
+                  mote:
+                    properties:
+                      hash:
+                        pattern: ^blake3:[0-9a-f]{64}$
+                        type: string
+                    required:
+                    - hash
+                    type: object
+                  tools:
+                    items:
+                      properties:
+                        alias:
+                          pattern: ^/
+                          type: string
+                        closure:
+                          properties:
+                            hash:
+                              pattern: ^blake3:[0-9a-f]{64}$
+                              type: string
+                          required:
+                          - hash
+                          type: object
+                        hash:
+                          pattern: ^blake3:[0-9a-f]{64}$
+                          type: string
+                      required:
+                      - alias
+                      - hash
+                      type: object
+                    maxItems: 16
+                    minItems: 1
+                    type: array
+                required:
+                - capabilities
+                - invocation
+                - lane
+                - mote
+                - tools
+                type: object
               cleanup:
                 default: delete
                 description: 'Cleanup policy: "delete" to remove pod after completion,
@@ -2634,6 +2753,16 @@ spec:
                   when this run is dispatched through the Celln backend. Empty for
                   non-Celln backends. The controller polls /v1/executions/<id> on the
                   router to track progress.
+                type: string
+              cellnReceipt:
+                description: CellnReceipt retains the validated versioned terminal
+                  receipt as JSON.
+                maxLength: 131072
+                type: string
+              cellnRequest:
+                description: CellnRequest freezes the exact versioned request before
+                  first dispatch.
+                maxLength: 131072
                 type: string
               completedAt:
                 description: CompletedAt is when the agent run completed.

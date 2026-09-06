@@ -115,6 +115,12 @@ type AgentRunSpec struct {
 	// +optional
 	Backend string `json:"backend,omitempty"`
 
+	// Celln names an immutable program and bounded data for backend=celln.
+	// When present, task text is not sent to a model and cannot select code.
+	// The Celln operator must independently approve every referenced artifact.
+	// +optional
+	Celln *CellnExecutionSpec `json:"celln,omitempty"`
+
 	// CanaryMode runs built-in health checks instead of the LLM conversation
 	// loop. The agent executes deterministic platform checks (API server,
 	// cluster info, k8s resources) and one minimal LLM call to verify
@@ -443,6 +449,15 @@ type AgentRunStatus struct {
 	// router to track progress.
 	// +optional
 	CellnActionID string `json:"cellnActionId,omitempty"`
+
+	// CellnRequest freezes the exact versioned request before first dispatch.
+	// +kubebuilder:validation:MaxLength=131072
+	// +optional
+	CellnRequest string `json:"cellnRequest,omitempty"`
+	// CellnReceipt retains the validated versioned terminal receipt as JSON.
+	// +kubebuilder:validation:MaxLength=131072
+	// +optional
+	CellnReceipt string `json:"cellnReceipt,omitempty"`
 }
 
 // DelegateStatus tracks an in-flight delegation to another persona or ad-hoc sub-agent.

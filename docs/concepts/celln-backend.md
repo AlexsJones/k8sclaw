@@ -67,11 +67,33 @@ AgentRun (backend: celln)
 
 The installer and router only schedule onto nodes labeled `celln.dev/kvm: "true"` — Celln needs `/dev/kvm` and is not a container-level isolation mechanism, so it can't run on arbitrary nodes the way the `job` backend can.
 
-## Trust model: your task always runs in the agent lane
+## Trust model: task text never grants tool authority
 
 Celln draws a hard line between two authority levels for code running inside a cell: the **tool lane** (an already-attested host binary, sealed in read-only — full but narrow authority) and the **agent lane** (agent-authored code, generated at run time — gets only what's explicitly loaned to it, permanently, no matter how well it's built). Full model: [tool lane](https://sympozium-ai.github.io/celln/tool-lane.html) / [agent lane](https://sympozium-ai.github.io/celln/agent-lane.html).
 
-A Sympozium `backend: celln` `AgentRun` **always executes in the agent lane.** The controller always sends the task as a `forge` request — a model writes a program from the task string, it gets rebuilt twice and hash-compared — and that program is `author=agent` by construction, which is agent-lane authority regardless of how cleanly it reproduces. There is currently no `AgentRun` field for naming a pre-declared, hash-pinned tool instead of a task string, so tool-lane execution isn't reachable from Sympozium today — only from the `celln` CLI directly (`celln spec` / `celln run`). Practically, that means every `backend: celln` run gets: no ambient host tools or filesystem beyond its own generated program and workspace, no persisted workspace between runs (`workspace: "none"`), a fixed 256MiB/64KiB memory/output envelope (not yet configurable per run), and hardware isolation with no softer fallback. See [Sympozium × Celln actions](https://sympozium-ai.github.io/celln/sympozium-celln-actions.html) for the full breakdown of what the dispatched request actually contains.
+A task-only `backend: celln` run sends a `forge` request in the agent lane.
+Reproducibility does not promote generated code to tool authority. Its default
+bounds remain 256MiB guest memory, 64KiB output and workspace `none`.
+
+For an existing immutable program, set `spec.celln` explicitly. It contains
+`mote: {hash}`, `tools: [{alias, hash}]`, optional bounded `inputs` (name, hash,
+mediaType, bytes), `invocation: {alias, args}`, `lane`, and `capabilities`
+(workspace, optional egress, memoryBytes, outputBytes). `spec.timeout` supplies
+the end-to-end deadline. In this mode task text is not sent to a model and
+does not influence the executable or its arguments. The dispatcher must still
+independently approve and verify the artifacts and refuse unsupported authority.
+Requesting the tool lane does not turn an agent-authored artifact into a tool.
+
+The controller freezes the full versioned request in `status.cellnRequest`
+before the first POST. Retries use that snapshot, not a changed spec. A terminal
+success requires a complete receipt with matching request, phase, pinned mote,
+invoked tool and input identities, valid timestamps and bounded output metadata.
+The validated JSON is retained in `status.cellnReceipt`, including for failed or
+cancelled executions that actually produced a receipt. Pre-execution refusal may
+have none. `status.result` remains lossy UTF-8 display text; use the receipt's
+immutable output reference, not that mutable text, as an artifact identity.
+
+This does not add whole-agent, sidecar, shared-memory or ensemble execution.
 
 ## Enabling / Disabling Celln
 

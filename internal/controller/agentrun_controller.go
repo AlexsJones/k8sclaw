@@ -765,6 +765,9 @@ func (r *AgentRunReconciler) reconcilePending(ctx context.Context, log logr.Logg
 	// backends at once. Without this check AgentSandbox is evaluated first
 	// below and celln would be silently dropped with no signal to whoever
 	// authored the run that their backend: celln choice was ignored.
+	if agentRun.Spec.Celln != nil && agentRun.Spec.Backend != "celln" {
+		return ctrl.Result{}, r.failRun(ctx, agentRun, "spec.celln requires backend: celln")
+	}
 	if agentRun.Spec.Backend == "celln" && agentRun.Spec.AgentSandbox != nil && agentRun.Spec.AgentSandbox.Enabled {
 		return ctrl.Result{}, r.failRun(ctx, agentRun,
 			"backend: celln and agentSandbox.enabled are mutually exclusive execution backends; set only one")
