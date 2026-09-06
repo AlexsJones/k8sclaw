@@ -1110,6 +1110,15 @@ func (r *AgentRunReconciler) checkAgentContainer(ctx context.Context, log logr.L
 // Instead of deleting immediately, it keeps up to RunHistoryLimit completed
 // runs per instance and prunes only the oldest ones beyond that threshold.
 func (r *AgentRunReconciler) reconcileCompleted(ctx context.Context, log logr.Logger, agentRun *sympoziumv1alpha1.AgentRun) (ctrl.Result, error) {
+	if agentRun.Status.CellnActionID != "" && controllerutil.ContainsFinalizer(agentRun, agentRunFinalizer) {
+		done, err := r.cancelCelln(ctx, agentRun)
+		if err != nil {
+			return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+		}
+		if !done {
+			return ctrl.Result{RequeueAfter: 2 * time.Second}, nil
+		}
+	}
 	// Clean up cluster-scoped RBAC created for skill sidecars.
 	r.cleanupSkillRBAC(ctx, log, agentRun)
 
@@ -1885,6 +1894,16 @@ func (r *AgentRunReconciler) pruneOldRuns(ctx context.Context, log logr.Logger, 
 // reconcileDelete handles AgentRun deletion.
 func (r *AgentRunReconciler) reconcileDelete(ctx context.Context, log logr.Logger, agentRun *sympoziumv1alpha1.AgentRun) (ctrl.Result, error) {
 	log.Info("Reconciling AgentRun deletion")
+	if agentRun.Status.CellnActionID != "" {
+		done, err := r.cancelCelln(ctx, agentRun)
+		if err != nil {
+			log.Error(err, "Celln deletion cleanup pending")
+			return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+		}
+		if !done {
+			return ctrl.Result{RequeueAfter: 2 * time.Second}, nil
+		}
+	}
 
 	// Clean up cluster-scoped RBAC resources created for skill sidecars.
 	r.cleanupSkillRBAC(ctx, log, agentRun)

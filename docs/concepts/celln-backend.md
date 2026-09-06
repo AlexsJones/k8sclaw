@@ -95,6 +95,14 @@ immutable output reference, not that mutable text, as an artifact identity.
 
 This does not add whole-agent, sidecar, shared-memory or ensemble execution.
 
+Deleting a dispatched AgentRun requests authenticated remote cancellation.
+The controller retains its finalizer while Celln returns `202 Cancelling` or
+cannot be reached; acknowledgement is not proof of teardown. Its deadline
+backstop also cancels remotely and waits for a terminal record before failing
+the run. Terminal status set by another controller does not bypass this cleanup.
+This relies on the configured dispatcher's execution registry; it is not
+distributed failover or recovery of a lost registry after a dispatcher crash.
+
 ## Enabling / Disabling Celln
 
 ```bash
