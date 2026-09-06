@@ -45,6 +45,7 @@ node() { curl --fail --silent --show-error --max-time 10 -H "Authorization: Bear
 create_run() {
   local name=$1 mode=$2 timeout_value=$3
   jq --arg name "$name" --arg mode "$mode" --arg timeout "$timeout_value" '
+    . as $reference |
     {apiVersion:"sympozium.ai/v1alpha1",kind:"AgentRun",metadata:{name:$name,namespace:"celln-proof"},spec:{
       agentRef:"reference",agentId:"reference",sessionKey:$name,model:{provider:"openai",model:"unused",authSecretRef:""},backend:"celln",timeout:$timeout,
       celln:{mote:.mote,tools:.tools,inputs:.inputs,invocation:{alias:.invocation.alias,args:[$mode]},lane:"tool",capabilities:(.capabilities|del(.timeoutMs))}}}
@@ -52,6 +53,7 @@ create_run() {
     | if ($mode|startswith("workspace-")) then .spec.celln.inputs=[] | .spec.celln.capabilities.workspace=($mode|ltrimstr("workspace-")) | .spec.celln.invocation.args=["workspace",.spec.celln.capabilities.workspace] else . end
     | if $mode == "unsupported" then .spec.celln.tools[0].closure={hash:.spec.celln.mote.hash} else . end
     | if $mode == "unapproved-input" then .spec.celln.inputs[0].hash=("blake3:"+("b"*64)) else . end
+    | if $mode == "closure" then .spec.celln.invocation=$reference.invocation else . end
   ' "$CELLN_PROOF_REQUEST" >"$evidence/$name-request.json"
   kubectl create -f "$evidence/$name-request.json"
 }
@@ -81,6 +83,12 @@ collect() {
   node /v1/node >"$evidence/$name-node.json"
   jq -e '.node.live_cells == 0 and .node.memory_bytes == 268435456 and .node.egress_slots == 1' "$evidence/$name-node.json" >/dev/null
 }
+if [[ "${CELLN_PROOF_MODE:-static}" == closure ]]; then
+  create_run proof-closure closure 15s
+  terminal proof-closure Succeeded
+  collect proof-closure
+  jq -e --slurpfile ref "$CELLN_PROOF_REQUEST" '.execution.substrate.closure.hash == $ref[0].tools[0].closure.hash and .execution.exitCode == 0' "$evidence/proof-closure-audit.json" >/dev/null
+else
 for mode in silent failed spoof inputs workspace-none workspace-read-only workspace-read-write; do
   create_run "proof-$mode" "$mode" 15s
   phase=Succeeded
@@ -118,12 +126,14 @@ kubectl delete agentrun proof-cancel -n celln-proof --wait=false
 kubectl wait --for=delete agentrun/proof-cancel -n celln-proof --timeout=30s
 node "/v1/executions/$id/audit" >"$evidence/proof-cancel-audit.json"
 jq -e --slurpfile before "$evidence/proof-cancel-before.json" '.receipt.phase == "cancelled" and .receipt.cellId == $before[0].id and .receipt.output.bytes > 0 and any(.events[]; .phase == "Dissolved")' "$evidence/proof-cancel-audit.json" >/dev/null
+fi
 node /v1/node >"$evidence/final-node.json"
 jq -e '.node.live_cells == 0 and .node.memory_bytes == 268435456' "$evidence/final-node.json" >/dev/null
 kubectl get jobs -n celln-proof -o json >"$evidence/jobs.json"
 jq -e '.items|length == 0' "$evidence/jobs.json" >/dev/null
 jq -n --arg revision "$(git -C "$repo" rev-parse HEAD)" --argjson dirty "$(if [[ -z "$(git -C "$repo" status --porcelain)" ]]; then echo false; else echo true; fi)" \
   --arg controllerSha256 "$(sha256sum "$work/controller" | cut -d' ' -f1)" --arg kind "$("$kind_bin" version)" \
+  --arg mode "${CELLN_PROOF_MODE:-static}" \
   '{suite:"sympozium-real-controller-celln-kvm",status:"passed",revision:$revision,dirty:$dirty,controllerSha256:$controllerSha256,kind:$kind,
-  cases:["silent","failed","spoof","inputs","workspace-none","workspace-read-only","workspace-read-write","unsupported","unapproved-input","timeout","delete-cancel"]}' >"$evidence/summary.json"
+  cases:(if $mode == "closure" then ["signed-closure"] else ["silent","failed","spoof","inputs","workspace-none","workspace-read-only","workspace-read-write","unsupported","unapproved-input","timeout","delete-cancel"] end)}' >"$evidence/summary.json"
 echo "PASS: production Sympozium controller → Kubernetes AgentRun → authenticated Celln → KVM receipt; evidence $evidence"
