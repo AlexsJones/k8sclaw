@@ -310,6 +310,14 @@ func (r *AgentRunReconciler) reconcileRunningCelln(
 		deadline := cellnEffectiveTimeout(agentRun) + cellnDeadlineSlack
 		if elapsed := time.Since(agentRun.Status.StartedAt.Time); elapsed > deadline {
 			log.Info("Celln backend deadline exceeded", "elapsed", elapsed, "deadline", deadline)
+			done, err := r.cancelCelln(ctx, agentRun)
+			if err != nil {
+				log.Error(err, "Celln deadline cleanup pending")
+				return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+			}
+			if !done {
+				return ctrl.Result{RequeueAfter: 2 * time.Second}, nil
+			}
 			return ctrl.Result{}, r.failRun(ctx, agentRun,
 				fmt.Sprintf("Celln backend deadline exceeded: no terminal status after %s (deadline %s)", elapsed.Round(time.Second), deadline))
 		}

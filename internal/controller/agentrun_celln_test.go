@@ -85,7 +85,10 @@ func TestReconcilePendingCelln_ActionIDUniquePerUID(t *testing.T) {
 
 func TestReconcileRunningCelln_DeadlineExceeded_FailsRun(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewEncoder(w).Encode(executionRecord{RequestID: "whatever", Phase: "Running"})
+		if r.Method != "POST" || r.URL.Path != "/v1/executions/wedged-run-uid-cccc/cancel" {
+			t.Error("deadline did not cancel remotely")
+		}
+		_ = json.NewEncoder(w).Encode(executionRecord{RequestID: "wedged-run-uid-cccc", Phase: "Cancelled"})
 	}))
 	defer srv.Close()
 	t.Setenv("CELLN_ROUTER_URL", srv.URL)
