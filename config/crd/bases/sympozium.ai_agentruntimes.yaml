@@ -68,6 +68,131 @@ spec:
                 items:
                   type: string
                 type: array
+              celln:
+                description: |-
+                  Celln declares an additional placement profile, not executable authority.
+                  Image remains required: Celln-only runtimes and catalogue-backed dispatch
+                  are not supported yet. OCI Ready never implies CellnReady.
+                properties:
+                  closure:
+                    properties:
+                      hash:
+                        maxLength: 71
+                        pattern: ^blake3:[0-9a-f]{64}$
+                        type: string
+                    required:
+                    - hash
+                    type: object
+                  contractVersion:
+                    enum:
+                    - celln.reference-functions/v1
+                    type: string
+                  entryPoint:
+                    maxLength: 256
+                    pattern: ^/([A-Za-z0-9_-][A-Za-z0-9_.+-]*/)*[A-Za-z0-9_-][A-Za-z0-9_.+-]*$
+                    type: string
+                  executable:
+                    properties:
+                      hash:
+                        maxLength: 71
+                        pattern: ^blake3:[0-9a-f]{64}$
+                        type: string
+                    required:
+                    - hash
+                    type: object
+                  lane:
+                    enum:
+                    - agent
+                    type: string
+                  lifecycle:
+                    enum:
+                    - disposable-one-shot
+                    type: string
+                  limits:
+                    description: |-
+                      AgentRuntimeCellnLimits are ceilings, never Agent grants or provider policy.
+                      Model mediation and the two reference functions retain their existing
+                      dispatch contract; this profile cannot add protocols, tools or destinations.
+                    properties:
+                      memoryBytes:
+                        format: int64
+                        maximum: 268435456
+                        minimum: 1
+                        type: integer
+                      outputBytes:
+                        format: int64
+                        maximum: 65536
+                        minimum: 1
+                        type: integer
+                      taskBytes:
+                        format: int64
+                        maximum: 2048
+                        minimum: 1
+                        type: integer
+                      timeoutMillis:
+                        format: int64
+                        maximum: 300000
+                        minimum: 1
+                        type: integer
+                      workspace:
+                        enum:
+                        - none
+                        type: string
+                    required:
+                    - memoryBytes
+                    - outputBytes
+                    - taskBytes
+                    - timeoutMillis
+                    - workspace
+                    type: object
+                  mote:
+                    properties:
+                      hash:
+                        maxLength: 71
+                        pattern: ^blake3:[0-9a-f]{64}$
+                        type: string
+                    required:
+                    - hash
+                    type: object
+                  platform:
+                    enum:
+                    - linux/amd64
+                    type: string
+                  publisherKey:
+                    maxLength: 64
+                    pattern: ^[0-9a-f]{64}$
+                    type: string
+                  revision:
+                    maxLength: 64
+                    minLength: 1
+                    type: string
+                  runtimeData:
+                    description: Immutable data delivery has no supported contract
+                      in this profile.
+                    items:
+                      properties:
+                        hash:
+                          maxLength: 71
+                          pattern: ^blake3:[0-9a-f]{64}$
+                          type: string
+                      required:
+                      - hash
+                      type: object
+                    maxItems: 0
+                    type: array
+                required:
+                - closure
+                - contractVersion
+                - entryPoint
+                - executable
+                - lane
+                - lifecycle
+                - limits
+                - mote
+                - platform
+                - publisherKey
+                - revision
+                type: object
               conformance:
                 description: |-
                   Conformance records this runtime's conformance status against the

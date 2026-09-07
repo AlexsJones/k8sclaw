@@ -4,7 +4,8 @@ Date: 2026-09-07. Status: proposed implementation contract for
 [epic #426](https://github.com/sympozium-ai/sympozium/issues/426), M1–M4.
 This ADR specifies intended behavior. The first
 [catalogue metadata/schema and role slice](../guides/celln-tool-catalogue.md)
-is implemented; runtime profiles, approval/distribution, lending resolution and
+is implemented, as is the initial [reference runtime profile metadata](../guides/celln-runtime-profile.md)
+with independently negative Celln readiness; approval/distribution, lending resolution and
 conversation extensions are **not yet implemented**. Existing execution guards remain authoritative until
 each extension and its conformance tests ship.
 
