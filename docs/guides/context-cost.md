@@ -24,6 +24,7 @@ the model raises `maxChars`).
 | `CONTEXT_HISTORY_BUDGET_BYTES` | `0` (off) | Once live tool-result bytes exceed this, older results are replaced with short placeholders. |
 | `CONTEXT_HISTORY_BUDGET_LOW_BYTES` | half the budget | How far down to drain when elision fires. |
 | `CONTEXT_KEEP_RECENT_RESULTS` | `3` | Newest results never elided — the model is still reasoning over these. The in-flight round's results are protected on top of this window. Only applies when elision is on. |
+| `CONTEXT_ELISION_SPILL_DIR` | `/workspace/.sympozium/elided` | Where an elided result's full output is written so the model can read it back. Set to `off` to elide destructively. Only applies when elision is on. |
 
 Set them via `spec.env` on an AgentRun, or on the Agent so every run inherits them.
 
@@ -107,10 +108,55 @@ while Anthropic reports the uncached remainder in `input_tokens` and the cached
 portion separately. That is why the runner logs the two side by side rather
 than as a hit-rate percentage.
 
+## Elided output is recoverable
+
+Elision moves output out of the conversation; it does not destroy it. Before a
+result is replaced, its full text is written to `CONTEXT_ELISION_SPILL_DIR` and
+the placeholder names that path:
+
+```
+[earlier execute_command result elided — 48213 bytes saved to
+ /workspace/.sympozium/elided/0007.txt; read_file to recover.]
+```
+
+So the model pays for a path instead of a payload, and gets the detail back on
+demand — `read_file` paginates, so the size of the original does not matter.
+That is usually better than re-running the tool, whose side effects may not be
+repeatable and whose cost is paid again.
+
+Files are named by ledger position alone — deliberately nothing else, so no
+model- or MCP-supplied string reaches a filesystem path. They are written `0600`
+under a `0700` directory, and only ever created when elision actually fires.
+They live as long as the pod does — or longer with a PVC-backed workspace, where
+postRun hooks can read them too.
+
+Spilling only turns on when the placeholder's instruction can actually be
+followed. At startup the runner checks that:
+
+- **`read_file` survived the tool policy.** A run with
+  `toolPolicy.deny: [read_file]`, or an `allow` list that omits it, has no way
+  back to the file.
+- **The spill directory is under a root `read_file` will open** — `/workspace`,
+  `/skills`, `/tmp`, or `/ipc`. Pointing `CONTEXT_ELISION_SPILL_DIR` at, say,
+  `/var/log/agent` would produce files the agent cannot read.
+
+If either fails the runner logs why and elision stays destructive, rather than
+writing files nobody can reach and promising the model otherwise:
+
+```
+WARNING: not spilling elided tool output — read_file is not available to this run.
+Elision stays destructive; set CONTEXT_ELISION_SPILL_DIR to a readable root or
+allow read_file to make elided results recoverable
+```
+
+The same fallback applies per result if a write fails at runtime (a read-only or
+absent `/workspace`) — logged once, then a bare placeholder. Elision still
+happens in all these cases, because the context pressure is real either way.
+
 ## Trade-off
 
-Elided results are gone from the model's view — it sees a placeholder naming the
-tool and the reclaimed size, and can re-run the tool if it still needs the
-output. On tasks where the agent must correlate evidence gathered early with
-findings much later, set `CONTEXT_KEEP_RECENT_RESULTS` higher or leave elision
-off and rely on the per-result cap alone.
+An elided result is one `read_file` away rather than in front of the model, so
+it will not be reasoned over unless the model goes and fetches it. On tasks
+where the agent must correlate evidence gathered early with findings much later,
+set `CONTEXT_KEEP_RECENT_RESULTS` higher or leave elision off and rely on the
+per-result cap alone.

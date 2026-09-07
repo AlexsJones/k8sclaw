@@ -120,8 +120,12 @@ type LLMProvider interface {
 // their output budget on tool-call preamble), the user still sees the
 // intermediate reasoning in the UX instead of a blank response.
 //
+// tools is the run's effective tool set, already filtered by tool policy. It is
+// consulted only to decide whether elided output can be spilled somewhere the
+// model can actually read it back from.
+//
 // Returns (responseText, inputTokens, outputTokens, toolCalls, error).
-func runAgentLoop(ctx context.Context, p LLMProvider) (string, int, int, int, error) {
+func runAgentLoop(ctx context.Context, p LLMProvider, tools []ToolDef) (string, int, int, int, error) {
 	totalInputTokens := 0
 	totalOutputTokens := 0
 	totalCachedTokens := 0
@@ -133,8 +137,20 @@ func runAgentLoop(ctx context.Context, p LLMProvider) (string, int, int, int, er
 	policy := loadContextPolicy()
 	ledger := &toolResultLedger{}
 	if policy.elisionEnabled() {
-		log.Printf("context policy: per-result cap=%dB budget=%dB low=%dB keep_recent=%d",
-			policy.ToolResultMaxBytes, policy.HistoryBudgetBytes, policy.HistoryLowBytes, policy.KeepRecent)
+		spillDir := policy.SpillDir
+		if spillDir != "" {
+			if reason := spillUnavailable(spillDir, tools); reason != "" {
+				log.Printf("WARNING: not spilling elided tool output — %s. "+
+					"Elision stays destructive; set CONTEXT_ELISION_SPILL_DIR to a readable root "+
+					"or allow %s to make elided results recoverable", reason, ToolReadFile)
+				spillDir = ""
+			} else {
+				ledger.spill = dirSpiller{Dir: spillDir}
+			}
+		}
+		log.Printf("context policy: per-result cap=%dB budget=%dB low=%dB keep_recent=%d spill_dir=%q",
+			policy.ToolResultMaxBytes, policy.HistoryBudgetBytes, policy.HistoryLowBytes,
+			policy.KeepRecent, spillDir)
 	}
 
 	// Report cached tokens separately rather than as a ratio: providers
@@ -279,7 +295,7 @@ func runAgentLoop(ctx context.Context, p LLMProvider) (string, int, int, int, er
 				Content: clamped,
 				IsError: isError,
 			})
-			ledger.add(call.ID, call.Name, len(clamped), round)
+			ledger.add(call.ID, call.Name, clamped, round)
 		}
 		p.AddToolResults(results)
 

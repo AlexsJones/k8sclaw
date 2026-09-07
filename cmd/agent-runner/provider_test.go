@@ -12,6 +12,11 @@ import (
 // mockProvider is a deterministic LLMProvider for testing the shared loop.
 // It replays a scripted sequence of ChatResult values, one per Chat() call,
 // and records every AddToolResults invocation for assertions.
+// mockTools is the effective tool set runAgentLoop is handed in tests. Only the
+// elision path consults it, and only to confirm read_file is available to read
+// spilled output back.
+var mockTools = []ToolDef{{Name: ToolReadFile}}
+
 type mockProvider struct {
 	name        string
 	model       string
@@ -85,7 +90,7 @@ func TestRunAgentLoop_TerminalTextOnly(t *testing.T) {
 			{Text: "final answer", InputTokens: 10, OutputTokens: 5},
 		},
 	}
-	text, in, out, toolCalls, err := runAgentLoop(context.Background(), p)
+	text, in, out, toolCalls, err := runAgentLoop(context.Background(), p, mockTools)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -121,7 +126,7 @@ func TestRunAgentLoop_ToolCallThenText(t *testing.T) {
 			{Text: "contents: hello", InputTokens: 40, OutputTokens: 10, FinishReason: "stop"},
 		},
 	}
-	text, in, out, toolCalls, err := runAgentLoop(context.Background(), p)
+	text, in, out, toolCalls, err := runAgentLoop(context.Background(), p, mockTools)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -167,7 +172,7 @@ func TestRunAgentLoop_ToolFailuresDoNotBlock(t *testing.T) {
 	turns = append(turns, ChatResult{Text: "gave up and summarized", InputTokens: 2, OutputTokens: 3})
 
 	p := &mockProvider{name: "mock", model: "mock-1", turns: turns}
-	text, _, _, toolCalls, err := runAgentLoop(context.Background(), p)
+	text, _, _, toolCalls, err := runAgentLoop(context.Background(), p, mockTools)
 	if err != nil {
 		t.Fatalf("loop returned error despite tool failures: %v", err)
 	}
@@ -216,7 +221,7 @@ func TestRunAgentLoop_EmptyTerminalFallsBackToAccumulated(t *testing.T) {
 			{Text: "", InputTokens: 200, OutputTokens: 242, FinishReason: "stop"},
 		},
 	}
-	text, in, out, toolCalls, err := runAgentLoop(context.Background(), p)
+	text, in, out, toolCalls, err := runAgentLoop(context.Background(), p, mockTools)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -250,7 +255,7 @@ func TestRunAgentLoop_AllTurnsEmptyReturnsEmpty(t *testing.T) {
 			{Text: "", FinishReason: "stop"},
 		},
 	}
-	text, _, _, _, err := runAgentLoop(context.Background(), p)
+	text, _, _, _, err := runAgentLoop(context.Background(), p, mockTools)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -275,7 +280,7 @@ func TestRunAgentLoop_TerminalTextPreferredOverAccumulated(t *testing.T) {
 			{Text: "final answer is 42", FinishReason: "stop"},
 		},
 	}
-	text, _, _, _, err := runAgentLoop(context.Background(), p)
+	text, _, _, _, err := runAgentLoop(context.Background(), p, mockTools)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -302,7 +307,7 @@ func TestRunAgentLoop_IterationBudget(t *testing.T) {
 		})
 	}
 	p := &mockProvider{name: "mock", model: "mock-1", turns: turns}
-	_, _, _, toolCalls, err := runAgentLoop(context.Background(), p)
+	_, _, _, toolCalls, err := runAgentLoop(context.Background(), p, mockTools)
 	if err == nil {
 		t.Fatal("expected budget-exceeded error")
 	}
@@ -323,7 +328,7 @@ func TestRunAgentLoop_ChatErrorPropagates(t *testing.T) {
 		turns:   []ChatResult{{}},
 		turnErr: []error{fmt.Errorf("provider rate limit")},
 	}
-	_, _, _, _, err := runAgentLoop(context.Background(), p)
+	_, _, _, _, err := runAgentLoop(context.Background(), p, mockTools)
 	if err == nil {
 		t.Fatal("expected error from Chat to propagate")
 	}
@@ -350,7 +355,7 @@ func TestRunAgentLoop_MultipleToolCallsPerTurn(t *testing.T) {
 			{Text: "done", FinishReason: "stop"},
 		},
 	}
-	_, _, _, toolCalls, err := runAgentLoop(context.Background(), p)
+	_, _, _, toolCalls, err := runAgentLoop(context.Background(), p, mockTools)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -396,7 +401,7 @@ func TestRunAgentLoop_MaxTokensPerRun_Halt(t *testing.T) {
 		},
 	}
 
-	text, in, out, _, err := runAgentLoop(context.Background(), p)
+	text, in, out, _, err := runAgentLoop(context.Background(), p, mockTools)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -441,7 +446,7 @@ func TestRunAgentLoop_MaxTokensPerRun_Warn(t *testing.T) {
 		},
 	}
 
-	text, in, out, _, err := runAgentLoop(context.Background(), p)
+	text, in, out, _, err := runAgentLoop(context.Background(), p, mockTools)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -475,7 +480,7 @@ func TestRunAgentLoop_MaxTokensPerRun_NotSet(t *testing.T) {
 		},
 	}
 
-	text, _, _, _, err := runAgentLoop(context.Background(), p)
+	text, _, _, _, err := runAgentLoop(context.Background(), p, mockTools)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
