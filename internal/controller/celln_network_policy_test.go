@@ -30,7 +30,7 @@ func TestCellnNetworkPolicy(t *testing.T) {
 		{"celln-disabled", "sympozium-system", "celln.enabled=false", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			out, err := exec.Command("helm", "template", "m0", "../../charts/sympozium", "--set", tc.settings).CombinedOutput()
+			out, err := exec.Command("helm", "template", "m0", "../../charts/sympozium", "--set", cellnDeploymentTestSettings, "--set", tc.settings).CombinedOutput()
 			if err != nil {
 				t.Fatalf("helm template: %v\n%s", err, out)
 			}

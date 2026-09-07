@@ -441,16 +441,16 @@ agentSandbox:
 # Requires: Celln router deployed (see celln repo integrations/kubernetes/)
 # and celln host dispatcher installed on each KVM node (scripts/setup-host.sh).
 celln:
-  # -- Enable the Celln backend. Enabled by default so every standard install
-  # has the router and controller configuration needed for Celln-backed runs.
-  # The privileged installer and router still schedule only on nodes explicitly
-  # labelled celln.dev/kvm=true; label KVM-capable hosts deliberately before
-  # they receive host setup. Set false to omit all Celln resources.
-  enabled: true
+  # -- Experimental execution plane: explicitly configure before enabling.
+  enabled: false
+  installer:
+    # -- Legacy privileged host mutation is a separate, deliberate opt-in.
+    # Disabling/removing this DaemonSet does NOT undo host installation.
+    enabled: false
   # -- URL of the celln-router Service. The controller POSTs here.
   routerUrl: "http://celln-router.celln-system.svc.cluster.local:8787"
   # -- Existing Secret in the controller namespace, key `token`, containing
-  # the dispatcher's bearer credential (at least 24 bytes). No token is generated
+  # the router CLIENT bearer credential (at least 24 bytes). No token is generated
   # or inferred from model credentials. Missing configuration refuses dispatch.
   tokenSecret: ""
   # -- Explicitly permit a plaintext non-loopback router URL. Prefer an HTTPS
@@ -469,9 +469,25 @@ celln:
     repository: "ghcr.io/sympozium-ai/celln-installer"
     tag: "v0.4.13"
   router:
+    replicas: 2
+    # -- Complete, identical backend list on every replica; no Service that
+    # load-balances different dispatcher owners. Current router supports HTTP only.
+    backends: []
+    # -- Explicit acknowledgement for plaintext router-to-dispatcher traffic.
+    # Use only a trusted/encrypted network path; this is NOT a TLS setting.
+    allowInsecureBackends: false
+    # -- Existing Secrets in celln-system, each with key `token`. Client token
+    # must match celln.tokenSecret's contents and differ from the backend token.
+    clientTokenSecret: ""
+    backendTokenSecret: ""
+    # -- Existing shared PVC in celln-system. Must provide coherent cross-node
+    # POSIX flock, atomic publication and directory fsync, not just an RWX label.
+    ownershipClaim: ""
     image:
       repository: "ghcr.io/sympozium-ai/celln-router"
-      tag: "v0.4.13"
+      # -- Digest of an image implementing client auth + durable ownership
+      # (Celln PRs #70 and #75). Old v0.4.13 images are incompatible.
+      digest: ""
 
 # -- Persona delegation behavior.
 delegation:
