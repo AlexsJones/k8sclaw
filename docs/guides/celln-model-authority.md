@@ -43,6 +43,36 @@ observation and keep `executionAuthorized: false`.
 
 ## Remaining issuance boundary
 
+### Catalogue-derived execution candidate
+
+Operator `celln-tool plan` accepts paired `--execution-mote` and
+`--execution-closure` hashes with `--run` and `--model-policy`. These name actual
+packaging outputs, not the runtime profile's template mote. The command derives
+a `celln.dev/v1alpha3` request from the revalidated frozen selection and live
+AgentRun: exact task/persona/model, runtime executable, ordered borrowed tools,
+schema/loop limits, intersected memory/output ceilings, and the lower of the
+run timeout and runtime ceiling. It does not accept a caller-provided tool list
+or task override at this stage.
+
+The deterministic execution ID binds the frozen run/selection/model approval
+and materialized artifact hashes. A retry must persist/reuse this candidate;
+changed approval must be reconciled, not silently turned into a fresh attempt.
+SessionKey is only correlation metadata here: this is not a transcript or
+conversation implementation. Pod environment, sidecars/skills, parent runs,
+custom lifecycle/storage, server/dry-run modes, existing low-level Celln bindings
+and unsupported context settings refuse instead of being silently discarded.
+
+The candidate contains a zero placeholder model-grant hash. It is **not
+authorized for dispatch**. Hash syntax validation does not authenticate the
+packaging outputs. Trusted provisioning must verify their exact composition
+sources, obtain the actual host request binding and issue a grant after fresh
+approval checks. The host issuer must independently verify artifacts and model
+policy. Tests include passing the generated request to the actual Celln
+`harness-binding` command; that is parser/binding compatibility, not KVM/model
+execution or deployed controller proof.
+
+### Host bridge still required
+
 This implementation reads no credentials, writes no Kubernetes resources or
 host grant files, and performs no model calls. Tests use a fake Kubernetes API;
 they are not deployment/RBAC or live-model proof. Observed rereads are not an

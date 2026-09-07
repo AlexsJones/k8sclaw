@@ -27,11 +27,17 @@ func newCellnSelectionCmd(compose bool) *cobra.Command {
 	var imageBytes int64
 	var runName string
 	var modelPolicy string
+	var executionMote, executionClosure string
 	var options cellnreview.ComposeOptions
 	cmd := &cobra.Command{Use: "plan AGENT", Args: cobra.ExactArgs(1), SilenceUsage: true,
 		Short: "Resolve live grants and emit a Celln composition plan without executing",
 		Long:  "Operator-only planning input. Read three independently configured grant ConfigMaps and live Agent/runtime/tool identities. Prints the resolved authority snapshot and exact compositor input; does not grant authority, certify readiness, write resources, compose images or execute. Tenant-facing callers must not accept these source flags from run requests.",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if executionMote != "" || executionClosure != "" {
+				if compose || executionMote == "" || executionClosure == "" || modelPolicy == "" || runName == "" {
+					return fmt.Errorf("execution candidate requires plan, --run, --model-policy, --execution-mote and --execution-closure")
+				}
+			}
 			if modelPolicy != "" && runName == "" {
 				return fmt.Errorf("model policy review requires --run")
 			}
@@ -66,6 +72,15 @@ func newCellnSelectionCmd(compose bool) *cobra.Command {
 						return err
 					}
 				}
+				if executionMote != "" {
+					artifacts := cellnauthority.ExecutionArtifacts{}
+					artifacts.Mote.Hash, artifacts.Closure.Hash = executionMote, executionClosure
+					candidate, err := modelLoader.BuildExecution(cmd.Context(), *frozen, *modelApproval, artifacts)
+					if err != nil {
+						return err
+					}
+					return json.NewEncoder(cmd.OutOrStdout()).Encode(map[string]any{"apiVersion": "sympozium.ai/celln-selection-report-v1", "frozen": frozen, "candidate": candidate, "executionAuthorized": false, "artifactReadiness": "not_checked", "conformance": "not_checked"})
+				}
 				if compose {
 					report, err := cellnreview.Compose(cmd.Context(), loader, *frozen, options)
 					if err != nil {
@@ -98,6 +113,8 @@ func newCellnSelectionCmd(compose bool) *cobra.Command {
 	cmd.Flags().Int64Var(&imageBytes, "image-bytes", 33554432, "Composed image size, 32..512 MiB and 2 MiB aligned")
 	cmd.Flags().StringVar(&runName, "run", "", "Bind and revalidate the plan against an existing same-namespace AgentRun (no dispatch)")
 	cmd.Flags().StringVar(&modelPolicy, "model-policy", "", "Independent operator model-policy ConfigMap in grant namespace; requires --run; does not issue a host grant")
+	cmd.Flags().StringVar(&executionMote, "execution-mote", "", "Actual materialized mote hash for an unissued execution candidate (plan only; requires run, model policy and closure)")
+	cmd.Flags().StringVar(&executionClosure, "execution-closure", "", "Actual composed closure hash for an unissued execution candidate; host verification remains required")
 	for _, name := range []string{"grant-namespace", "operator-grants", "runtime-grants", "agent-grants"} {
 		_ = cmd.MarkFlagRequired(name)
 	}
