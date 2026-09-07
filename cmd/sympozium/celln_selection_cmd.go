@@ -27,8 +27,13 @@ func newCellnSelectionIssueCmd() *cobra.Command {
 	return newCellnSelectionCmd("issue")
 }
 
+func newCellnSelectionRemoteIssueCmd() *cobra.Command {
+	return newCellnSelectionCmd("issue-remote")
+}
+
 func newCellnSelectionCmd(mode string) *cobra.Command {
-	compose, issue := mode == "compose", mode == "issue"
+	remote := mode == "issue-remote"
+	compose, issue := mode == "compose", mode == "issue" || remote
 	var sourceNamespace, operatorSource, runtimeSource, agentSource string
 	var selected []string
 	var imageBytes int64
@@ -37,6 +42,7 @@ func newCellnSelectionCmd(mode string) *cobra.Command {
 	var executionMote, executionClosure string
 	var options cellnreview.ComposeOptions
 	var issueOptions cellnreview.IssueOptions
+	var remoteOptions cellnreview.IssuerClientOptions
 	cmd := &cobra.Command{Use: "plan AGENT", Args: cobra.ExactArgs(1), SilenceUsage: true,
 		Short: "Resolve live grants and emit a Celln composition plan without executing",
 		Long:  "Operator-only planning input. Read three independently configured grant ConfigMaps and live Agent/runtime/tool identities. Prints the resolved authority snapshot and exact compositor input; does not grant authority, certify readiness, write resources, compose images or execute. Tenant-facing callers must not accept these source flags from run requests.",
@@ -84,11 +90,28 @@ func newCellnSelectionCmd(mode string) *cobra.Command {
 					artifacts := cellnauthority.ExecutionArtifacts{}
 					artifacts.Mote.Hash, artifacts.Closure.Hash = executionMote, executionClosure
 					if issue {
-						issued, err := cellnreview.Issue(cmd.Context(), modelLoader, *frozen, *modelApproval, artifacts, issueOptions)
+						var issued *cellnreview.IssuedSelection
+						if remote {
+							issuerClient, clientErr := cellnreview.NewIssuerClient(remoteOptions)
+							if clientErr != nil {
+								return clientErr
+							}
+							defer issuerClient.CloseIdleConnections()
+							issued, err = issuerClient.Issue(cmd.Context(), modelLoader, *frozen, *modelApproval, artifacts)
+						} else {
+							issued, err = cellnreview.Issue(cmd.Context(), modelLoader, *frozen, *modelApproval, artifacts, issueOptions)
+						}
 						if err != nil {
 							return err
 						}
-						if err := json.NewEncoder(cmd.OutOrStdout()).Encode(map[string]any{"apiVersion": "sympozium.ai/celln-issuance-report-v1", "frozen": frozen, "issued": issued, "executed": false, "artifactReadiness": "not_checked"}); err != nil {
+						version := "sympozium.ai/celln-issuance-report-v1"
+						if remote {
+							version = "sympozium.ai/celln-remote-issuance-report-v1"
+						}
+						if err := json.NewEncoder(cmd.OutOrStdout()).Encode(map[string]any{"apiVersion": version, "frozen": frozen, "issued": issued, "executed": false, "artifactReadiness": "not_checked"}); err != nil {
+							if remote {
+								return err
+							} // Remote durable outcome survives lost output; never mutate a local host root.
 							return errors.Join(err, cellnreview.Withdraw(issueOptions.PolicyRoot, *issued))
 						}
 						return nil
@@ -149,6 +172,22 @@ func newCellnSelectionCmd(mode string) *cobra.Command {
 		}
 	}
 	if issue {
+		for _, name := range []string{"run", "model-policy", "execution-mote", "execution-closure"} {
+			_ = cmd.MarkFlagRequired(name)
+		}
+	}
+	if remote {
+		cmd.Use = "issue-remote AGENT"
+		cmd.Short = "Request bounded host issuance over verified controller-authenticated TLS"
+		cmd.Long = "Operator-only remote provisioning: derive and revalidate the frozen request, call the independently configured host issuer once, validate returned identity and recheck live approval. No host policy paths, signing keys or model credentials are accepted. No dispatch, implicit retry or readiness claim. Lost responses require preserving the exact original identity."
+		cmd.Flags().StringVar(&remoteOptions.URL, "issuer-url", "", "Operator-configured HTTPS issuer origin")
+		cmd.Flags().StringVar(&remoteOptions.TokenFile, "issuer-token-file", "", "Absolute controller credential file; reread per call")
+		cmd.Flags().StringVar(&remoteOptions.CAFile, "issuer-ca-file", "", "Absolute issuer CA bundle; omission uses system trust")
+		for _, name := range []string{"issuer-url", "issuer-token-file"} {
+			_ = cmd.MarkFlagRequired(name)
+		}
+	}
+	if issue && !remote {
 		cmd.Use = "issue AGENT"
 		cmd.Short = "Provision a local request-bound host grant from live independent approvals"
 		cmd.Long = "Operator-only local issuance. Verifies exact signed composition sources, resolves an independently configured host credential mapping, performs real sealed member verification, and publishes a request-bound grant. No dispatch or positive readiness. Persist the output and withdraw the profile when approval changes; this is not an autonomous revocation controller."
@@ -156,7 +195,7 @@ func newCellnSelectionCmd(mode string) *cobra.Command {
 		cmd.Flags().StringVar(&issueOptions.PolicyRoot, "policy-root", "", "Absolute trusted local host policy/store root")
 		cmd.Flags().StringVar(&issueOptions.ComposerPublisher, "composer-publisher", "", "Exact operator-approved composition publisher key")
 		cmd.Flags().DurationVar(&issueOptions.ProfileLifetime, "profile-lifetime", 5*time.Minute, "Host admission lifetime (1ms..5m); retries reuse original expiry; 0 is legacy explicit-operator mode only")
-		for _, name := range []string{"run", "model-policy", "execution-mote", "execution-closure", "celln-binary", "policy-root", "composer-publisher"} {
+		for _, name := range []string{"celln-binary", "policy-root", "composer-publisher"} {
 			_ = cmd.MarkFlagRequired(name)
 		}
 	}

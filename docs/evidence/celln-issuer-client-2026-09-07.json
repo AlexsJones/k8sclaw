@@ -1,0 +1,39 @@
+{
+  "date": "2026-09-07",
+  "scope": "verified remote provisioning client and operator command, not AgentRun reconciler dispatch",
+  "base": "455cb4c92a9dc3a788416fbafce4cc1b811a84b1",
+  "checks": {
+    "fullGoRace": "passed with real NATS available",
+    "goBuildAll": "passed",
+    "goVetAll": "passed",
+    "targetedRace": "passed",
+    "cases": [
+      "verified TLS and rotating controller credential preserve retry identity",
+      "untrusted TLS identity refuses",
+      "task, caller, tool, candidate, profile and grant substitution refuse",
+      "unknown fields, missing negative execution assertion and false readiness refuse",
+      "trailing or oversized response refuses",
+      "redirect is not followed; no application retry occurs",
+      "lost response is classified as ambiguous and preserves frozen identity",
+      "post-response approval deletion refuses local acceptance",
+      "unsafe URLs and local host-authority flags refuse"
+    ],
+    "reviewCorrection": "tool substitution fixture now asserts that the replacement hash differs from the original"
+  },
+  "realKVM": {
+    "test": "TestComposeRealCellnArtifacts with CELLN_ISSUANCE_KVM=1",
+    "result": "passed",
+    "sequence": "signed composition -> verified client -> TLS issuer -> bounded profile -> actual KVM member verification -> identical retry -> approval deletion -> periodic withdrawal -> host refusal",
+    "grant": "blake3:c1205176cb9628eb859612cb1f510d0241dd18ace8113bbb1df72a92e3d5d46e",
+    "closure": "blake3:868dd5df064e198610329da6bc27ab5d5e306c075adcabdc130916d9cad0d046",
+    "toolfs": "blake3:7d23584dcbb0be5055f3bbd1a9e9067732ae518107be6b902e3af80d56519c16",
+    "kubernetes": "fake client",
+    "modelCalls": 0
+  },
+  "notProven": [
+    "durable controller pre-issuance state and AgentRun reconciler wiring",
+    "serving-node prewarm and catalogue-backed dispatch",
+    "deployed Kubernetes/RBAC/TLS/fleet qualification",
+    "UI/YAML selection, conversations and final real-model release acceptance"
+  ]
+}

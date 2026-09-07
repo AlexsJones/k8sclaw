@@ -103,7 +103,9 @@ real signed composition → TLS request → managed provisioning → actual seal
 member verification → identical retry → approval deletion → periodic withdrawal
 → host refusal. Kubernetes is still a fake client and no model calls are made.
 
-Next: configure and test the controller client, selection-specific serving-node
-prewarm, catalogue-backed AgentRun dispatch and correlated results. Deployed
+The [verified client](celln-issuer-client.md) now provides strict remote response
+validation and an operator `issue-remote` command. Next: wire durable controller
+issuance, selection-specific serving-node prewarm, catalogue-backed AgentRun
+dispatch and correlated results. Deployed
 Kubernetes/RBAC/network/TLS qualification, UI/YAML selection, conversational
 lifecycle and final real-model release acceptance remain open.
