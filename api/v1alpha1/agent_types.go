@@ -88,6 +88,16 @@ type AgentSpec struct {
 	// inside the agent's filesystem.
 	// +optional
 	VolumeMounts []corev1.VolumeMount `json:"volumeMounts,omitempty"`
+
+	// Workspace configures the /workspace volume for agent pods spawned
+	// by this Agent. When PerSessionPVC is enabled, each unique
+	// SessionKey gets a dedicated PVC that persists across AgentRuns —
+	// required for harnesses (codex, claude-code) whose session state
+	// lives under $HOME, and useful for long-lived conversations that
+	// need filesystem continuity. When nil or PerSessionPVC is false,
+	// /workspace remains an ephemeral emptyDir as before.
+	// +optional
+	Workspace *WorkspaceSpec `json:"workspace,omitempty"`
 }
 
 // MCPServerRef references a remote MCP server for tool integration.

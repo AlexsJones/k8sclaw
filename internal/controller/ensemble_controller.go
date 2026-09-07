@@ -608,6 +608,7 @@ func (r *EnsembleReconciler) buildAgent(
 			Observability: defaultObservabilitySpec(),
 			Volumes:       pack.Spec.Volumes,
 			VolumeMounts:  pack.Spec.VolumeMounts,
+			Workspace:     resolveWorkspaceSpec(pack.Spec.Workspace, persona.Workspace),
 		},
 	}
 
@@ -914,6 +915,22 @@ func mergeProviderHeaders(ensembleHeaders, personaHeaders map[string]string) map
 		merged[k] = v
 	}
 	return merged
+}
+
+// resolveWorkspaceSpec picks the WorkspaceSpec to apply to a generated
+// Agent: the persona-level override wins when non-nil; otherwise the
+// ensemble-level default is used (which may itself be nil — meaning the
+// agent gets the legacy emptyDir behaviour).
+func resolveWorkspaceSpec(ensembleWS, personaWS *sympoziumv1alpha1.WorkspaceSpec) *sympoziumv1alpha1.WorkspaceSpec {
+	if personaWS != nil {
+		out := *personaWS
+		return &out
+	}
+	if ensembleWS != nil {
+		out := *ensembleWS
+		return &out
+	}
+	return nil
 }
 
 // buildChannelSpec computes the desired ChannelSpec for a given channel type

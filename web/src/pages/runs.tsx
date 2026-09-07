@@ -264,16 +264,17 @@ export function RunsPage() {
                       <p className="flex items-start gap-1 text-xs text-red-400 mt-1">
                         <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
                         <span>
-                          Celln is not currently active in this cluster
+                          Celln eligibility could not be confirmed
                           {capabilities.data.celln.reason
                             ? `: ${capabilities.data.celln.reason}`
                             : "."}{" "}
-                          This run will fail at dispatch.
+                          Dispatch still performs its own admission checks.
                         </span>
                       </p>
                     ) : capabilities.data?.celln.available ? (
-                      <p className="text-xs text-emerald-500/80 mt-1">
-                        Celln router is reachable in this cluster.
+                      <p className="text-xs text-amber-500/80 mt-1">
+                        {capabilities.data.celln.reason ||
+                          "Celln node preflight passed; runtime and tool readiness still require validation."}
                       </p>
                     ) : null}
                   </>
