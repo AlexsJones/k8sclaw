@@ -84,7 +84,7 @@ func TestCellnNetworkPolicy(t *testing.T) {
 			if len(policy.Spec.PolicyTypes) != 1 || policy.Spec.PolicyTypes[0] != networkingv1.PolicyTypeIngress {
 				t.Fatal("ingress isolation missing")
 			}
-			if len(policy.Spec.Ingress) != 1 || len(policy.Spec.Ingress[0].From) != 1 {
+			if len(policy.Spec.Ingress) != 1 || len(policy.Spec.Ingress[0].From) != 2 {
 				t.Fatal("unexpected additional ingress grants")
 			}
 			rule := policy.Spec.Ingress[0]
@@ -117,6 +117,21 @@ func TestCellnNetworkPolicy(t *testing.T) {
 			}
 			if allowed("tenant", nil) {
 				t.Fatal("unrelated tenant is allowed")
+			}
+			apiPeer := rule.From[1]
+			if apiPeer.NamespaceSelector == nil || apiPeer.PodSelector == nil || apiPeer.IPBlock != nil {
+				t.Fatal("API discovery ingress must intersect namespace and Pod labels")
+			}
+			apiNS, err := metav1.LabelSelectorAsSelector(apiPeer.NamespaceSelector)
+			if err != nil {
+				t.Fatal(err)
+			}
+			apiPods, err := metav1.LabelSelectorAsSelector(apiPeer.PodSelector)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !apiNS.Matches(labels.Set{"kubernetes.io/metadata.name": tc.namespace}) || apiNS.Matches(labels.Set{"kubernetes.io/metadata.name": "tenant"}) || !apiPods.Matches(labels.Set{"app.kubernetes.io/component": "apiserver"}) || apiPods.Matches(labels.Set{"sympozium.ai/role": "agent"}) {
+				t.Fatal("discovery ingress scope incorrect")
 			}
 		})
 	}

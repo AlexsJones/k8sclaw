@@ -25,6 +25,12 @@
 {{- if not .Values.celln.router.ownershipClaim }}
 {{- fail "celln.router.ownershipClaim must reference durable shared POSIX storage" }}
 {{- end }}
+{{- if or (not .Values.celln.capabilityTokenSecret) (not .Values.celln.router.capabilityTokenSecret) }}
+{{- fail "Celln requires API-server and router read-only capability token Secret references" }}
+{{- end }}
+{{- if or (eq .Values.celln.capabilityTokenSecret .Values.celln.tokenSecret) (eq .Values.celln.router.capabilityTokenSecret .Values.celln.router.clientTokenSecret) (eq .Values.celln.router.capabilityTokenSecret .Values.celln.router.backendTokenSecret) }}
+{{- fail "Celln capability credentials must use distinct Secrets from execution credentials" }}
+{{- end }}
 ---
 apiVersion: v1
 kind: Namespace
@@ -179,6 +185,8 @@ spec:
         - /etc/celln/backend/token
         - --client-token-file
         - /etc/celln/client/token
+        - --capability-token-file
+        - /etc/celln/capability/token
         - --ownership-dir
         - /var/lib/celln/ownership
         - --mode
@@ -201,6 +209,9 @@ spec:
           readOnly: true
         - name: ownership
           mountPath: /var/lib/celln/ownership
+        - name: capability-token
+          mountPath: /etc/celln/capability
+          readOnly: true
         resources:
           requests:
             memory: "16Mi"
@@ -220,6 +231,10 @@ spec:
       - name: ownership
         persistentVolumeClaim:
           claimName: {{ .Values.celln.router.ownershipClaim | quote }}
+      - name: capability-token
+        secret:
+          secretName: {{ .Values.celln.router.capabilityTokenSecret | quote }}
+          defaultMode: 0440
 ---
 apiVersion: v1
 kind: Service

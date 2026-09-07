@@ -3815,30 +3815,10 @@ type CapabilitiesResponse struct {
 // set on this pod, so capability reporting checks the same default.
 const defaultCellnRouterURL = "http://celln-router.celln-system.svc.cluster.local:8787"
 
-// getCellnStatus reports whether the Celln backend is reachable from the
-// apiserver. The router has no HTTP health endpoint, so this does a short
-// TCP dial, matching the TCP probes the chart's own Service/pod probes use.
+// getCellnStatus validates authenticated, versioned node preflight. It does
+// not certify a selected runtime or artifact bundle.
 func (s *Server) getCellnStatus() CapabilityStatus {
-	routerURL := os.Getenv("CELLN_ROUTER_URL")
-	if routerURL == "" {
-		routerURL = defaultCellnRouterURL
-	}
-	u, err := url.Parse(routerURL)
-	if err != nil || u.Host == "" {
-		return CapabilityStatus{
-			Available: false,
-			Reason:    fmt.Sprintf("Celln router URL is misconfigured: %q", routerURL),
-		}
-	}
-	conn, err := net.DialTimeout("tcp", u.Host, 2*time.Second)
-	if err != nil {
-		return CapabilityStatus{
-			Available: false,
-			Reason:    fmt.Sprintf("Celln router at %s is not reachable: %v", u.Host, err),
-		}
-	}
-	_ = conn.Close()
-	return CapabilityStatus{Available: true}
+	return cellnCapabilityStatus()
 }
 
 func (s *Server) getCapabilities(w http.ResponseWriter, r *http.Request) {

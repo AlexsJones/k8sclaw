@@ -2,7 +2,8 @@
 
 This chart wiring is part of [epic #426](https://github.com/sympozium-ai/sympozium/issues/426),
 not a claim that the deployed execution plane has passed M0. It requires a
-router image implementing Celln PRs #70 and #75. The old v0.4.13 router cannot
+router image implementing Celln PRs #70, #75 and #80, and dispatchers with the
+versioned capabilities endpoint from #80. The old v0.4.13 router cannot
 consume these arguments. Build and pin the actual image digest; a digest pins
 bytes, but does not by itself prove that the bytes implement the required CLI.
 
@@ -27,6 +28,11 @@ bytes, but does not by itself prove that the bytes implement the required CLI.
   Qualify the actual storage implementation with concurrent claims, process
   death, replica restart and node loss. Independent hostPath or emptyDir
   volumes cannot provide this property.
+- Create a third, distinct read-only discovery credential in both namespaces:
+  `celln.capabilityTokenSecret` for the API server and
+  `celln.router.capabilityTokenSecret` for the router (key `token`). Never mount
+  the client execution credential or backend credential in the API-server Pod
+  for discovery. The router permits this token only on `GET /v1/capabilities`.
 - Both router transport legs currently use plaintext unless an external
   protected path is provided. The router does not implement TLS. The mandatory
   ingress NetworkPolicy restricts callers, but does not encrypt credentials.
@@ -41,6 +47,7 @@ celln:
   installer:
     enabled: false
   tokenSecret: celln-router-client
+  capabilityTokenSecret: celln-discovery
   # Plaintext example only for an explicitly accepted isolated test network.
   allowInsecureHttp: true
   router:
@@ -54,15 +61,27 @@ celln:
     allowInsecureBackends: true
     clientTokenSecret: celln-router-client
     backendTokenSecret: celln-dispatcher-backend
+    capabilityTokenSecret: celln-discovery
     ownershipClaim: celln-router-ownership
 ```
 
 An HTTPS `routerUrl` requires a separately configured TLS endpoint. Merely
 changing the URL does not add TLS to this Service. Any proxy topology also
 needs an explicitly reviewed ingress policy; the current policy admits only
-controller-labelled pods in the controller namespace. A deployed TLS path and
-authenticated/versioned readiness remain acceptance gates, not implemented
-features of this template. No TCP probe is presented as execution eligibility.
+controller-labelled Pods and API-server-labelled Pods in the control-plane
+namespace. Each peer intersects namespace AND Pod labels; tenant Pods copying
+labels do not gain ingress. A deployed TLS path remains an acceptance gate.
+
+The API server enables discovery only with `CELLN_ENABLED=true`; the chart sets
+that flag, the router URL, explicit HTTP acknowledgement and
+`CELLN_CAPABILITY_TOKEN_FILE`. It reloads the read-only file for each probe,
+refuses redirects, bounds responses and applies a five-second HTTP deadline.
+There is no fallback to TCP, public health, or execution credentials. Disabled,
+missing/invalid credentials, incompatible reports and zero eligible nodes report
+unavailable. A positive result means authenticated compatible **node preflight**
+only. The UI shows this qualification instead of a green reachability claim.
+Signed artifacts, selected Harness compatibility, model grants and prewarming
+remain run-specific checks; discovery does not certify them.
 
 ## Upgrade, rotation and rollback boundaries
 
@@ -79,6 +98,10 @@ Secret projection updates to reach the router's per-request credential reload.
 Projection is asynchronous; coordinate dispatcher and router backend rotation,
 then router and controller client rotation. There is no dual-token overlap
 protocol, so do not claim zero-downtime rotation.
+Rotate the discovery credential independently on the router/API-server pair.
+All three configured router tokens must remain distinct. When upgrading this
+chart, provision discovery Secrets and compatible dispatcher/router images first;
+older router images refuse the new flag rather than silently enabling discovery.
 
 The ownership PVC is operator-managed and is not deleted by this chart. Retain
 it across upgrades and rollbacks. Do not roll back to a router that ignores the
