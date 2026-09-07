@@ -91,6 +91,41 @@ any future execution side effect; a saved report is not a durable approval.
 Controller persistence/dispatch integration and ambiguous-execution recovery
 are still required. Planning does not submit or mark the AgentRun as running.
 
+### Build the selected local composition
+
+`celln-tool compose` requires an existing run and the same explicit grant
+sources, plus operator-owned binary, policy/store, signing-key and new output
+paths. For example, replace `plan` above with `compose` and add:
+
+```sh
+  --run my-run \
+  --celln-binary /opt/celln/bin/celln \
+  --policy-root /var/lib/celln \
+  --key-file /secure/composer.seed \
+  --output-dir /var/tmp/new-harness-composition
+```
+
+This verifies each source's exact publisher, root entry point and executable
+using Celln's verifier, and verifies the selected schema bytes. Source
+descriptors must already be staged in `closures`, schema bytes in `tool-schemas`,
+and member blobs in `tools` under that operator root. It invokes Celln's
+compositor with bounded output and a 60-second subprocess deadline, without
+inheriting provider credentials. Each successful source check and the resulting
+composition must agree on the Celln trust-policy digest. Kubernetes approvals
+are revalidated immediately before and after the build.
+
+The output is a local signed composition, not an admitted or distributed image,
+a prewarmed mote, or a host model grant. No AgentRun status is changed. Refusal
+after a build can leave its explicitly named output directory for diagnosis;
+it must not be consumed as an authorized execution. Temporary plan files are
+removed on return. Controller execution still needs these checks connected to
+its own trusted configuration, persistence and readiness path.
+
+The Sympozium wrapper tests use a fake Kubernetes client and scripted verifier
+responses to check exact arguments, source binding, policy changes, withdrawal
+and cleanup. These tests do not replace the Celln compositor's real-image/KVM
+tests or establish a complete real catalogue-to-cell execution proof.
+
 Race-enabled tests use a Kubernetes fake client to exercise actual loader
 lookups, stale subjects, withdrawn grants, untrusted tenant lookalikes,
 source mutation, malformed documents and restrictive selections. They do not
