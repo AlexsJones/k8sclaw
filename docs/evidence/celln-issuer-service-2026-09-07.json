@@ -1,0 +1,39 @@
+{
+  "date": "2026-09-07",
+  "scope": "authenticated host issuer service, not deployed AgentRun controller integration",
+  "base": "e2d9d6a20f381d34160b1d551d250285ce070e10",
+  "checks": {
+    "fullGoRace": "passed with real NATS on PATH",
+    "goBuildAll": "passed",
+    "goVetAll": "passed",
+    "targetedRace": "passed",
+    "cases": [
+      "actual HTTPS server issues and repeats the same bounded profile",
+      "missing, wrong, duplicate, rotated or removed bearer credentials refuse",
+      "plaintext handler use refuses even with a valid bearer",
+      "unknown fields, trailing JSON and over-limit bodies refuse",
+      "unconfigured Agent substitution refuses",
+      "host credential path and token do not appear in response",
+      "third concurrent authenticated handler refuses with 429",
+      "strict service config rejects insecure/legacy/ambiguous authority configuration",
+      "service joins server and managed lifecycle on cancellation"
+    ]
+  },
+  "realKVM": {
+    "test": "TestComposeRealCellnArtifacts with CELLN_ISSUANCE_KVM=1",
+    "result": "passed",
+    "sequence": "real signed composition -> authenticated TLS service -> managed startup -> bounded profile -> real sealed member verification -> identical retry -> approval deletion -> periodic withdrawal -> host refusal",
+    "grant": "blake3:8d224730d745e5c13318c02002bd8aa2bbd9d86a4102dbb57ec20c5275a184a3",
+    "closure": "blake3:1c26cc7edcf9d3ba8da03086ab469e8378d607f40b9debb4d9991892ddeff1ba",
+    "toolfs": "blake3:86fe54378d07a015be1868cab52cc7d08b9da43094abf21bf10c0ce70270caa3",
+    "kubernetes": "fake client",
+    "tlsIdentity": "Go public test certificate trusted by test client",
+    "modelCalls": 0
+  },
+  "notProven": [
+    "deployed CLI plus real Kubernetes/RBAC/network/TLS provisioning",
+    "AgentRun controller client and catalogue-backed dispatch",
+    "serving-node prewarm/readiness and fleet lifecycle",
+    "UI/YAML selection, conversations and final real-model release acceptance"
+  ]
+}
