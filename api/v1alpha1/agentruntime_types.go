@@ -11,6 +11,10 @@ import (
 // run, so a runtime referenced by name fails closed until it is Ready.
 const AgentRuntimeReadyCondition = "Ready"
 
+// AgentRuntimeCellnReadyCondition is independent of OCI Ready. Only verified
+// artifact admission, conformance and distribution may eventually satisfy it.
+const AgentRuntimeCellnReadyCondition = "CellnReady"
+
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
 // +kubebuilder:printcolumn:name="Digest",type=string,JSONPath=`.status.resolvedImageDigest`
@@ -36,6 +40,12 @@ type AgentRuntime struct {
 
 // AgentRuntimeSpec is the desired state of an AgentRuntime.
 type AgentRuntimeSpec struct {
+	// Celln declares an additional placement profile, not executable authority.
+	// Image remains required: Celln-only runtimes and catalogue-backed dispatch
+	// are not supported yet. OCI Ready never implies CellnReady.
+	// +optional
+	Celln *AgentRuntimeCellnProfile `json:"celln,omitempty"`
+
 	// Image is the digest-pinned OCI reference that becomes the pod's primary
 	// process. A mutable tag is rejected: the digest is the trust anchor, and
 	// it is recorded on status.resolvedImageDigest for audit.

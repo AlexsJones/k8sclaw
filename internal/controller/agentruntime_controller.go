@@ -85,6 +85,22 @@ func (r *AgentRuntimeReconciler) validate(runtime *sympoziumv1alpha1.AgentRuntim
 }
 
 func (r *AgentRuntimeReconciler) updateStatus(ctx context.Context, runtime *sympoziumv1alpha1.AgentRuntime, digest, reason string) (ctrl.Result, error) {
+	// Metadata and OCI validation cannot certify Celln admission or placement.
+	// Overwrite any stale/forged positive condition until the independent
+	// verifier, conformance and distribution gates are implemented.
+	cellnReason, cellnMessage := "NotConfigured", "no Celln runtime profile configured"
+	if runtime.Spec.Celln != nil {
+		cellnReason = "VerificationUnavailable"
+		cellnMessage = "Celln profile declared; artifact admission, adapter conformance and distribution verification are not implemented"
+	}
+	meta.SetStatusCondition(&runtime.Status.Conditions, metav1.Condition{
+		Type:               sympoziumv1alpha1.AgentRuntimeCellnReadyCondition,
+		Status:             metav1.ConditionFalse,
+		Reason:             cellnReason,
+		Message:            cellnMessage,
+		ObservedGeneration: runtime.Generation,
+	})
+
 	if digest != "" {
 		meta.SetStatusCondition(&runtime.Status.Conditions, metav1.Condition{
 			Type:               sympoziumv1alpha1.AgentRuntimeReadyCondition,
