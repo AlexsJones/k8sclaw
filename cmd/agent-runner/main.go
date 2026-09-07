@@ -208,6 +208,18 @@ func contextWithSignal(parent context.Context) (context.Context, context.CancelF
 
 func main() {
 	log.SetFlags(log.Ltime | log.Lmicroseconds)
+
+	// Subcommand dispatch. The agent-runner image is distroless (no shell),
+	// so lightweight helper steps that would otherwise be shell scripts are
+	// implemented as subcommands of this binary and invoked directly.
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "workspace-marker":
+			runWorkspaceMarker()
+			return
+		}
+	}
+
 	log.Println("agent-runner starting")
 	startupLogSupportedAgentModes()
 

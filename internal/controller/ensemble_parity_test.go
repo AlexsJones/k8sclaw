@@ -377,6 +377,7 @@ func convergenceFixture() (*sympoziumv1alpha1.Ensemble, *sympoziumv1alpha1.Agent
 				{Name: "warm", Image: "busybox:1.36", Command: []string{"sh", "-c", "true"}},
 			},
 		},
+		Workspace: &sympoziumv1alpha1.WorkspaceSpec{PerSessionPVC: true, Size: "2Gi"},
 	}
 	return pack, persona
 }
