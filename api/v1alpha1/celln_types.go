@@ -3,7 +3,11 @@ package v1alpha1
 // CellnExecutionSpec is the immutable-source portion of celln.dev/v1alpha1.
 // Invocation aliases are lookups into Tools, never host filesystem paths.
 type CellnExecutionSpec struct {
-	Mote CellnImmutableRef `json:"mote"`
+	// Harness opts into the experimental sealed reference runtime contract.
+	// This is not the container-replacing task.mode=harness adapter.
+	// +optional
+	Harness *CellnHarnessSpec `json:"harness,omitempty"`
+	Mote    CellnImmutableRef `json:"mote"`
 	// +kubebuilder:validation:MinItems=1
 	// +kubebuilder:validation:MaxItems=16
 	Tools []CellnToolRef `json:"tools"`
@@ -15,6 +19,31 @@ type CellnExecutionSpec struct {
 	// Lane never promotes an agent-authored artifact to tool authority.
 	// +kubebuilder:validation:Enum=agent;tool
 	Lane string `json:"lane"`
+}
+
+// CellnHarnessSpec names operator-approved model authority and lent artifacts.
+// Task and model are taken from AgentRun.spec and frozen at first dispatch.
+// No credential path or secret value crosses this API.
+type CellnHarnessSpec struct {
+	// +kubebuilder:validation:Enum=celln.reference-functions/v1
+	ContractVersion string            `json:"contractVersion"`
+	ModelGrant      CellnImmutableRef `json:"modelGrant"`
+	// +kubebuilder:validation:MinItems=2
+	// +kubebuilder:validation:MaxItems=2
+	BorrowedTools []CellnBorrowedTool `json:"borrowedTools"`
+}
+
+type CellnBorrowedTool struct {
+	// +kubebuilder:validation:Pattern="^[a-zA-Z0-9_-]{1,64}$"
+	Name string `json:"name"`
+	// +kubebuilder:validation:MaxLength=256
+	// +kubebuilder:validation:Pattern="^/"
+	Path string `json:"path"`
+	// +kubebuilder:validation:Pattern="^blake3:[0-9a-f]{64}$"
+	Hash string `json:"hash"`
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=512
+	Description string `json:"description"`
 }
 
 type CellnImmutableRef struct {
