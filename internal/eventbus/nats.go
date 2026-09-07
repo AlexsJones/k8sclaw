@@ -29,7 +29,18 @@ type NATSEventBus struct {
 
 // NewNATSEventBus creates a new NATS JetStream event bus.
 func NewNATSEventBus(url string) (*NATSEventBus, error) {
+	return NewNATSEventBusWithContext(context.Background(), url)
+}
+
+// NewNATSEventBusWithContext bounds initial stream provisioning. Cancellation
+// closes the connection, including its background reconnect loop. A successfully
+// returned bus retains the existing lifetime/reconnect policy after ctx expires.
+func NewNATSEventBusWithContext(ctx context.Context, url string) (*NATSEventBus, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	n := &NATSEventBus{}
+	initialized := make(chan struct{})
 
 	// MaxReconnects(-1) keeps the client reconnecting indefinitely. A bounded
 	// limit means a NATS pod recreation that takes longer than
@@ -40,6 +51,11 @@ func NewNATSEventBus(url string) (*NATSEventBus, error) {
 			log.Printf("eventbus: disconnected from NATS: %v", err)
 		}),
 		nats.ReconnectHandler(func(c *nats.Conn) {
+			// The first reconnect can race constructor initialization.
+			<-initialized
+			if n.js == nil {
+				return
+			}
 			log.Printf("eventbus: reconnected to NATS at %s", c.ConnectedUrl())
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
@@ -49,27 +65,49 @@ func NewNATSEventBus(url string) (*NATSEventBus, error) {
 		}),
 		nats.ClosedHandler(func(_ *nats.Conn) { log.Printf("eventbus: NATS connection closed") }),
 	)
+	connectTimeout := 2 * time.Second
+	if deadline, ok := ctx.Deadline(); ok && time.Until(deadline) < connectTimeout {
+		connectTimeout = time.Until(deadline)
+		if connectTimeout <= 0 {
+			close(initialized)
+			return nil, context.DeadlineExceeded
+		}
+	}
+	opts = append(opts, nats.Timeout(connectTimeout))
 	nc, err := nats.Connect(url, opts...)
 	if err != nil {
+		close(initialized)
 		return nil, fmt.Errorf("connecting to NATS: %w", err)
 	}
 
 	js, err := jetstream.New(nc)
 	if err != nil {
+		close(initialized)
 		nc.Close()
 		return nil, fmt.Errorf("creating JetStream context: %w", err)
 	}
 
 	n.conn = nc
 	n.js = js
+	close(initialized)
 
 	// Retry stream creation — NATS may not be fully ready yet.
 	var lastErr error
 	for attempt := 0; attempt < 10; attempt++ {
-		if _, lastErr = n.ensureStream(context.Background()); lastErr == nil {
+		if _, lastErr = n.ensureStream(ctx); lastErr == nil {
 			break
 		}
-		time.Sleep(2 * time.Second)
+		if attempt == 9 {
+			break
+		}
+		timer := time.NewTimer(2 * time.Second)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			nc.Close()
+			return nil, ctx.Err()
+		case <-timer.C:
+		}
 	}
 	if lastErr != nil {
 		nc.Close()

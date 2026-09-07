@@ -24,7 +24,6 @@ import (
 	"github.com/sympozium-ai/sympozium/internal/apiserver"
 	"github.com/sympozium-ai/sympozium/internal/collector"
 	"github.com/sympozium-ai/sympozium/internal/controller"
-	"github.com/sympozium-ai/sympozium/internal/eventbus"
 	"github.com/sympozium-ai/sympozium/pkg/telemetry"
 	webui "github.com/sympozium-ai/sympozium/web"
 )
@@ -76,13 +75,12 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Connect to event bus (retry in background if unavailable).
-	var bus eventbus.EventBus
-	natsbus, err := eventbus.NewNATSEventBus(eventBusURL)
+	// Optional streaming must not prevent the HTTP API from starting. An initial
+	// failure leaves streaming disabled until restart; only an established bus
+	// reconnects in the background. Empty URL explicitly disables the event bus.
+	bus, err := connectOptionalEventBus(eventBusURL)
 	if err != nil {
 		log.Error(err, "event bus not available, starting without streaming support")
-	} else {
-		bus = natsbus
 	}
 
 	kubeClient, err := kubernetes.NewForConfig(cfg)
