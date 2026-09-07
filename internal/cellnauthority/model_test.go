@@ -121,7 +121,7 @@ func TestModelPolicyChecksFreshRunOptionsWithoutFallback(t *testing.T) {
 }
 
 func TestModelPolicyRefusesWithdrawalSubstitutionAndExpansion(t *testing.T) {
-	for _, mode := range []string{"withdrawn", "lookalike", "revision", "agent", "runtime", "provider", "model", "url", "profile-path", "budget", "turns", "tokens", "unknown", "trailing", "oversized", "tool-source", "run-credentials", "run-model"} {
+	for _, mode := range []string{"withdrawn", "lookalike", "revision", "agent", "runtime", "provider", "model", "url", "profile-path", "budget", "underfunded", "turns", "tokens", "unknown", "trailing", "oversized", "tool-source", "run-credentials", "run-model"} {
 		t.Run(mode, func(t *testing.T) {
 			ctx := context.Background()
 			l, c, frozen := modelFixture(t)
@@ -180,6 +180,8 @@ func TestModelPolicyRefusesWithdrawalSubstitutionAndExpansion(t *testing.T) {
 					doc.CredentialProfile = "/host/secret"
 				case "budget":
 					doc.MaxTotalOutputTokens = 3073
+				case "underfunded":
+					doc.MaxTotalOutputTokens = 1535
 				case "turns":
 					doc.MaxRequests = 1
 				case "tokens":
@@ -212,5 +214,36 @@ func TestModelPolicyRefusesWithdrawalSubstitutionAndExpansion(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+type changingModelReader struct {
+	client.Reader
+	source types.NamespacedName
+	reads  int
+}
+
+func (r *changingModelReader) Get(ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+	if err := r.Reader.Get(ctx, key, obj, opts...); err != nil {
+		return err
+	}
+	if key == r.source {
+		r.reads++
+		if r.reads == 2 {
+			obj.SetResourceVersion("changed-between-reads")
+		}
+	}
+	return nil
+}
+
+func TestModelPolicyDetectsChangeDuringResolution(t *testing.T) {
+	l, c, frozen := modelFixture(t)
+	r := &changingModelReader{Reader: c, source: l.Source}
+	l.Selection.Reader = r
+	if _, err := l.Resolve(context.Background(), *frozen); err == nil || !strings.Contains(err.Error(), "changed during resolution") {
+		t.Fatalf("missed concurrent change: %v", err)
+	}
+	if r.reads != 2 {
+		t.Fatalf("expected two independent source reads, got %d", r.reads)
 	}
 }

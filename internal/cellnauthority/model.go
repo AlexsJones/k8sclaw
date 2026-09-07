@@ -66,7 +66,7 @@ func (l ModelLoader) Resolve(ctx context.Context, frozen FrozenSelection) (*Mode
 	if err != nil {
 		return nil, err
 	}
-	if doc.APIVersion != "sympozium.ai/celln-model-policy-v1" || doc.Agent != frozen.Snapshot.Agent || doc.Runtime != frozen.Snapshot.Runtime || doc.Provider != "deepseek" || doc.URL != "https://api.deepseek.com/chat/completions" || len(doc.Model) == 0 || len(doc.Model) > 128 || strings.TrimSpace(doc.Model) != doc.Model || strings.ContainsRune(doc.Model, '\x00') || !credentialProfileName.MatchString(doc.CredentialProfile) || doc.MaxRequests < 1 || doc.MaxRequests > 6 || doc.MaxRequests < frozen.Prepared.JSON.MaxTurns || doc.MaxOutputTokens != 512 || doc.MaxTotalOutputTokens < 512 || doc.MaxTotalOutputTokens > 3072 {
+	if doc.APIVersion != "sympozium.ai/celln-model-policy-v1" || doc.Agent != frozen.Snapshot.Agent || doc.Runtime != frozen.Snapshot.Runtime || doc.Provider != "deepseek" || doc.URL != "https://api.deepseek.com/chat/completions" || len(doc.Model) == 0 || len(doc.Model) > 128 || strings.TrimSpace(doc.Model) != doc.Model || strings.ContainsRune(doc.Model, '\x00') || !credentialProfileName.MatchString(doc.CredentialProfile) || doc.MaxRequests < 1 || doc.MaxRequests > 6 || doc.MaxRequests < frozen.Prepared.JSON.MaxTurns || doc.MaxOutputTokens != 512 || doc.MaxTotalOutputTokens < frozen.Prepared.JSON.MaxTurns*512 || doc.MaxTotalOutputTokens > 3072 {
 		return nil, fmt.Errorf("model policy is stale or outside the supported host contract")
 	}
 	run, id, err := l.Selection.readRun(ctx, types.NamespacedName{Namespace: frozen.Run.Namespace, Name: frozen.Run.Name})

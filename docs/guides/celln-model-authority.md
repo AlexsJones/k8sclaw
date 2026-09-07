@@ -19,8 +19,9 @@ The `sympozium.ai/celln-model-policy-v1` document contains:
   secret value, Kubernetes Secret reference, or authorization by itself.
 - `maxRequests`: 1–6, at least the selected runtime's maximum turns.
 - `maxOutputTokens`: 512, matching the current host broker contract.
-- `maxTotalOutputTokens`: 512–3072. A smaller total may exhaust before all
-  turns complete; it must never be silently expanded.
+- `maxTotalOutputTokens`: 512–3072 and at least `maxTurns * 512`, matching the
+  host's non-refundable reservation for every configured JSON Harness turn.
+  Insufficient funding refuses; it must never be silently expanded.
 
 Resolution revalidates the frozen selection, reads the policy, compares the
 live run's full identity and explicit model options, then revalidates selection
