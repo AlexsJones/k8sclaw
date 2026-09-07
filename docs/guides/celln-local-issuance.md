@@ -144,6 +144,45 @@ controller path. Continuous reconciliation, startup gates, selected-node prewarm
 single dispatch and result correlation still need integration. Expiry gates new
 issuance/resolution, not active-cell cancellation or fleet revocation.
 
+### Managed host-local issuer lifecycle
+
+`NewManagedIssuer` adds a lifecycle around bounded issuance. Deployment code
+supplies a private host root, trusted Celln binary/composer, positive profile
+lifetime, a 1–30 second sweep interval, and an explicit map from Agent identity
+to independently configured authority loaders with uncached API readers. The
+map is copied; journal contents never supply their own authority-source locations.
+
+`Start(ctx)` recovers pending records and sweeps existing issuance before opening
+the local provisioning gate. Sweeps repeat, with a 30-second context budget.
+They withdraw tracked legacy, expired, wrong-boot or no-longer-configured profiles
+and revalidate current tool/model approvals and host credential mapping for the
+rest. Unknown profiles, changed bytes, corrupt history, clock failures or failed
+filesystem operations close the gate and require a successful later sweep.
+Unrelated profile bytes are never deleted. Each scanned directory is bounded to
+1024 entries; automatic retention remains an operator follow-up.
+
+`ManagedIssuer.Issue` only uses the configured loader for the frozen Agent and
+always requires bounded issuance. It serializes with sweeps, refuses before
+startup/after shutdown or stale sweep observation, and links in-flight issuance
+to lifecycle cancellation. Duplicate lifecycle owners on the same instance are
+refused. The existing OS issuer lock also excludes concurrent local CLI writes
+during each managed operation. The host root must be reserved for this managed
+scope; unrelated operator profiles are not silently adopted.
+
+`Status` reports only the **local provisioning gate**, not Kubernetes availability,
+selection readiness, execution permission or conformance. Every issuance still
+revalidates live authority. No positive status renews profile expiry. During a
+process crash, host expiry remains the admission bound; clean shutdown closes the
+gate and cancels in-flight issuance but does not promise immediate fleet/live-cell
+revocation of already issued authority.
+
+This lifecycle component is tested in-process but is **not yet registered in the
+shipped controller or exposed as a host RPC service**. The next integration must
+start it on the correct host, route catalogue provisioning through its gate,
+prewarm that serving node and retain dispatch/replay identity. Existing CLI
+operator commands remain explicit local operations, not a bypass-safe deployment
+of the final automated user journey.
+
 ### One-pass current-approval reconciliation
 
 `cellnreview.ReconcileIssued` is the controller integration primitive for checking

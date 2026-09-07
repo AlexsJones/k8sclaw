@@ -11,6 +11,7 @@ import (
 	"github.com/sympozium-ai/sympozium/internal/cellnauthority"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -46,11 +47,20 @@ func proveCatalogueIssuance(t *testing.T, ctx context.Context, l cellnauthority.
 		t.Fatal(err)
 	}
 	options := IssueOptions{Binary: o.Binary, PolicyRoot: o.PolicyRoot, ComposerPublisher: publisher, ProfileLifetime: 5 * time.Minute}
-	issued, err := Issue(ctx, ml, frozen, *approval, artifacts, options)
+	managed, err := NewManagedIssuer(options, map[types.NamespacedName]cellnauthority.ModelLoader{{Namespace: frozen.Snapshot.Agent.Namespace, Name: frozen.Snapshot.Agent.Name}: ml}, time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
-	again, err := Issue(ctx, ml, frozen, *approval, artifacts, options)
+	managedCtx, cancelManaged := context.WithCancel(ctx)
+	done := make(chan error, 1)
+	go func() { done <- managed.Start(managedCtx) }()
+	defer func() { cancelManaged(); <-done }()
+	eventuallyManaged(t, func() bool { ready, _ := managed.Status(); return ready })
+	issued, err := managed.Issue(ctx, frozen, *approval, artifacts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	again, err := managed.Issue(ctx, frozen, *approval, artifacts)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -62,17 +72,13 @@ func proveCatalogueIssuance(t *testing.T, ctx context.Context, l cellnauthority.
 	if err != nil {
 		t.Fatal(err)
 	}
-	observed, err := ReconcileIssued(ctx, o.PolicyRoot, issued.Profile, issued.ProfileSHA256, ml)
-	if err != nil || observed.State != "issued" {
-		t.Fatalf("current approval refused: %+v %v", observed, err)
-	}
 	if err := c.Delete(ctx, cm); err != nil {
 		t.Fatal(err)
 	}
-	observed, err = ReconcileIssued(ctx, o.PolicyRoot, issued.Profile, issued.ProfileSHA256, ml)
-	if err != nil || observed.State != "withdrawn" || observed.Reason != "approval-changed-or-unavailable" {
-		t.Fatalf("withdrawn approval retained authority: %+v %v", observed, err)
-	}
+	eventuallyManaged(t, func() bool {
+		_, err := os.Stat(filepath.Join(o.PolicyRoot, "trusted-model-profiles", issued.Profile+".json"))
+		return os.IsNotExist(err)
+	})
 	requestFile := filepath.Join(o.PolicyRoot, "withdrawn-request.json")
 	if err := os.WriteFile(requestFile, issued.Request, 0600); err != nil {
 		t.Fatal(err)
@@ -85,5 +91,5 @@ func proveCatalogueIssuance(t *testing.T, ctx context.Context, l cellnauthority.
 		t.Fatal("withdrawal changed retained grant bytes")
 	}
 	assertNoProfiles(t, o.PolicyRoot)
-	t.Logf("PASS real catalogue composition -> durable boot-bound expiring profile -> real-KVM sealed verification -> identical v3 issuance without renewal -> approval deletion -> reconciliation -> host withdrawal refusal; grant=%s; Kubernetes=fake, modelCalls=0", issued.Grant)
+	t.Logf("PASS real catalogue composition -> managed startup recovery gate -> durable boot-bound expiring profile -> real-KVM sealed verification -> identical v3 issuance without renewal -> approval deletion -> periodic managed withdrawal -> host refusal; grant=%s; Kubernetes=fake, modelCalls=0", issued.Grant)
 }

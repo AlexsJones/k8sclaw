@@ -40,6 +40,11 @@ func ReconcileIssued(ctx context.Context, root, profile, digest string, loader c
 	if _, err := recoverPending(root); err != nil {
 		return nil, err
 	}
+	return reconcileIssued(ctx, root, profile, digest, loader)
+}
+
+// Caller holds the issuer lock and has completed recovery.
+func reconcileIssued(ctx context.Context, root, profile, digest string, loader cellnauthority.ModelLoader) (*IssuerReconciliation, error) {
 	record, err := readIssuerRecord(filepath.Join(root, "sympozium-issuer-journal", profile+".json"))
 	if err != nil {
 		return nil, err
