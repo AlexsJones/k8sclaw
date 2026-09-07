@@ -1,0 +1,22 @@
+{
+  "date": "2026-09-07",
+  "scope": "Exact issued-request dispatch journal hand-off; no execution submission",
+  "base": "Sympozium #450, e690186",
+  "checks": {
+    "goRaceAllPackages": "passed with NATS available",
+    "goBuildAndVet": "passed",
+    "exactBytesAndID": "passed normal and lost-commit-acknowledgement retries; no issuer network requests",
+    "refusals": "unissued, retargeted, changed task, withdrawn approval, substituted request/action, terminal run",
+    "realKVM": "actual composition/TLS issuance -> exact dispatch journal -> approval deletion -> hand-off refusal -> managed host withdrawal"
+  },
+  "realKVMGrant": "blake3:d758c5dc7a2d54d3ac0015062a71f9b279aa8fe14d8aaabe928514d6cfe5aaaf",
+  "kubernetesForKVMTest": "fake",
+  "modelCalls": 0,
+  "executionSubmissions": 0,
+  "limitations": [
+    "No route selection, serving prewarm, controller dispatch call site or readiness claim",
+    "Host admission/expiry remains mandatory; saved issuance is not continuing permission",
+    "Legacy dispatch still refuses catalogue issuance",
+    "Full UI/YAML, conversation and release acceptance remain open"
+  ]
+}

@@ -65,6 +65,11 @@ func proveCatalogueIssuance(t *testing.T, ctx context.Context, l cellnauthority.
 	if again.Grant != issued.Grant || again.Profile != issued.Profile {
 		t.Fatal("actual issuance retry changed identity")
 	}
+	runKey := types.NamespacedName{Namespace: frozen.Run.Namespace, Name: frozen.Run.Name}
+	dispatchBytes, err := issuerClient.FreezeIssuedDispatch(ctx, c, c, runKey, ml)
+	if err != nil || string(dispatchBytes) != string(issued.Request) {
+		t.Fatalf("durable dispatch hand-off changed real issued request: %v", err)
+	}
 	grantPath := filepath.Join(o.PolicyRoot, "trusted-harness", issued.Grant[7:]+".json")
 	before, err := os.ReadFile(grantPath)
 	if err != nil {
@@ -72,6 +77,9 @@ func proveCatalogueIssuance(t *testing.T, ctx context.Context, l cellnauthority.
 	}
 	if err := c.Delete(ctx, cm); err != nil {
 		t.Fatal(err)
+	}
+	if bytes, err := issuerClient.FreezeIssuedDispatch(ctx, c, c, runKey, ml); err == nil || len(bytes) != 0 {
+		t.Fatal("withdrawn approval still returned dispatch bytes")
 	}
 	eventuallyManaged(t, func() bool {
 		_, err := os.Stat(filepath.Join(o.PolicyRoot, "trusted-model-profiles", issued.Profile+".json"))
@@ -89,5 +97,5 @@ func proveCatalogueIssuance(t *testing.T, ctx context.Context, l cellnauthority.
 		t.Fatal("withdrawal changed retained grant bytes")
 	}
 	assertNoProfiles(t, o.PolicyRoot)
-	t.Logf("PASS real catalogue composition -> durable AgentRun preparation -> verified issuer client -> authenticated TLS issuer service -> managed startup recovery gate -> durable boot-bound expiring profile -> real-KVM sealed verification -> committed AgentRun outcome -> saved outcome resume without renewal -> approval deletion -> periodic managed withdrawal -> host refusal; grant=%s; Kubernetes=fake, modelCalls=0", issued.Grant)
+	t.Logf("PASS real catalogue composition -> durable AgentRun preparation -> verified issuer client -> authenticated TLS issuer service -> managed startup recovery gate -> durable boot-bound expiring profile -> real-KVM sealed verification -> committed AgentRun outcome -> saved outcome resume without renewal -> exact dispatch journal hand-off -> approval deletion -> hand-off refusal -> periodic managed withdrawal -> host refusal; grant=%s; Kubernetes=fake, modelCalls=0, executionSubmissions=0", issued.Grant)
 }
