@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -11,17 +12,22 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 )
 
-// This is an operator review command, not a tenant-facing execution endpoint.
-// Selecting source flags here does not issue grants or attest to ownership.
+// These are operator review/provisioning commands, not tenant-facing endpoints.
+// Source flags are trusted operator configuration, never proof of ownership.
 func newCellnSelectionPlanCmd() *cobra.Command {
-	return newCellnSelectionCmd(false)
+	return newCellnSelectionCmd("plan")
 }
 
 func newCellnSelectionComposeCmd() *cobra.Command {
-	return newCellnSelectionCmd(true)
+	return newCellnSelectionCmd("compose")
 }
 
-func newCellnSelectionCmd(compose bool) *cobra.Command {
+func newCellnSelectionIssueCmd() *cobra.Command {
+	return newCellnSelectionCmd("issue")
+}
+
+func newCellnSelectionCmd(mode string) *cobra.Command {
+	compose, issue := mode == "compose", mode == "issue"
 	var sourceNamespace, operatorSource, runtimeSource, agentSource string
 	var selected []string
 	var imageBytes int64
@@ -29,6 +35,7 @@ func newCellnSelectionCmd(compose bool) *cobra.Command {
 	var modelPolicy string
 	var executionMote, executionClosure string
 	var options cellnreview.ComposeOptions
+	var issueOptions cellnreview.IssueOptions
 	cmd := &cobra.Command{Use: "plan AGENT", Args: cobra.ExactArgs(1), SilenceUsage: true,
 		Short: "Resolve live grants and emit a Celln composition plan without executing",
 		Long:  "Operator-only planning input. Read three independently configured grant ConfigMaps and live Agent/runtime/tool identities. Prints the resolved authority snapshot and exact compositor input; does not grant authority, certify readiness, write resources, compose images or execute. Tenant-facing callers must not accept these source flags from run requests.",
@@ -75,6 +82,16 @@ func newCellnSelectionCmd(compose bool) *cobra.Command {
 				if executionMote != "" {
 					artifacts := cellnauthority.ExecutionArtifacts{}
 					artifacts.Mote.Hash, artifacts.Closure.Hash = executionMote, executionClosure
+					if issue {
+						issued, err := cellnreview.Issue(cmd.Context(), modelLoader, *frozen, *modelApproval, artifacts, issueOptions)
+						if err != nil {
+							return err
+						}
+						if err := json.NewEncoder(cmd.OutOrStdout()).Encode(map[string]any{"apiVersion": "sympozium.ai/celln-issuance-report-v1", "frozen": frozen, "issued": issued, "executed": false, "artifactReadiness": "not_checked"}); err != nil {
+							return errors.Join(err, cellnreview.Withdraw(issueOptions.PolicyRoot, *issued))
+						}
+						return nil
+					}
 					candidate, err := modelLoader.BuildExecution(cmd.Context(), *frozen, *modelApproval, artifacts)
 					if err != nil {
 						return err
@@ -112,8 +129,8 @@ func newCellnSelectionCmd(compose bool) *cobra.Command {
 	cmd.Flags().StringArrayVar(&selected, "tool", nil, "Explicit NAME@REVISION; repeat in desired order; omission selects no tools")
 	cmd.Flags().Int64Var(&imageBytes, "image-bytes", 33554432, "Composed image size, 32..512 MiB and 2 MiB aligned")
 	cmd.Flags().StringVar(&runName, "run", "", "Bind and revalidate the plan against an existing same-namespace AgentRun (no dispatch)")
-	cmd.Flags().StringVar(&modelPolicy, "model-policy", "", "Independent operator model-policy ConfigMap in grant namespace; requires --run; does not issue a host grant")
-	cmd.Flags().StringVar(&executionMote, "execution-mote", "", "Actual materialized mote hash for an unissued execution candidate (plan only; requires run, model policy and closure)")
+	cmd.Flags().StringVar(&modelPolicy, "model-policy", "", "Independent operator model-policy ConfigMap in grant namespace; requires --run")
+	cmd.Flags().StringVar(&executionMote, "execution-mote", "", "Actual materialized mote hash for plan/issue (requires run, model policy and closure)")
 	cmd.Flags().StringVar(&executionClosure, "execution-closure", "", "Actual composed closure hash for an unissued execution candidate; host verification remains required")
 	for _, name := range []string{"grant-namespace", "operator-grants", "runtime-grants", "agent-grants"} {
 		_ = cmd.MarkFlagRequired(name)
@@ -127,6 +144,17 @@ func newCellnSelectionCmd(compose bool) *cobra.Command {
 		cmd.Flags().StringVar(&options.KeyFile, "key-file", "", "Absolute operator composer seed path (never read into Kubernetes)")
 		cmd.Flags().StringVar(&options.OutputDir, "output-dir", "", "Absolute new output directory; must not exist")
 		for _, name := range []string{"run", "celln-binary", "policy-root", "key-file", "output-dir"} {
+			_ = cmd.MarkFlagRequired(name)
+		}
+	}
+	if issue {
+		cmd.Use = "issue AGENT"
+		cmd.Short = "Provision a local request-bound host grant from live independent approvals"
+		cmd.Long = "Operator-only local issuance. Verifies exact signed composition sources, resolves an independently configured host credential mapping, performs real sealed member verification, and publishes a request-bound grant. No dispatch or positive readiness. Persist the output and withdraw the profile when approval changes; this is not an autonomous revocation controller."
+		cmd.Flags().StringVar(&issueOptions.Binary, "celln-binary", "", "Absolute operator-selected Celln binary")
+		cmd.Flags().StringVar(&issueOptions.PolicyRoot, "policy-root", "", "Absolute trusted local host policy/store root")
+		cmd.Flags().StringVar(&issueOptions.ComposerPublisher, "composer-publisher", "", "Exact operator-approved composition publisher key")
+		for _, name := range []string{"run", "model-policy", "execution-mote", "execution-closure", "celln-binary", "policy-root", "composer-publisher"} {
 			_ = cmd.MarkFlagRequired(name)
 		}
 	}

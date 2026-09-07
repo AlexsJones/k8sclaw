@@ -73,7 +73,7 @@ execution or deployed controller proof.
 
 ### Host bridge still required
 
-This implementation reads no credentials, writes no Kubernetes resources or
+The model-policy resolver reads no credentials, writes no Kubernetes resources or
 host grant files, and performs no model calls. Tests use a fake Kubernetes API;
 they are not deployment/RBAC or live-model proof. Observed rereads are not an
 atomic transaction, lease or fleet-wide withdrawal guarantee.
@@ -85,3 +85,8 @@ borrowed tools, persona and budgets, and publish a content-addressed grant only
 after fresh policy checks. Distribution, issuer/controller integration and the
 catalogue-backed real-model E2E remain required. An uploaded approval JSON or
 successful prewarm observation alone must never create model authority.
+
+The [local operator issuance bridge](celln-local-issuance.md) now connects these
+approvals to the real host issuer, including failure cleanup and explicit
+withdrawal. It is not yet an autonomous deployed controller or a crash-safe
+fleet approval watcher; see its recovery limits before use.

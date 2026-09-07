@@ -16,7 +16,8 @@ import (
 )
 
 // Real binary/artifacts, fake Kubernetes metadata. Opt in explicitly; this is
-// not a live API-server, guest execution or model-call proof.
+// not a live API-server or model-call proof. CELLN_ISSUANCE_KVM=1 adds an
+// explicit real-KVM sealed verification and host issuance/withdrawal proof.
 func TestComposeRealCellnArtifacts(t *testing.T) {
 	fixture := os.Getenv("CELLN_COMPOSITION_FIXTURE")
 	binary := os.Getenv("CELLN_COMPOSITION_BINARY")
@@ -87,6 +88,17 @@ func TestComposeRealCellnArtifacts(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	if os.Getenv("CELLN_ISSUANCE_KVM") == "1" {
+		var agentRun api.AgentRun
+		if err := c.Get(ctx, types.NamespacedName{Namespace: "tenant", Name: "run"}, &agentRun); err != nil {
+			t.Fatal(err)
+		}
+		agentRun.Spec.Model = api.ModelSpec{Provider: "deepseek", Model: "deepseek-chat"}
+		agentRun.Spec.SystemPrompt = "Use the explicitly lent tools."
+		if err := c.Update(ctx, &agentRun); err != nil {
+			t.Fatal(err)
+		}
+	}
 	frozen, err := l.FreezeRun(ctx, types.NamespacedName{Namespace: "tenant", Name: "run"}, selections, 33554432)
 	if err != nil {
 		t.Fatal(err)
@@ -117,6 +129,9 @@ func TestComposeRealCellnArtifacts(t *testing.T) {
 	if !verified.LocalToolfsVerified || verified.Toolfs != report.Toolfs {
 		t.Fatal("actual image identity mismatch")
 	}
+	if os.Getenv("CELLN_ISSUANCE_KVM") == "1" {
+		proveCatalogueIssuance(t, ctx, l, *frozen, options, signed.Publisher)
+	}
 	// Withdraw a real signed source in the Celln policy: the composed artifact
 	// must refuse even while all Kubernetes grant objects still exist unchanged.
 	policy := filepath.Join(root, "trusted-closures.json")
@@ -136,5 +151,5 @@ func TestComposeRealCellnArtifacts(t *testing.T) {
 	if err := verify(ctx, run, binary, []string{"--root", root, "closure", "verify", descriptor, "--expected-hash", report.Closure, "--publisher", signed.Publisher, "--entry-point", "/harness", "--executable", catalogue.RuntimeSpec.Celln.Executable.Hash}, &verified); err == nil {
 		t.Fatal("source withdrawal did not refuse composed closure")
 	}
-	t.Logf("PASS real signed runtime + two tools -> actual compositor -> verified 32 MiB image -> source withdrawal refused; closure=%s toolfs=%s; Kubernetes=fake, KVM=not-run, modelCalls=0", report.Closure, report.Toolfs)
+	t.Logf("PASS real signed runtime + two tools -> actual compositor -> verified 32 MiB image -> source withdrawal refused; closure=%s toolfs=%s; Kubernetes=fake, issuanceKVM=%t, modelCalls=0", report.Closure, report.Toolfs, os.Getenv("CELLN_ISSUANCE_KVM") == "1")
 }
