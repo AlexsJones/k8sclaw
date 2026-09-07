@@ -37,3 +37,20 @@ func TestModelPolicyReviewRequiresRunBeforeReadingAPI(t *testing.T) {
 		t.Fatalf("wrong refusal: %v", err)
 	}
 }
+
+func TestExecutionCandidateRequiresAllAuthorityAndArtifactInputs(t *testing.T) {
+	for _, flags := range [][]string{
+		{"--execution-mote", "blake3:incomplete"},
+		{"--execution-mote", "blake3:incomplete", "--execution-closure", "blake3:incomplete", "--run", "run"},
+	} {
+		cmd := newCellnSelectionPlanCmd()
+		args := []string{"agent", "--grant-namespace", "operator", "--operator-grants", "ops", "--runtime-grants", "runtime", "--agent-grants", "agent"}
+		cmd.SetArgs(append(args, flags...))
+		var output bytes.Buffer
+		cmd.SetOut(&output)
+		cmd.SetErr(&output)
+		if err := cmd.Execute(); err == nil || !strings.Contains(err.Error(), "execution candidate requires") {
+			t.Fatalf("wrong refusal: %v", err)
+		}
+	}
+}

@@ -49,5 +49,7 @@ func newCellnToolCmd() *cobra.Command {
 	cmd.AddCommand(approve)
 	cmd.AddCommand(newCellnSelectionPlanCmd())
 	cmd.AddCommand(newCellnSelectionComposeCmd())
+	cmd.AddCommand(newCellnSelectionIssueCmd())
+	cmd.AddCommand(newCellnWithdrawGrantCmd())
 	return cmd
 }

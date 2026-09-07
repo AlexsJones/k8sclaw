@@ -1,0 +1,18 @@
+{
+  "date": "2026-09-07",
+  "status": "passed",
+  "scope": "real signed catalogue composition, local host provisioning and KVM sealed-member verification; fake Kubernetes; not model/controller E2E",
+  "grant": "blake3:e637ca195f8fd8d0cd4e7d7d47eeb111f013ff730bc9541acca7fecd16dd8ad0",
+  "closure": "blake3:e25d67b886a439b0e724775ae8de8b5ba96c918831c8b91f6d18a0df386fa4e0",
+  "toolfs": "blake3:dba11e10fed485bd4ff6b3e35d7b00873e78ad71f21c00869cb7159e2e226bd0",
+  "runtimeCount": 1,
+  "borrowedToolCount": 2,
+  "issuances": 2,
+  "idempotentGrantAndProfile": true,
+  "withdrawalRefusedFurtherIssuance": true,
+  "grantBytesRetained": true,
+  "modelCalls": 0,
+  "credentialContentsRead": false,
+  "servingProcessPrewarmProven": false,
+  "crashRecoveryProven": false
+}
