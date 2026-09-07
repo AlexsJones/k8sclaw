@@ -143,6 +143,20 @@ CELLN_COMPOSITION_BINARY=/absolute/path/to/celln \
   go test -race ./internal/cellnreview -run TestComposeRealCellnArtifacts -count=1 -v
 ```
 
+The separate live-API selection/RBAC proof also passed on isolated
+`kind-celln-deployed`: real object identities resolved to the ordered runtime
+and two-tool plan; a tenant able to write its own ConfigMaps could not change
+the operator grant; removing that grant refused selection despite a tenant
+lookalike. [Evidence](../evidence/celln-live-catalogue-selection-2026-09-07.json)
+does not claim composition, model execution or readiness. The test creates no
+AgentRun, pauses no controllers, and removes its two generated namespaces.
+
+```sh
+CELLN_COMPOSITION_KUBECONFIG=/absolute/isolated/kubeconfig \
+CELLN_COMPOSITION_FIXTURE=/absolute/path/to/generated/fixture \
+  go test -race ./internal/cellnreview -run TestLiveCatalogueSelectionAndGrantIsolation -count=1 -v
+```
+
 Race-enabled tests use a Kubernetes fake client to exercise actual loader
 lookups, stale subjects, withdrawn grants, untrusted tenant lookalikes,
 source mutation, malformed documents and restrictive selections. They do not
