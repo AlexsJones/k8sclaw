@@ -30,6 +30,8 @@ spec:
             - --token-file=/var/run/secrets/sympozium-ui-token/token
           {{- if .Values.apiserver.webUI.enabled }}
             - --serve-ui
+          {{- else }}
+            - --serve-ui=false
           {{- end }}
           env:
           {{- if and .Values.nats.enabled .Values.nats.auth.enabled }}
