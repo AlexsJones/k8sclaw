@@ -5,7 +5,8 @@ Date: 2026-09-07. Status: proposed implementation contract for
 This ADR specifies intended behavior. The first
 [catalogue metadata/schema and role slice](../guides/celln-tool-catalogue.md)
 is implemented, as is the initial [reference runtime profile metadata](../guides/celln-runtime-profile.md)
-with independently negative Celln readiness; approval/distribution, lending resolution and
+with independently negative Celln readiness and a [pure tool-authority resolver](../guides/celln-tool-authority.md).
+Trusted grant-source integration, approval/distribution, dispatch resolution and
 conversation extensions are **not yet implemented**. Existing execution guards remain authoritative until
 each extension and its conformance tests ship.
 
