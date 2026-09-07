@@ -25,6 +25,12 @@ spec:
           podSelector:
             matchLabels:
               control-plane: controller-manager
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ include "sympozium.namespace" . | quote }}
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/component: apiserver
       ports:
         - protocol: TCP
           port: 8788

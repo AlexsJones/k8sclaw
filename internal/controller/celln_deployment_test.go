@@ -13,7 +13,7 @@ import (
 )
 
 // Fake digest and endpoint are render fixtures only, never deployment evidence.
-const cellnDeploymentTestSettings = "celln.enabled=true,celln.allowInsecureHttp=true,celln.tokenSecret=controller-client,celln.router.clientTokenSecret=router-client,celln.router.backendTokenSecret=dispatcher,celln.router.ownershipClaim=owners,celln.router.allowInsecureBackends=true,celln.router.backends[0]=http://node-a:8787,celln.router.backends[1]=http://node-b:8787,celln.router.image.digest=sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+const cellnDeploymentTestSettings = "celln.enabled=true,celln.allowInsecureHttp=true,celln.tokenSecret=controller-client,celln.router.clientTokenSecret=router-client,celln.router.backendTokenSecret=dispatcher,celln.router.ownershipClaim=owners,celln.router.allowInsecureBackends=true,celln.router.backends[0]=http://node-a:8787,celln.router.backends[1]=http://node-b:8787,celln.router.image.digest=sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa,celln.capabilityTokenSecret=api-discovery,celln.router.capabilityTokenSecret=router-discovery"
 
 func TestCellnDeployment(t *testing.T) {
 	if _, err := exec.LookPath("helm"); err != nil {
@@ -26,6 +26,7 @@ func TestCellnDeployment(t *testing.T) {
 		}
 		decoder := yaml.NewYAMLOrJSONDecoder(bytes.NewReader(out), 4096)
 		var router appsv1.Deployment
+		var apiServer appsv1.Deployment
 		foundInstaller := false
 		for {
 			var raw json.RawMessage
@@ -55,6 +56,11 @@ func TestCellnDeployment(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
+			if meta.Metadata.Name == "sympozium-apiserver" && meta.Kind == "Deployment" {
+				if err := json.Unmarshal(raw, &apiServer); err != nil {
+					t.Fatal(err)
+				}
+			}
 		}
 		if foundInstaller != (installer == "true") {
 			t.Fatal("host installation must be an independent opt-in")
@@ -79,7 +85,7 @@ func TestCellnDeployment(t *testing.T) {
 				t.Fatalf("missing %s", want)
 			}
 		}
-		if len(pod.Volumes) != 3 {
+		if len(pod.Volumes) != 4 {
 			t.Fatal("unexpected router volumes")
 		}
 		for _, volume := range pod.Volumes {
@@ -91,7 +97,7 @@ func TestCellnDeployment(t *testing.T) {
 				if volume.PersistentVolumeClaim == nil || volume.PersistentVolumeClaim.ClaimName != "owners" {
 					t.Fatal("shared ownership missing")
 				}
-			case "client-token", "backend-token":
+			case "client-token", "backend-token", "capability-token":
 				if volume.Secret == nil || volume.Secret.DefaultMode == nil || *volume.Secret.DefaultMode != 0440 {
 					t.Fatal("bounded Secret permissions missing")
 				}
@@ -104,6 +110,26 @@ func TestCellnDeployment(t *testing.T) {
 				t.Fatal("subPath prevents credential rotation")
 			}
 		}
+		if !strings.Contains(args, "--capability-token-file /etc/celln/capability/token") {
+			t.Fatal("missing read-only router credential")
+		}
+		found := false
+		for _, volume := range apiServer.Spec.Template.Spec.Volumes {
+			if volume.Secret != nil && (volume.Secret.SecretName == "controller-client" || volume.Secret.SecretName == "dispatcher" || volume.Secret.SecretName == "router-client") {
+				t.Fatal("API server received execution credential")
+			}
+			if volume.Name == "celln-capability-token" {
+				found = volume.Secret != nil && volume.Secret.SecretName == "api-discovery"
+			}
+		}
+		if !found {
+			t.Fatal("missing API read-only credential")
+		}
+		for _, mount := range apiServer.Spec.Template.Spec.Containers[0].VolumeMounts {
+			if mount.Name == "celln-capability-token" && (!mount.ReadOnly || mount.SubPath != "") {
+				t.Fatal("discovery credential must rotate in read-only projected directory")
+			}
+		}
 	}
 }
 
@@ -112,6 +138,7 @@ func TestCellnDeploymentRefusesIncompleteConfiguration(t *testing.T) {
 		t.Skip("helm required for chart rendering")
 	}
 	for _, override := range []string{
+		"celln.capabilityTokenSecret=", "celln.router.capabilityTokenSecret=", "celln.capabilityTokenSecret=controller-client", "celln.router.capabilityTokenSecret=dispatcher", "celln.router.capabilityTokenSecret=router-client",
 		"celln.router.image.digest=", "celln.router.image.digest=latest",
 		"celln.router.ownershipClaim=", "celln.router.clientTokenSecret=",
 		"celln.router.backendTokenSecret=router-client", "celln.tokenSecret=",

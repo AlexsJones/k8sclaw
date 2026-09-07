@@ -453,6 +453,9 @@ celln:
   # the router CLIENT bearer credential (at least 24 bytes). No token is generated
   # or inferred from model credentials. Missing configuration refuses dispatch.
   tokenSecret: ""
+  # -- Read-only discovery token Secret in the API-server namespace (key token).
+  # Must differ from execution credentials and match router.capabilityTokenSecret.
+  capabilityTokenSecret: ""
   # -- Explicitly permit a plaintext non-loopback router URL. Prefer an HTTPS
   # endpoint; cluster networking alone does not encrypt the bearer credential.
   allowInsecureHttp: false
@@ -480,6 +483,8 @@ celln:
     # must match celln.tokenSecret's contents and differ from the backend token.
     clientTokenSecret: ""
     backendTokenSecret: ""
+    # -- Read-only discovery Secret in celln-system; requires Celln PR #80 or later.
+    capabilityTokenSecret: ""
     # -- Existing shared PVC in celln-system. Must provide coherent cross-node
     # POSIX flock, atomic publication and directory fsync, not just an RWX label.
     ownershipClaim: ""
