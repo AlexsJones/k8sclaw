@@ -23,7 +23,11 @@ verified signatures or behavior admission. Host verification remains necessary.
 Schema references identify immutable JSON-schema documents that a future
 verifier must fetch, hash-check and validate against the implemented dialect.
 This API slice checks reference shape, not JSON-schema semantics or actual tool
-arguments. The initial invocation ABI is `celln.argv/v1` on Linux/amd64.
+arguments. Supported metadata ABIs are `celln.argv/v1` and the separately
+versioned `celln.json-stdio/v1` on Linux/amd64. JSON descriptions and deadlines
+must fit the native adapter's 512-character and 30-second schema ceilings;
+the resolver additionally enforces description byte length. See the
+[JSON binding guide](celln-json-harness.md) for current execution scope.
 The current closed profile requires workspace none and refuses nonempty egress
 or immutable-input requirements; those need delivery support before expansion.
 No requested unsupported authority is silently translated into an execution.

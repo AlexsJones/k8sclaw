@@ -52,6 +52,39 @@ func TestEmptySelectionGrantsNothing(t *testing.T) {
 	}
 }
 
+func TestJSONToolABIChangesIdentityAndRetainsEveryGrantLayer(t *testing.T) {
+	r := fixture(t)
+	r.Catalogue[0].Spec.InvocationABI = "celln.json-stdio/v1"
+	if _, err := ResolveTools(r); err == nil {
+		t.Fatal("argv approval was reused for JSON ABI")
+	}
+	id, err := Identify(r.Catalogue[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, layer := range [][]Grant{r.Selection, r.Operator, r.Runtime, r.Agent} {
+		layer[0].Tool = id
+	}
+	if _, err := ResolveTools(r); err != nil {
+		t.Fatal(err)
+	}
+	r.Agent = nil
+	if _, err := ResolveTools(r); err == nil {
+		t.Fatal("JSON ABI bypassed Agent grant")
+	}
+	for _, mutate := range []func(*api.CellnToolSpec){
+		func(s *api.CellnToolSpec) { s.Description = strings.Repeat("x", 513) },
+		func(s *api.CellnToolSpec) { s.Limits.TimeoutMillis = 30001 },
+		func(s *api.CellnToolSpec) { s.InvocationABI = "unknown" },
+	} {
+		tool := r.Catalogue[0].DeepCopy()
+		mutate(&tool.Spec)
+		if _, err := Identify(*tool); err == nil {
+			t.Fatal("unsupported JSON metadata accepted")
+		}
+	}
+}
+
 func TestRefusesUnsafeOrStaleResolution(t *testing.T) {
 	cases := map[string]func(*ToolRequest){
 		"missing operator":      func(r *ToolRequest) { r.Operator = nil },

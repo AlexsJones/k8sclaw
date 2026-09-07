@@ -1,14 +1,14 @@
 package v1alpha1
 
-// AgentRuntimeCellnProfile describes immutable artifacts for the experimental
-// reference adapter. These declarations do not attest to signatures, hardware,
+// AgentRuntimeCellnProfile describes immutable artifacts for explicitly
+// versioned native adapters. These declarations do not attest to signatures, hardware,
 // conformance or node readiness. They are not consumed by dispatch yet.
-// A general Harness adapter requires a separately implemented contract version.
+// +kubebuilder:validation:XValidation:rule="self.contractVersion == 'celln.json-tools/v1' ? has(self.json) : !has(self.json)",message="JSON loop ceilings must match the selected adapter contract"
 type AgentRuntimeCellnProfile struct {
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=64
 	Revision string `json:"revision"`
-	// +kubebuilder:validation:Enum=celln.reference-functions/v1
+	// +kubebuilder:validation:Enum=celln.reference-functions/v1;celln.json-tools/v1
 	ContractVersion string            `json:"contractVersion"`
 	Executable      CellnImmutableRef `json:"executable"`
 	Closure         CellnImmutableRef `json:"closure"`
@@ -30,11 +30,13 @@ type AgentRuntimeCellnProfile struct {
 	// +kubebuilder:validation:MaxItems=0
 	RuntimeData []CellnImmutableRef     `json:"runtimeData,omitempty"`
 	Limits      AgentRuntimeCellnLimits `json:"limits"`
+	// +optional
+	JSON *CellnHarnessJSONLimits `json:"json,omitempty"`
 }
 
 // AgentRuntimeCellnLimits are ceilings, never Agent grants or provider policy.
-// Model mediation and the two reference functions retain their existing
-// dispatch contract; this profile cannot add protocols, tools or destinations.
+// Model mediation and tools retain their selected adapter's dispatch contract;
+// this profile cannot add protocols, tools or destinations.
 type AgentRuntimeCellnLimits struct {
 	// +kubebuilder:validation:Minimum=1
 	// +kubebuilder:validation:Maximum=300000

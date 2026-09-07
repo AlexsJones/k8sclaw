@@ -115,6 +115,13 @@ type executionHarness struct {
 	Model           string                                `json:"model"`
 	Task            string                                `json:"task"`
 	BorrowedTools   []sympoziumv1alpha1.CellnBorrowedTool `json:"borrowedTools"`
+	JSON            *executionHarnessJSON                 `json:"json,omitempty"`
+}
+
+type executionHarnessJSON struct {
+	System   string `json:"system"`
+	MaxTurns int64  `json:"maxTurns"`
+	MaxCalls int64  `json:"maxCalls"`
 }
 
 type executionWorkload struct {
@@ -235,6 +242,17 @@ func (r *AgentRunReconciler) reconcilePendingCelln(
 			}
 			request.APIVersion = "celln.dev/v1alpha2"
 			request.Harness = &executionHarness{ContractVersion: pinned.Harness.ContractVersion, ModelGrant: pinned.Harness.ModelGrant, Model: agentRun.Spec.Model.Model, Task: task, BorrowedTools: pinned.Harness.BorrowedTools}
+			if pinned.Harness.ContractVersion == "celln.json-tools/v1" {
+				request.APIVersion = "celln.dev/v1alpha3"
+				if request.Harness.BorrowedTools == nil {
+					request.Harness.BorrowedTools = []sympoziumv1alpha1.CellnBorrowedTool{}
+				}
+				if j := pinned.Harness.JSON; j != nil {
+					request.Harness.JSON = &executionHarnessJSON{System: agentRun.Spec.SystemPrompt, MaxTurns: j.MaxTurns, MaxCalls: j.MaxCalls}
+				}
+			} else if pinned.Harness.JSON != nil || agentRun.Spec.SystemPrompt != "" {
+				return ctrl.Result{}, r.failRun(ctx, agentRun, "Celln: reference Harness cannot consume JSON options or a system prompt")
+			}
 		}
 	}
 	if agentRun.Status.CellnRequest != "" {

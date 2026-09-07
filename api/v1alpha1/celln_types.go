@@ -1,9 +1,9 @@
 package v1alpha1
 
-// CellnExecutionSpec is the immutable-source portion of celln.dev/v1alpha1.
+// CellnExecutionSpec names immutable sources for explicit native Celln requests.
 // Invocation aliases are lookups into Tools, never host filesystem paths.
 type CellnExecutionSpec struct {
-	// Harness opts into the experimental sealed reference runtime contract.
+	// Harness opts into an explicitly versioned sealed native runtime contract.
 	// This is not the container-replacing task.mode=harness adapter.
 	// +optional
 	Harness *CellnHarnessSpec `json:"harness,omitempty"`
@@ -23,14 +23,49 @@ type CellnExecutionSpec struct {
 
 // CellnHarnessSpec names operator-approved model authority and lent artifacts.
 // Task and model are taken from AgentRun.spec and frozen at first dispatch.
-// No credential path or secret value crosses this API.
+// JSON persona comes from AgentRun.spec.systemPrompt. No credential path or
+// secret value crosses this API.
+// +kubebuilder:validation:XValidation:rule="self.contractVersion == 'celln.json-tools/v1' ? has(self.json) && self.borrowedTools.all(t, has(t.jsonStdio)) : !has(self.json) && size(self.borrowedTools) == 2 && self.borrowedTools.all(t, !has(t.jsonStdio))",message="JSON and reference Harness fields must match the selected contract"
 type CellnHarnessSpec struct {
-	// +kubebuilder:validation:Enum=celln.reference-functions/v1
+	// +kubebuilder:validation:Enum=celln.reference-functions/v1;celln.json-tools/v1
 	ContractVersion string            `json:"contractVersion"`
 	ModelGrant      CellnImmutableRef `json:"modelGrant"`
-	// +kubebuilder:validation:MinItems=2
-	// +kubebuilder:validation:MaxItems=2
+	// +kubebuilder:validation:MinItems=0
+	// +kubebuilder:validation:MaxItems=16
 	BorrowedTools []CellnBorrowedTool `json:"borrowedTools"`
+	// +optional
+	JSON *CellnHarnessJSONLimits `json:"json,omitempty"`
+}
+
+// CellnHarnessJSONLimits are explicit bounded loop ceilings, not model grants.
+type CellnHarnessJSONLimits struct {
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=6
+	MaxTurns int64 `json:"maxTurns"`
+	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:validation:Maximum=16
+	MaxCalls int64 `json:"maxCalls"`
+}
+
+// CellnJSONToolIO names immutable schema data and the separate JSON stdio ABI.
+type CellnJSONToolIO struct {
+	// +kubebuilder:validation:Enum=celln.json-stdio/v1
+	ABI string `json:"abi"`
+	// +kubebuilder:validation:Pattern="^blake3:[0-9a-f]{64}$"
+	// +kubebuilder:validation:MaxLength=71
+	InputSchema string `json:"inputSchema"`
+	// +kubebuilder:validation:Pattern="^blake3:[0-9a-f]{64}$"
+	// +kubebuilder:validation:MaxLength=71
+	OutputSchema string `json:"outputSchema"`
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=65536
+	InputBytes int64 `json:"inputBytes"`
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=65536
+	OutputBytes int64 `json:"outputBytes"`
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=30000
+	TimeoutMs int64 `json:"timeoutMs"`
 }
 
 type CellnBorrowedTool struct {
@@ -44,6 +79,8 @@ type CellnBorrowedTool struct {
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=512
 	Description string `json:"description"`
+	// +optional
+	JSONStdio *CellnJSONToolIO `json:"jsonStdio,omitempty"`
 }
 
 type CellnImmutableRef struct {
