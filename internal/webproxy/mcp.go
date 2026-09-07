@@ -255,6 +255,7 @@ func (p *Proxy) executeAgentTask(ctx context.Context, task string, session *mcpS
 			Timeout:          inst.Spec.Agents.Default.ParseRunTimeout(),
 			ImagePullSecrets: inst.Spec.ImagePullSecrets,
 			Lifecycle:        inst.Spec.Agents.Default.Lifecycle,
+			Tolerations:      inst.Spec.Agents.Default.Tolerations,
 			Env:              inst.Spec.Agents.Default.Env,
 		},
 	}

@@ -167,10 +167,11 @@ func (s *Spawner) Spawn(ctx context.Context, req SpawnRequest) (*SpawnResult, er
 		},
 	}
 
-	// Look up the instance to propagate lifecycle hooks, env, and tool policy to sub-agents.
+	// Look up the instance to propagate lifecycle hooks, tolerations, env, and tool policy to sub-agents.
 	var inst sympoziumv1alpha1.Agent
 	if err := s.Client.Get(ctx, client.ObjectKey{Namespace: req.Namespace, Name: req.InstanceName}, &inst); err == nil {
 		agentRun.Spec.Lifecycle = inst.Spec.Agents.Default.Lifecycle
+		agentRun.Spec.Tolerations = inst.Spec.Agents.Default.Tolerations
 		agentRun.Spec.Env = inst.Spec.Agents.Default.Env
 		if agentRun.Spec.Timeout == nil {
 			agentRun.Spec.Timeout = inst.Spec.Agents.Default.ParseRunTimeout()

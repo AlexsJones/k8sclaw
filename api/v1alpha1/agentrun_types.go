@@ -151,6 +151,12 @@ type AgentRunSpec struct {
 	// +kubebuilder:default=true
 	UseContext *bool `json:"useContext,omitempty"`
 
+	// Tolerations allow the agent pod to schedule onto tainted nodes.
+	// Typically inherited from Agent.Spec.Agents.Default.Tolerations by
+	// the controller, but may also be set directly on an AgentRun.
+	// +optional
+	Tolerations []corev1.Toleration `json:"tolerations,omitempty"`
+
 	// Volumes are additional pod volumes to attach to the agent pod.
 	// Typically populated from Agent.Spec.Volumes by the controller,
 	// but may also be set directly on an AgentRun. Useful for mounting

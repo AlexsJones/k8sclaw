@@ -1459,6 +1459,7 @@ func (r *AgentRunReconciler) triggerSequentialSuccessors(ctx context.Context, lo
 				SystemPrompt:     memorySystemPrompt(&targetInst),
 				Volumes:          targetInst.Spec.Volumes,
 				VolumeMounts:     targetInst.Spec.VolumeMounts,
+				Tolerations:      targetInst.Spec.Agents.Default.Tolerations,
 				Env:              targetInst.Spec.Agents.Default.Env,
 				Timeout:          sequentialRunTimeout(rel, &targetInst),
 				ToolPolicy:       toolpolicy.ForAgent(ctx, r.Client, &targetInst),
@@ -2196,6 +2197,7 @@ func (r *AgentRunReconciler) reconcilePendingServer(ctx context.Context, log log
 					AutomountServiceAccountToken: boolPtr(false),
 					ImagePullSecrets:             agentRun.Spec.ImagePullSecrets,
 					NodeSelector:                 agentRun.Spec.Model.NodeSelector,
+					Tolerations:                  agentRun.Spec.Tolerations,
 					Containers: []corev1.Container{
 						{
 							Name:            "web-proxy",
@@ -2803,6 +2805,7 @@ func (r *AgentRunReconciler) buildAgentPodTemplate(
 			HostPID:                      hostPID,
 			DNSPolicy:                    dnsPolicy,
 			NodeSelector:                 agentRun.Spec.Model.NodeSelector,
+			Tolerations:                  agentRun.Spec.Tolerations,
 			SecurityContext: &corev1.PodSecurityContext{
 				RunAsNonRoot:   &runAsNonRoot,
 				RunAsUser:      &runAsUser,

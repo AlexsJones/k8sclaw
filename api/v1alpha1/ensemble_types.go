@@ -270,6 +270,12 @@ type AgentConfigSpec struct {
 	// +optional
 	Lifecycle *LifecycleHooks `json:"lifecycle,omitempty"`
 
+	// Tolerations allow agent pods spawned for this agent configuration
+	// to schedule onto tainted nodes. Propagated to the generated
+	// Agent's AgentConfig.Tolerations.
+	// +optional
+	Tolerations []corev1.Toleration `json:"tolerations,omitempty"`
+
 	// ChannelAccessControl maps channel types to per-agent-configuration access control
 	// overrides. When set, these take priority over ensemble-level
 	// ChannelAccessControl for this agent configuration. Use AllowedChats with Discord

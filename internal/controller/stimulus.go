@@ -81,6 +81,7 @@ func BuildStimulusRun(
 			ImagePullSecrets: targetInst.Spec.ImagePullSecrets,
 			Volumes:          targetInst.Spec.Volumes,
 			VolumeMounts:     targetInst.Spec.VolumeMounts,
+			Tolerations:      targetInst.Spec.Agents.Default.Tolerations,
 			Env:              targetInst.Spec.Agents.Default.Env,
 			Timeout:          targetInst.Spec.Agents.Default.ParseRunTimeout(),
 			ToolPolicy:       toolpolicy.ForAgent(ctx, c, targetInst),

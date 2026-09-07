@@ -8710,6 +8710,7 @@ func tuiCreateRun(ns, instance, task string) (string, error) {
 			Skills:           inst.Spec.Skills,
 			Timeout:          &metav1.Duration{Duration: 10 * time.Minute},
 			ImagePullSecrets: inst.Spec.ImagePullSecrets,
+			Tolerations:      inst.Spec.Agents.Default.Tolerations,
 		},
 	}
 	if err := k8sClient.Create(ctx, run); err != nil {

@@ -378,6 +378,9 @@ func convergenceFixture() (*sympoziumv1alpha1.Ensemble, *sympoziumv1alpha1.Agent
 			},
 		},
 		Workspace: &sympoziumv1alpha1.WorkspaceSpec{PerSessionPVC: true, Size: "2Gi"},
+		Tolerations: []corev1.Toleration{{
+			Key: "dedicated", Operator: corev1.TolerationOpEqual, Value: "agents", Effect: corev1.TaintEffectNoSchedule,
+		}},
 	}
 	return pack, persona
 }

@@ -437,6 +437,13 @@ type AgentConfig struct {
 	// +optional
 	NodeSelector map[string]string `json:"nodeSelector,omitempty"`
 
+	// Tolerations allow agent pods to schedule onto tainted nodes.
+	// Propagated to AgentRunSpec.Tolerations when runs are created.
+	// Use together with NodeSelector to pin agents to dedicated node
+	// pools (e.g. a GPU pool tainted with `nvidia.com/gpu=present:NoSchedule`).
+	// +optional
+	Tolerations []corev1.Toleration `json:"tolerations,omitempty"`
+
 	// Lifecycle defines pre and post run hooks for agent runs.
 	// Propagated to AgentRunSpec.Lifecycle when runs are created.
 	// +optional

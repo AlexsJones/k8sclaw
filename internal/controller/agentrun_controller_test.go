@@ -1204,6 +1204,47 @@ func TestBuildJob_NoNodeSelector(t *testing.T) {
 	}
 }
 
+// ── Tolerations tests ───────────────────────────────────────────────────────
+
+func TestBuildJob_Tolerations(t *testing.T) {
+	r := &AgentRunReconciler{}
+	run := newTestRun()
+	run.Spec.Tolerations = []corev1.Toleration{
+		{Key: "nvidia.com/gpu", Operator: corev1.TolerationOpEqual, Value: "present", Effect: corev1.TaintEffectNoSchedule},
+		{Key: "dedicated", Operator: corev1.TolerationOpExists, Effect: corev1.TaintEffectNoExecute},
+	}
+
+	job, err := r.buildJob(context.Background(), run, false, nil, nil, nil, nil)
+	if err != nil {
+		t.Fatalf("buildJob: %v", err)
+	}
+	tols := job.Spec.Template.Spec.Tolerations
+
+	if len(tols) != 2 {
+		t.Fatalf("Tolerations len = %d, want 2", len(tols))
+	}
+	if tols[0].Key != "nvidia.com/gpu" || tols[0].Value != "present" {
+		t.Errorf("Tolerations[0] = %+v, want nvidia.com/gpu=present", tols[0])
+	}
+	if tols[1].Key != "dedicated" || tols[1].Operator != corev1.TolerationOpExists {
+		t.Errorf("Tolerations[1] = %+v, want dedicated:Exists", tols[1])
+	}
+}
+
+func TestBuildJob_NoTolerations(t *testing.T) {
+	r := &AgentRunReconciler{}
+	run := newTestRun()
+	// No Tolerations set.
+
+	job, err := r.buildJob(context.Background(), run, false, nil, nil, nil, nil)
+	if err != nil {
+		t.Fatalf("buildJob: %v", err)
+	}
+	if tols := job.Spec.Template.Spec.Tolerations; tols != nil {
+		t.Errorf("Tolerations should be nil when not set, got %v", tols)
+	}
+}
+
 // ── Lifecycle hook tests ────────────────────────────────────────────────────
 
 // newTestRunWithLifecycle returns a test AgentRun with lifecycle hooks configured.
