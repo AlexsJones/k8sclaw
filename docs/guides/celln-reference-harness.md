@@ -98,6 +98,10 @@ have offline regression coverage.
 
 ## Not complete yet
 
+The proposed [runtime placement and approved-tool contract](../design/celln-runtime-tool-contract.md)
+defines the next catalogue/profile and conversational lifecycle work. It does
+not make those proposed fields/resources available in the current API.
+
 The controller and dispatcher in this test ran on the host, not as the deployed
 router/DaemonSet stack. This is not a multi-node failover or production Helm
 acceptance result. Celln's attempt tombstone prevents replay only within the
