@@ -4,7 +4,10 @@ import (
 	"fmt"
 	api "github.com/sympozium-ai/sympozium/api/v1alpha1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"regexp"
 )
+
+var jsonToolName = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
 
 // CompositionPlan is the exact celln closure compose input wire contract.
 // Its source identities are descriptor-byte BLAKE3 hashes, not metadata hashes.
@@ -52,7 +55,7 @@ func Prepare(snapshot SelectionSnapshot, imageBytes int64) (*PreparedSelection, 
 	sources := map[string]bool{p.Closure.Hash: true}
 	for _, tool := range snapshot.Tools {
 		s := tool.Spec
-		if tool.Identity.Namespace != snapshot.Agent.Namespace || tool.Identity.Name == "" || names[tool.Identity.Name] || paths[s.EntryPoint] || sources[s.Closure.Hash] || s.InvocationABI != "celln.json-stdio/v1" || s.Lane != "tool" {
+		if tool.Identity.Namespace != snapshot.Agent.Namespace || !jsonToolName.MatchString(tool.Identity.Name) || names[tool.Identity.Name] || paths[s.EntryPoint] || sources[s.Closure.Hash] || s.InvocationABI != "celln.json-stdio/v1" || s.Lane != "tool" {
 			return nil, fmt.Errorf("unsupported or colliding selected tool")
 		}
 		// Recheck metadata identity so a mutated copy cannot substitute artifact

@@ -3,6 +3,7 @@ package cellnauthority
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -45,7 +46,7 @@ func TestPrepareBindsCompositorAndJSONToolWire(t *testing.T) {
 }
 
 func TestPrepareRefusesMutationAndUnsupportedBounds(t *testing.T) {
-	for _, mode := range []string{"runtime-mutation", "tool-mutation", "grant-expansion", "duplicate", "small-image", "cross-namespace"} {
+	for _, mode := range []string{"runtime-mutation", "tool-mutation", "grant-expansion", "duplicate", "small-image", "cross-namespace", "dotted-name", "long-name"} {
 		t.Run(mode, func(t *testing.T) {
 			l, _, agent, selection := loaderFixture(t)
 			snapshot, err := l.Resolve(context.Background(), agent, selection)
@@ -54,6 +55,10 @@ func TestPrepareRefusesMutationAndUnsupportedBounds(t *testing.T) {
 			}
 			image := int64(33554432)
 			switch mode {
+			case "dotted-name":
+				snapshot.Tools[0].Identity.Name = "tool.example"
+			case "long-name":
+				snapshot.Tools[0].Identity.Name = strings.Repeat("x", 65)
 			case "runtime-mutation":
 				snapshot.RuntimeSpec.Celln.EntryPoint = "/replacement"
 			case "tool-mutation":
