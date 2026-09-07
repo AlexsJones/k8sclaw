@@ -105,6 +105,33 @@ distributed failover or recovery of a lost registry after a dispatcher crash.
 
 ## Enabling / Disabling Celln
 
+### M0 rollout warning and network boundary
+
+The chart's `celln-router-ingress` NetworkPolicy selects router pods in
+`celln-system` and permits only TCP 8788 from controller pods **in the configured
+control-plane namespace**. The namespace and pod selectors are intersected;
+copying a controller label in another namespace does not grant access. This
+policy remains enabled with Celln even if the general `networkPolicies.enabled`
+option is false. It requires a NetworkPolicy-enforcing CNI and is not an
+authentication mechanism. Host-network traffic and administrator-added additive
+policies require separate operator review.
+
+The API server is intentionally not granted execution access. Its current
+TCP-only capability probe may report unavailable under this restriction;
+authenticated, least-privilege readiness is tracked in M0 rather than granting
+the API server access to an otherwise unauthenticated execution endpoint.
+
+This policy alone does not resolve [#331](https://github.com/sympozium-ai/sympozium/issues/331).
+The companion Celln router change requires `--client-token-file` for inbound
+authentication, separate from the outbound dispatcher's `--token-file`, and
+adds cancellation forwarding. The chart's existing image versions, router
+command, token distribution and TLS path still need a coordinated M0 update.
+Do not replace the host binary independently: the old router command cannot
+start the new fail-closed CLI. Do not treat the default installation as a proven
+multi-tenant execution path or work around missing TLS by silently enabling
+insecure HTTP. See [epic #426](https://github.com/sympozium-ai/sympozium/issues/426)
+for remaining deployment, replica ownership and two-node acceptance work.
+
 ```bash
 sympozium install --enable-hermetic-workloads
 # or: make install ENABLE_HERMETIC_WORKLOADS=true
