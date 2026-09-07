@@ -51,5 +51,6 @@ func newCellnToolCmd() *cobra.Command {
 	cmd.AddCommand(newCellnSelectionComposeCmd())
 	cmd.AddCommand(newCellnSelectionIssueCmd())
 	cmd.AddCommand(newCellnWithdrawGrantCmd())
+	cmd.AddCommand(newCellnRecoverGrantsCmd())
 	return cmd
 }

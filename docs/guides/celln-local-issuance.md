@@ -67,12 +67,41 @@ successful invocation requires explicit withdrawal, or the future controller
 reconciler. A failed initial approval check cannot discover and withdraw all
 profiles from older invocations. Keep saved issuance identities for recovery.
 
-Process death between profile publication and final validation can leave an
-orphan profile/grant. The OS lock releases on exit, but the profile is not
-automatically deleted. Operators must audit retained profiles against current
-approval and withdraw stale profiles before dispatch/retry. Do not expose this
-local operator primitive as a tenant-facing or unattended production service
-until durable reconciliation/expiry and crash recovery are implemented.
+Before profile publication, issuance durably writes a `pending` record under
+`POLICY_ROOT/sympozium-issuer-journal`. After all final checks, it atomically
+replaces that record with `issued`, including the frozen selection, candidate
+and full issued result, before returning success. Withdrawal first records
+`withdrawing`, then removes the exact profile and records `withdrawn`. Records
+are private, bounded to 1 MiB, fsynced and retained for reconciliation.
+
+If the process dies, the OS lock releases. Recovery withdraws exact profiles
+for `pending` or `withdrawing` records and durably marks them `withdrawn`; it
+never reissues a grant or executes a task. Every new local bridge issuance runs
+this recovery step under the lock first. It can also be invoked without a
+Kubernetes connection:
+
+```sh
+sympozium celln-tool recover-grants --policy-root /absolute/operator/host-root
+```
+
+Committed `issued` outcomes survive loss of stdout/the caller and can be read
+through `ReadIssuance` or the retained journal. They are history, not current
+permission: revalidate approvals and reconcile existing execution identity
+before dispatch/retry. Recovery does not delete grant/audit records, replay
+side effects, or withdraw every committed grant automatically.
+
+Recovery scans at most 1024 directory entries and refuses corrupt records,
+identity mismatches or a larger journal; operators must reconcile/archive
+history before exhausting that bound. Automatic retention is not implemented.
+Changed profile bytes are not removed, and any recovery error blocks new bridge
+issuance. Legacy profiles without journal records still require an explicit
+saved-report withdrawal or operator audit.
+
+While the bridge is down, an unfinished profile can remain effective until
+recovery runs; the host dispatcher does not consult this journal. Deployment
+startup/dispatch must be gated on recovery. Do not expose this local operator
+primitive as an unattended production service until controller reconciliation,
+ongoing approval withdrawal/expiry and startup recovery gates are integrated.
 
 A successful issuance does not prove that the serving process has a warm mote,
 that the requested Harness/tool behavior conforms functionally, or that a model
@@ -87,6 +116,11 @@ Portable race tests cover idempotent publication, concurrent-issuer refusal,
 failed issuer/report/binding checks, post-issuance approval/mapping/composition
 withdrawal, capacity-independent lock release, and refusal to delete unrelated
 profile bytes. These tests use fake Kubernetes and a mocked command runner.
+Abrupt child-process exits additionally prove recovery before host issuance,
+after host issuance, after durable commit and during withdrawal. They bypass
+all Go defers and verify retained audit data, committed outcomes, released
+locks and repeatable recovery. This is process-crash testing, not a filesystem
+power-loss or deployed-controller proof.
 
 The explicit real test uses the real compositor, signed runtime plus two tools,
 real Celln issuer and KVM member verification, then repeats issuance and proves
