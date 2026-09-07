@@ -47,5 +47,6 @@ func newCellnToolCmd() *cobra.Command {
 		_ = approve.MarkFlagRequired(flag)
 	}
 	cmd.AddCommand(approve)
+	cmd.AddCommand(newCellnSelectionPlanCmd())
 	return cmd
 }
