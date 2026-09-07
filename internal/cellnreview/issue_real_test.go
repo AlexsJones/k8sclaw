@@ -61,8 +61,16 @@ func proveCatalogueIssuance(t *testing.T, ctx context.Context, l cellnauthority.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := Withdraw(o.PolicyRoot, *issued); err != nil {
+	observed, err := ReconcileIssued(ctx, o.PolicyRoot, issued.Profile, issued.ProfileSHA256, ml)
+	if err != nil || observed.State != "issued" {
+		t.Fatalf("current approval refused: %+v %v", observed, err)
+	}
+	if err := c.Delete(ctx, cm); err != nil {
 		t.Fatal(err)
+	}
+	observed, err = ReconcileIssued(ctx, o.PolicyRoot, issued.Profile, issued.ProfileSHA256, ml)
+	if err != nil || observed.State != "withdrawn" || observed.Reason != "approval-changed-or-unavailable" {
+		t.Fatalf("withdrawn approval retained authority: %+v %v", observed, err)
 	}
 	requestFile := filepath.Join(o.PolicyRoot, "withdrawn-request.json")
 	if err := os.WriteFile(requestFile, issued.Request, 0600); err != nil {
@@ -76,5 +84,5 @@ func proveCatalogueIssuance(t *testing.T, ctx context.Context, l cellnauthority.
 		t.Fatal("withdrawal changed retained grant bytes")
 	}
 	assertNoProfiles(t, o.PolicyRoot)
-	t.Logf("PASS real catalogue composition -> independently approved host profile -> real-KVM sealed verification -> identical v3 issuance -> withdrawal refusal; grant=%s; Kubernetes=fake, modelCalls=0", issued.Grant)
+	t.Logf("PASS real catalogue composition -> independently approved host profile -> real-KVM sealed verification -> identical v3 issuance -> approval deletion -> reconciliation -> host withdrawal refusal; grant=%s; Kubernetes=fake, modelCalls=0", issued.Grant)
 }
