@@ -178,6 +178,14 @@ type EnsembleSpec struct {
 	// stamped out by this ensemble and applied to the agent container.
 	// +optional
 	VolumeMounts []corev1.VolumeMount `json:"volumeMounts,omitempty"`
+
+	// Workspace configures the /workspace volume policy applied to every
+	// Agent stamped out by this ensemble. Useful for opting an entire
+	// team of harness-backed agents (codex, claude-code, etc.) into
+	// per-session PVCs in one place. Per-persona Workspace overrides in
+	// AgentConfigSpec.Workspace take precedence.
+	// +optional
+	Workspace *WorkspaceSpec `json:"workspace,omitempty"`
 }
 
 // AgentConfigSpec defines a single agent configuration within an Ensemble.
@@ -313,6 +321,12 @@ type AgentConfigSpec struct {
 	// When empty, the provider-appropriate default applies.
 	// +optional
 	RunTimeout string `json:"runTimeout,omitempty"`
+
+	// Workspace overrides the ensemble-level Workspace policy for this
+	// agent configuration. When non-nil, replaces (not merges with) the
+	// ensemble-level value entirely.
+	// +optional
+	Workspace *WorkspaceSpec `json:"workspace,omitempty"`
 }
 
 // AgentConfigWebEndpoint configures the web endpoint for an agent configuration.

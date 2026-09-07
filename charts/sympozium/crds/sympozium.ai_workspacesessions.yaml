@@ -1,0 +1,219 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.17.2
+  name: workspacesessions.sympozium.ai
+spec:
+  group: sympozium.ai
+  names:
+    kind: WorkspaceSession
+    listKind: WorkspaceSessionList
+    plural: workspacesessions
+    shortNames:
+    - ws
+    singular: workspacesession
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.agentRef
+      name: Agent
+      type: string
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .status.pvcName
+      name: PVC
+      type: string
+    - jsonPath: .status.lastTouchedAt
+      name: LastTouched
+      type: date
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          WorkspaceSession is a persistent /workspace for one (Agent, sessionKey)
+          pair. It owns the backing PVC and is owned by its parent Agent so that
+          deleting the Agent cascades to all of its workspaces.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: |-
+              WorkspaceSessionSpec defines the desired state of a WorkspaceSession.
+              One WorkspaceSession represents one persistent /workspace for one
+              (Agent, sessionKey) pair. It owns the underlying PVC, so deleting the
+              WorkspaceSession (or its parent Agent) cascades to the PVC.
+            properties:
+              agentRef:
+                description: AgentRef is the name of the Agent that owns this workspace.
+                minLength: 1
+                type: string
+              idleTTL:
+                description: |-
+                  IdleTTL is the duration this session may sit idle (no live
+                  AgentRun referencing it) before the sweeper reclaims it. When
+                  nil, the controller's default applies.
+                type: string
+              sessionKey:
+                description: |-
+                  SessionKey is the free-form session identifier this workspace
+                  belongs to. Derived K8s identifiers (PVC name, labels) use a
+                  deterministic hash of this value.
+                minLength: 1
+                type: string
+              size:
+                description: Size requests storage capacity for the PVC (e.g. "1Gi").
+                pattern: ^[0-9]+([.][0-9]+)?(([KMGTPE]i?)|[a-zA-Z]*)?$
+                type: string
+              storageClassName:
+                description: |-
+                  StorageClassName selects the StorageClass for the PVC. When empty,
+                  the cluster default is used.
+                type: string
+            required:
+            - agentRef
+            - sessionKey
+            - size
+            type: object
+          status:
+            description: WorkspaceSessionStatus reports the observed state of a WorkspaceSession.
+            properties:
+              conditions:
+                description: Conditions represent the latest available observations.
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+              lastRunName:
+                description: |-
+                  LastRunName is the name of the most recent AgentRun that
+                  referenced this workspace.
+                type: string
+              lastTouchedAt:
+                description: |-
+                  LastTouchedAt records when an AgentRun last claimed this session.
+                  The sweeper compares this against IdleTTL.
+                format: date-time
+                type: string
+              phase:
+                description: Phase is the current lifecycle phase.
+                enum:
+                - Pending
+                - Bound
+                - Recreating
+                - Releasing
+                - Failed
+                type: string
+              pvcGeneration:
+                description: |-
+                  PVCGeneration is incremented each time the controller recreates
+                  the PVC (e.g. after a storage-class change). The current PVC name
+                  embeds this value.
+                format: int32
+                type: integer
+              pvcName:
+                description: |-
+                  PVCName is the name of the PersistentVolumeClaim backing this
+                  workspace. The controller-managed name has the form
+                  "ws-<agent>-<hash>-g<generation>".
+                type: string
+              recreatedInfo:
+                description: |-
+                  RecreatedInfo describes the last recreation event, if any.
+                  Wrapper images and the agent-runner surface this to the user when
+                  a previously-persistent workspace has been blown away (e.g. PVC
+                  lost, storage-class migration).
+                properties:
+                  at:
+                    description: At is when the recreation happened.
+                    format: date-time
+                    type: string
+                  message:
+                    description: Message is an optional human-readable description.
+                    type: string
+                  reason:
+                    description: |-
+                      Reason is a short machine-readable code (e.g. "StorageClassChanged",
+                      "PVCLost", "Manual").
+                    type: string
+                required:
+                - at
+                - reason
+                type: object
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

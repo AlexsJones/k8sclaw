@@ -216,6 +216,15 @@ func main() {
 		os.Exit(1)
 	}
 
+	if err := (&controller.WorkspaceSessionReconciler{
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+		Log:    ctrl.Log.WithName("controllers").WithName("WorkspaceSession"),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "WorkspaceSession")
+		os.Exit(1)
+	}
+
 	ensembleReconciler := &controller.EnsembleReconciler{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
