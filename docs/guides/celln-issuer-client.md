@@ -109,6 +109,24 @@ test exercises durable preparation, actual TLS/host issuance, saved-result resum
 and managed approval withdrawal with fake Kubernetes metadata. Neither test proves
 the final deployed catalogue-backed execution journey.
 
+### Hand-off to the dispatch journal
+
+`FreezeIssuedDispatch(ctx, writer, uncachedReader, runKey, loader)` validates a
+committed issuance against current approval and saves its exact request bytes and
+catalogue-derived execution ID in `status.cellnRequest`/`status.cellnActionId`.
+It requires a pending, live Celln run and has a 15-second ceiling. Prepared-only
+issuance refuses. Conflicting or partially populated dispatch state refuses;
+identical retries reuse the saved outcome without contacting the issuer.
+
+A failed or ambiguous status commit returns no dispatch bytes. Retrying after a
+lost commit acknowledgement verifies and returns the identical saved request.
+The helper does not set Running/StartedAt, choose a route, prewarm a process or
+submit an execution. The legacy dispatch guard remains in force until a dedicated
+catalogue bridge consumes this journal. Host admission and expiry must still be
+checked on submission; a successful hand-off is not a readiness or live grant
+guarantee. In particular, do not replace the catalogue-derived ID with the legacy
+name/UID ID, or remarshal the request through a different wire representation.
+
 ## Evidence
 
 Tests cover verified TLS, token rotation, untrusted certificates, changed
