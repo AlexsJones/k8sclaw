@@ -176,9 +176,10 @@ process crash, host expiry remains the admission bound; clean shutdown closes th
 gate and cancels in-flight issuance but does not promise immediate fleet/live-cell
 revocation of already issued authority.
 
-This lifecycle component is tested in-process but is **not yet registered in the
-shipped controller or exposed as a host RPC service**. The next integration must
-start it on the correct host, route catalogue provisioning through its gate,
+The [TLS host issuer service](celln-issuer-service.md) now exposes this lifecycle
+through `celln-tool serve-issuer`, but it is **not yet wired into the AgentRun
+controller or Helm**. The next integration must configure it on the correct host,
+route catalogue provisioning through its gate,
 prewarm that serving node and retain dispatch/replay identity. Existing CLI
 operator commands remain explicit local operations, not a bypass-safe deployment
 of the final automated user journey.
