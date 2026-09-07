@@ -1,6 +1,7 @@
-// Package cellnauthority resolves explicit tool selections without I/O. It does
-// not verify signatures, authorize callers, certify node readiness or dispatch.
-// Callers must obtain each grant layer from its independently trusted source.
+// Package cellnauthority intersects explicit tool selections. ResolveTools is
+// pure; Loader reads live objects and configured grant sources from Kubernetes.
+// Neither verifies signatures, certifies readiness, nor dispatches. Callers must
+// independently protect grant sources and authenticate selection ownership.
 package cellnauthority
 
 import (

@@ -1,0 +1,26 @@
+{
+  "status": "passed",
+  "scope": "Sympozium operator composition wrapper with real signed artifacts and Celln binary; fake Kubernetes client",
+  "sympoziumBase": "0695de5",
+  "sympoziumTestChangesUncommittedAtRun": true,
+  "cellnBase": "1f294a5a3f9a0cc7a8ff22db6693bafb144dc162",
+  "cellnFixtureChangesUncommittedAtRun": true,
+  "test": "TestComposeRealCellnArtifacts",
+  "runtimeExecutable": "blake3:e0b47f4d4473dabec0a759f5915bf7b85f3c146a08d504ab6104f9b95ff8fa47",
+  "sourceClosures": [
+    "blake3:0e3756714e0f22d9c3766ba70bf530698463be9fe37d216710cc673719798b2c",
+    "blake3:560217f05d95a421a8dae6654f97fb100774618621a461f9691f6bc2dc5e4e76",
+    "blake3:3bf63128b532805074426b837313485b56471713afe1b920dc7ffa870fbbf037"
+  ],
+  "composedClosure": "blake3:bb6d3e9159230e4809ae46d3c1b9cdf10704daf14473ee5b0ac39c01f43ec947",
+  "composedToolfs": "blake3:787c3c3ad2e7287520ce678c980cc5b95c4c16fff11d833eb88090cb446aacf7",
+  "imageBytes": 33554432,
+  "selectedTools": ["uppercase", "length"],
+  "checks": ["source publisher/executable/schema verification", "real compositor invocation", "local composed filesystem byte verification", "source revocation invalidates composed descriptor"],
+  "modelCalls": 0,
+  "kvmExecuted": false,
+  "liveKubernetesAPITested": false,
+  "artifactReadiness": "not_checked",
+  "conformance": "not_checked",
+  "limits": ["public fixture signing seed, not production credentials", "mote profile deliberately unprepared", "source filesystem provenance uses the existing JSON proof package", "does not qualify catalogue-backed dispatch or the UI/YAML user journey", "ext2 byte reproducibility not claimed"]
+}

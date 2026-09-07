@@ -1,0 +1,25 @@
+{
+  "status": "passed",
+  "test": "TestLiveCatalogueSelectionAndGrantIsolation",
+  "scope": "live isolated Kubernetes API, catalogue selection and grant-source RBAC; not composition or execution",
+  "context": "kind-celln-deployed",
+  "sympoziumBase": "03a4b22",
+  "testChangesUncommittedAtRun": true,
+  "selectedTools": ["uppercase", "length"],
+  "checks": [
+    "real Agent, AgentRuntime and tool UIDs/generations/full-spec identities",
+    "three live grant sources bind the selected subjects",
+    "ordered plan contains runtime plus two signed source identities",
+    "tenant with own-namespace ConfigMap write permission cannot update operator grant",
+    "operator grant deletion refuses selection despite tenant-owned lookalike"
+  ],
+  "testNamespaces": ["celln-selection-tenant-b594j", "celln-selection-operator-tkdj5"],
+  "testNamespacesRemoved": true,
+  "agentRunsCreated": 0,
+  "modelCalls": 0,
+  "kvmExecuted": false,
+  "controllersPaused": false,
+  "frameworkTouched": false,
+  "artifactReadiness": "not_checked",
+  "conformance": "not_checked"
+}

@@ -140,6 +140,7 @@ type closureReport struct {
 	PolicyHash          string `json:"policyHash"`
 	Publisher           string `json:"publisher"`
 	EntryPoint          string `json:"entryPoint"`
+	ClosureEntryPoint   string `json:"closureEntryPoint"`
 	Executable          string `json:"executable"`
 	Toolfs              string `json:"toolfs"`
 	LocalToolfsVerified bool   `json:"localToolfsVerified"`
@@ -195,7 +196,11 @@ func (b *boundedOutput) Write(p []byte) (int, error) {
 }
 
 func run(ctx context.Context, binary string, args ...string) ([]byte, error) {
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	return runBudget(ctx, 30*time.Second, binary, args...)
+}
+
+func runBudget(ctx context.Context, budget time.Duration, binary string, args ...string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(ctx, budget)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, binary, args...)
 	// In particular, never pass provider credentials or tenant-selected env.

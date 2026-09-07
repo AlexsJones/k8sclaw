@@ -501,6 +501,12 @@ helm-lint: ## Lint the Helm charts
 	helm lint charts/sympozium/
 	helm lint charts/sympozium-crds/
 
+.PHONY: test-celln-selection-live
+test-celln-selection-live: ## Verify catalogue grants against the explicit isolated API (no runs/model calls)
+	@test -n "$(CELLN_COMPOSITION_KUBECONFIG)" || (echo 'CELLN_COMPOSITION_KUBECONFIG required' >&2; exit 1)
+	@test -n "$(CELLN_COMPOSITION_FIXTURE)" || (echo 'CELLN_COMPOSITION_FIXTURE required' >&2; exit 1)
+	go test -race ./internal/cellnreview -run TestLiveCatalogueSelectionAndGrantIsolation -count=1 -v
+
 ##@ Clean
 
 clean: ## Remove build artifacts
