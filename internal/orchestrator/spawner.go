@@ -19,6 +19,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	sympoziumv1alpha1 "github.com/sympozium-ai/sympozium/api/v1alpha1"
+	"github.com/sympozium-ai/sympozium/internal/sessionkey"
 	"github.com/sympozium-ai/sympozium/internal/toolpolicy"
 )
 
@@ -130,7 +131,7 @@ func (s *Spawner) Spawn(ctx context.Context, req SpawnRequest) (*SpawnResult, er
 	)
 
 	runName := buildSubagentRunName(req.ParentRunName, req.CurrentDepth+1, req.ChildIndex, req.BatchID)
-	sessionKey := fmt.Sprintf("%s:sub:%s", req.ParentSessionKey, runName)
+	sessionKey := sessionkey.ForSub(req.ParentSessionKey, runName)
 
 	span.SetAttributes(attribute.String("run.name", runName))
 	log.Info("Spawning sub-agent", "runName", runName)

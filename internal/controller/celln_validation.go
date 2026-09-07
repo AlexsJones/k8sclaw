@@ -16,12 +16,15 @@ var cellnInputName = regexp.MustCompile(`^[a-z0-9._-]{1,64}$`)
 
 func validateCellnRequest(req executionRequest) error {
 	bad := func() error { return fmt.Errorf("Celln: invalid immutable execution request or limits") }
-	if req.APIVersion != "celln.dev/v1alpha1" || req.ID == "" || req.Workload.ID == "" || req.Workload.Caller == "" ||
+	if !slices.Contains([]string{"celln.dev/v1alpha1", "celln.dev/v1alpha2"}, req.APIVersion) || req.ID == "" || req.Workload.ID == "" || req.Workload.Caller == "" ||
 		!req.Execution.RequireHardwareIsolation || !slices.Contains([]string{"agent", "tool"}, req.Execution.Lane) ||
 		!slices.Contains([]string{"none", "read-only", "read-write"}, req.Capabilities.Workspace) ||
 		req.Capabilities.TimeoutMs == 0 || req.Capabilities.TimeoutMs > uint64((24*time.Hour)/time.Millisecond) ||
 		req.Capabilities.MemoryBytes == 0 || req.Capabilities.MemoryBytes > cellnMemoryBytes ||
 		req.Capabilities.OutputBytes == 0 || req.Capabilities.OutputBytes > cellnOutputBytes {
+		return bad()
+	}
+	if !validCellnHarness(req) {
 		return bad()
 	}
 	if req.Forge != nil {
@@ -69,7 +72,7 @@ func validateCellnRequest(req executionRequest) error {
 func validateCellnReceipt(run *sympoziumv1alpha1.AgentRun, record executionRecord) error {
 	bad := func() error { return fmt.Errorf("Celln: invalid or mismatched terminal receipt") }
 	r := record.Receipt
-	if r == nil || r.APIVersion != "celln.dev/v1alpha1" || r.RequestID != run.Status.CellnActionID || record.RequestID != r.RequestID ||
+	if r == nil || !slices.Contains([]string{"celln.dev/v1alpha1", "celln.dev/v1alpha2"}, r.APIVersion) || r.RequestID != run.Status.CellnActionID || record.RequestID != r.RequestID ||
 		r.Phase != strings.ToLower(record.Phase) || !slices.Contains([]string{"succeeded", "failed", "cancelled"}, r.Phase) || strings.TrimSpace(r.Node) == "" || strings.TrimSpace(r.CellID) == "" {
 		return bad()
 	}
@@ -82,7 +85,7 @@ func validateCellnReceipt(run *sympoziumv1alpha1.AgentRun, record executionRecor
 		return bad()
 	}
 	var req executionRequest
-	if json.Unmarshal([]byte(run.Status.CellnRequest), &req) != nil || validateCellnRequest(req) != nil || req.ID != r.RequestID {
+	if json.Unmarshal([]byte(run.Status.CellnRequest), &req) != nil || validateCellnRequest(req) != nil || req.ID != r.RequestID || req.APIVersion != r.APIVersion {
 		return bad()
 	}
 	if len(r.Resolved.Tools) != 1 || !cellnHash.MatchString(r.Resolved.Tools[0]) {

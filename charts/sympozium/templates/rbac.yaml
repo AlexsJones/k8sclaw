@@ -50,6 +50,7 @@ rules:
       - sympoziumconfigs
       - mcpservers
       - models
+      - workspacesessions
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   - apiGroups: ["sympozium.ai"]
     resources:
@@ -64,6 +65,7 @@ rules:
       - sympoziumconfigs/status
       - mcpservers/status
       - models/status
+      - workspacesessions/status
     verbs: ["get", "update", "patch"]
   - apiGroups: ["sympozium.ai"]
     resources:
@@ -76,6 +78,7 @@ rules:
       - sympoziumconfigs/finalizers
       - mcpservers/finalizers
       - models/finalizers
+      - workspacesessions/finalizers
     verbs: ["update"]
   # Claim-based model placement: the controller expresses model requirements
   # as llmfit.ai ModelClaims (docs/positioning.md — models are claimed, not

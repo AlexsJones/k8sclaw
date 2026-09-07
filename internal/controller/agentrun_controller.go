@@ -47,6 +47,7 @@ import (
 	"github.com/sympozium-ai/sympozium/internal/ipc"
 	"github.com/sympozium-ai/sympozium/internal/orchestrator"
 	"github.com/sympozium-ai/sympozium/internal/pricing"
+	"github.com/sympozium-ai/sympozium/internal/sessionkey"
 	"github.com/sympozium-ai/sympozium/internal/toolpolicy"
 	"github.com/sympozium-ai/sympozium/pkg/sidecartools"
 	"gopkg.in/yaml.v3"
@@ -822,6 +823,108 @@ func (r *AgentRunReconciler) reconcilePending(ctx context.Context, log logr.Logg
 	}
 	if err != nil {
 		return ctrl.Result{}, err
+	}
+
+	// Per-session workspace PVC (opt-in via Agent.Spec.Workspace.PerSessionPVC).
+	// When enabled, this AgentRun:
+	//   1. Acquires a session lock — only one AgentRun per (agent, session)
+	//      may be Running/Serving at a time, since RWO PVCs cannot
+	//      multi-attach. Blocked runs requeue without creating a Job.
+	//   2. Resolves (or creates) the WorkspaceSession that owns the PVC,
+	//      and stamps the PVC name onto an annotation so buildVolumes
+	//      mounts it at /workspace in place of the emptyDir.
+	if agentRunQualifiesForSessionPVC(agentRun, &runtimeInstance) {
+		hash := sessionkey.Hash(agentRun.Spec.SessionKey)
+
+		// Stamp the session-key-hash label so peer lookups are cheap.
+		// If the label is missing, persist it first and requeue — we
+		// must persist the label before we trust the lock query.
+		if agentRun.Labels[SessionKeyHashLabel] != hash {
+			if agentRun.Labels == nil {
+				agentRun.Labels = map[string]string{}
+			}
+			agentRun.Labels[SessionKeyHashLabel] = hash
+			if err := r.Update(ctx, agentRun); err != nil {
+				return ctrl.Result{}, fmt.Errorf("stamping session-key-hash label: %w", err)
+			}
+			return ctrl.Result{Requeue: true}, nil
+		}
+
+		// Session lock: refuse to admit while a peer with the same
+		// session holds the lock (Running/Serving or Job created) or
+		// an older waiter is queued ahead of us (FIFO admission).
+		peers, err := listBlockingSessionPeers(ctx, r.Client, agentRun, agentRun.Spec.AgentRef, hash)
+		if err != nil {
+			return ctrl.Result{}, fmt.Errorf("checking session peers: %w", err)
+		}
+		if len(peers) > 0 {
+			peerNames := make([]string, 0, len(peers))
+			for _, p := range peers {
+				peerNames = append(peerNames, p.Name)
+			}
+			log.Info("Session busy; deferring run",
+				"sessionKeyHash", hash, "blockingPeers", peerNames)
+			if statusErr := r.updateStatusWithRetry(ctx, agentRun, func(ar *sympoziumv1alpha1.AgentRun) {
+				ar.Status.Conditions = setCondition(ar.Status.Conditions, metav1.Condition{
+					Type:               "Blocked",
+					Status:             metav1.ConditionTrue,
+					Reason:             "SessionBusy",
+					Message:            fmt.Sprintf("waiting for session peer(s): %v", peerNames),
+					LastTransitionTime: metav1.Now(),
+				})
+			}); statusErr != nil {
+				log.Error(statusErr, "Failed to update Blocked condition")
+			}
+			return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+		}
+
+		// Clear any prior Blocked condition before proceeding.
+		if len(agentRun.Status.Conditions) > 0 {
+			if statusErr := r.updateStatusWithRetry(ctx, agentRun, func(ar *sympoziumv1alpha1.AgentRun) {
+				ar.Status.Conditions = setCondition(ar.Status.Conditions, metav1.Condition{
+					Type:               "Blocked",
+					Status:             metav1.ConditionFalse,
+					Reason:             "SessionAvailable",
+					LastTransitionTime: metav1.Now(),
+				})
+			}); statusErr != nil {
+				log.Error(statusErr, "Failed to clear Blocked condition")
+			}
+		}
+
+		// Ensure the WorkspaceSession + PVC exist.
+		pvcName, wsName, err := ensureWorkspaceSession(ctx, r.Client, r.Scheme, &runtimeInstance, agentRun.Spec.SessionKey)
+		if err != nil {
+			return ctrl.Result{}, fmt.Errorf("ensuring workspace session: %w", err)
+		}
+
+		// Stamp annotations so buildVolumes and buildContainers know to
+		// swap in the PVC and emit the recreation marker init container.
+		if agentRun.Annotations == nil {
+			agentRun.Annotations = map[string]string{}
+		}
+		changed := false
+		if agentRun.Annotations[WorkspacePVCAnnotation] != pvcName {
+			agentRun.Annotations[WorkspacePVCAnnotation] = pvcName
+			changed = true
+		}
+		if agentRun.Annotations[WorkspaceSessionAnnotation] != wsName {
+			agentRun.Annotations[WorkspaceSessionAnnotation] = wsName
+			changed = true
+		}
+		if changed {
+			if err := r.Update(ctx, agentRun); err != nil {
+				return ctrl.Result{}, fmt.Errorf("stamping workspace annotations: %w", err)
+			}
+			return ctrl.Result{Requeue: true}, nil
+		}
+
+		// Touch the session so the sweeper observes recent activity.
+		// Best-effort: a transient error here only affects idle
+		// reclamation timing, not run correctness.
+		if err := touchWorkspaceSession(ctx, r.Client, agentRun.Namespace, wsName, agentRun); err != nil {
+			log.Error(err, "Failed to touch workspace session (non-fatal)", "workspaceSession", wsName)
+		}
 	}
 
 	// Build and create the Job. buildJob delegates to buildAgentPodTemplate, which
@@ -2786,6 +2889,15 @@ func (r *AgentRunReconciler) buildContainers(
 	noPrivEsc := false
 	var initContainers []corev1.Container
 
+	// When the AgentRun is mounting a session-scoped workspace PVC,
+	// prepend an init container that writes /workspace/.sympozium/state.json
+	// describing the current run. Harness wrappers (codex, claude-code)
+	// and the agent-runner read this marker to detect whether the
+	// workspace is fresh or carried over from a previous run.
+	if agentRun.Annotations[WorkspaceSessionAnnotation] != "" {
+		initContainers = append(initContainers, r.buildWorkspaceMarkerInit(agentRun))
+	}
+
 	agentEnv := []corev1.EnvVar{
 		{Name: "AGENT_RUN_ID", Value: agentRun.Name},
 		{Name: "AGENT_ID", Value: agentRun.Spec.AgentID},
@@ -3888,10 +4000,26 @@ func (r *AgentRunReconciler) buildVolumes(agentRun *sympoziumv1alpha1.AgentRun, 
 	tmpSizeLimit := resource.MustParse("256Mi")
 	memoryMedium := corev1.StorageMediumMemory
 
-	// Use a PVC for /workspace when postRun lifecycle hooks are defined,
-	// so the workspace can be shared between the main Job and the postRun Job.
+	// /workspace selection precedence:
+	//   1. Per-session PVC (annotation set by reconcilePending when the
+	//      parent Agent opts into Workspace.PerSessionPVC). Persists
+	//      across AgentRuns of the same session.
+	//   2. Per-run postRun PVC (legacy: created when lifecycle.postRun
+	//      hooks are defined). Persists across the main + postRun Jobs
+	//      of a single AgentRun.
+	//   3. Ephemeral emptyDir (default).
 	var workspaceVolume corev1.Volume
-	if agentRun.Spec.Lifecycle != nil && len(agentRun.Spec.Lifecycle.PostRun) > 0 {
+	switch {
+	case agentRun.Annotations[WorkspacePVCAnnotation] != "":
+		workspaceVolume = corev1.Volume{
+			Name: "workspace",
+			VolumeSource: corev1.VolumeSource{
+				PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+					ClaimName: agentRun.Annotations[WorkspacePVCAnnotation],
+				},
+			},
+		}
+	case agentRun.Spec.Lifecycle != nil && len(agentRun.Spec.Lifecycle.PostRun) > 0:
 		workspaceVolume = corev1.Volume{
 			Name: "workspace",
 			VolumeSource: corev1.VolumeSource{
@@ -3900,7 +4028,7 @@ func (r *AgentRunReconciler) buildVolumes(agentRun *sympoziumv1alpha1.AgentRun, 
 				},
 			},
 		}
-	} else {
+	default:
 		workspaceVolume = corev1.Volume{
 			Name: "workspace",
 			VolumeSource: corev1.VolumeSource{
@@ -6111,6 +6239,53 @@ func (r *AgentRunReconciler) publishGatedCompletion(ctx context.Context, agentRu
 			slog.ErrorContext(ctx, "failed to publish gated completion event",
 				"agent_run", agentRun.Name, "error", pubErr)
 		}
+	}
+}
+
+// buildWorkspaceMarkerInit returns the init container that writes
+// /workspace/.sympozium/state.json before the agent container starts.
+// Harness wrappers and the agent-runner read this marker to detect
+// whether the workspace is fresh or carried over from a prior run.
+// The marker preserves the previous state as `previousRun` so wrappers
+// can surface "your workspace was reclaimed" / "this is turn N" UX.
+//
+// The logic runs as the `workspace-marker` subcommand of the agent-runner
+// binary rather than a shell script: the agent-runner image is distroless
+// and has no shell (/bin/sh does not exist).
+func (r *AgentRunReconciler) buildWorkspaceMarkerInit(agentRun *sympoziumv1alpha1.AgentRun) corev1.Container {
+	noPrivEsc := false
+	return corev1.Container{
+		Name:            "workspace-marker",
+		Image:           r.imageRef("agent-runner"),
+		ImagePullPolicy: corev1.PullIfNotPresent,
+		Command:         []string{"/agent-runner", "workspace-marker"},
+		Env: []corev1.EnvVar{
+			{Name: "AGENT_RUN_ID", Value: agentRun.Name},
+			{Name: "SESSION_KEY", Value: agentRun.Spec.SessionKey},
+			{Name: "AGENT_NAME", Value: agentRun.Spec.AgentRef},
+			{Name: "AGENT_NAMESPACE", Value: agentRun.Namespace},
+			{Name: "WORKSPACE_SESSION", Value: agentRun.Annotations[WorkspaceSessionAnnotation]},
+			{Name: "WORKSPACE_PVC", Value: agentRun.Annotations[WorkspacePVCAnnotation]},
+		},
+		SecurityContext: &corev1.SecurityContext{
+			AllowPrivilegeEscalation: &noPrivEsc,
+			Capabilities: &corev1.Capabilities{
+				Drop: []corev1.Capability{"ALL"},
+			},
+		},
+		VolumeMounts: []corev1.VolumeMount{
+			{Name: "workspace", MountPath: "/workspace"},
+		},
+		Resources: corev1.ResourceRequirements{
+			Requests: corev1.ResourceList{
+				corev1.ResourceCPU:    resource.MustParse("10m"),
+				corev1.ResourceMemory: resource.MustParse("16Mi"),
+			},
+			Limits: corev1.ResourceList{
+				corev1.ResourceCPU:    resource.MustParse("100m"),
+				corev1.ResourceMemory: resource.MustParse("64Mi"),
+			},
+		},
 	}
 }
 
