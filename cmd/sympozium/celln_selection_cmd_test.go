@@ -26,3 +26,14 @@ func TestSelectionPlanRequiresExplicitSourcesAndWellFormedSelections(t *testing.
 		}
 	}
 }
+
+func TestModelPolicyReviewRequiresRunBeforeReadingAPI(t *testing.T) {
+	cmd := newCellnSelectionPlanCmd()
+	cmd.SetArgs([]string{"agent", "--grant-namespace", "operator", "--operator-grants", "ops", "--runtime-grants", "runtime", "--agent-grants", "agent", "--model-policy", "models"})
+	var output bytes.Buffer
+	cmd.SetOut(&output)
+	cmd.SetErr(&output)
+	if err := cmd.Execute(); err == nil || !strings.Contains(err.Error(), "requires --run") {
+		t.Fatalf("wrong refusal: %v", err)
+	}
+}
