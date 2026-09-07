@@ -51,21 +51,14 @@ func proveCatalogueIssuance(t *testing.T, ctx context.Context, l cellnauthority.
 	if err != nil {
 		t.Fatal(err)
 	}
-	url, httpClient, _ := serveTestIssuer(t, managed)
-	remoteRequest, err := json.Marshal(IssuerRequest{APIVersion: "sympozium.ai/celln-issuer-request-v1", Frozen: frozen, Approval: *approval, Artifacts: artifacts})
-	if err != nil {
-		t.Fatal(err)
-	}
+	url, _, tokenPath := serveTestIssuer(t, managed)
+	issuerClient := testIssuerClient(t, url, tokenPath, filepath.Join(filepath.Dir(tokenPath), "cert.pem"))
 	remoteIssue := func() *IssuedSelection {
-		status, body := issuerHTTP(t, httpClient, "POST", url+"/v1/issuances", testIssuerToken, remoteRequest)
-		if status != 200 {
-			t.Fatalf("real remote issuance refused: %d", status)
+		issued, err := issuerClient.Issue(ctx, ml, frozen, *approval, artifacts)
+		if err != nil {
+			t.Fatalf("verified remote client refused real issuance: %v", err)
 		}
-		var response IssuerResponse
-		if err := json.Unmarshal(body, &response); err != nil || response.Issued == nil || response.Executed {
-			t.Fatalf("invalid remote result: %v", err)
-		}
-		return response.Issued
+		return issued
 	}
 	issued, again := remoteIssue(), remoteIssue()
 	if again.Grant != issued.Grant || again.Profile != issued.Profile {
@@ -95,5 +88,5 @@ func proveCatalogueIssuance(t *testing.T, ctx context.Context, l cellnauthority.
 		t.Fatal("withdrawal changed retained grant bytes")
 	}
 	assertNoProfiles(t, o.PolicyRoot)
-	t.Logf("PASS real catalogue composition -> authenticated TLS issuer service -> managed startup recovery gate -> durable boot-bound expiring profile -> real-KVM sealed verification -> identical v3 issuance without renewal -> approval deletion -> periodic managed withdrawal -> host refusal; grant=%s; Kubernetes=fake, modelCalls=0", issued.Grant)
+	t.Logf("PASS real catalogue composition -> verified issuer client -> authenticated TLS issuer service -> managed startup recovery gate -> durable boot-bound expiring profile -> real-KVM sealed verification -> identical v3 issuance without renewal -> approval deletion -> periodic managed withdrawal -> host refusal; grant=%s; Kubernetes=fake, modelCalls=0", issued.Grant)
 }

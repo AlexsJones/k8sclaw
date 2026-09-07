@@ -22,6 +22,21 @@ func TestIssuanceDefaultsToBoundedProfileWithExplicitLegacyOptOut(t *testing.T) 
 	}
 }
 
+func TestRemoteIssuanceHasNoLocalHostAuthorityFlags(t *testing.T) {
+	cmd := newCellnSelectionRemoteIssueCmd()
+	for _, name := range []string{"policy-root", "celln-binary", "composer-publisher", "profile-lifetime", "key-file"} {
+		if cmd.Flags().Lookup(name) != nil {
+			t.Fatalf("remote command accepts host authority flag %s", name)
+		}
+	}
+	for _, name := range []string{"issuer-url", "issuer-token-file", "run", "model-policy", "execution-mote", "execution-closure"} {
+		flag := cmd.Flags().Lookup(name)
+		if flag == nil || len(flag.Annotations["cobra_annotation_bash_completion_one_required_flag"]) == 0 {
+			t.Fatalf("missing required remote input %s", name)
+		}
+	}
+}
+
 func TestSelectionPlanRequiresExplicitSourcesAndWellFormedSelections(t *testing.T) {
 	for _, args := range [][]string{
 		{"agent"},
