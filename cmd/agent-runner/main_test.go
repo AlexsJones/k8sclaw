@@ -1142,20 +1142,91 @@ func TestDefaultTools_SubagentsEnabledWhenSet(t *testing.T) {
 
 func TestDefaultTools_AlwaysIncludesCoreTool(t *testing.T) {
 	tools := defaultTools()
-	var hasExec, hasDelegate bool
+	var hasExec bool
 	for _, tool := range tools {
 		if tool.Name == ToolExecuteCommand {
 			hasExec = true
-		}
-		if tool.Name == ToolDelegateToPersona {
-			hasDelegate = true
 		}
 	}
 	if !hasExec {
 		t.Error("execute_command tool should always be registered")
 	}
-	if !hasDelegate {
-		t.Error("delegate_to_persona tool should always be registered")
+}
+
+func TestDefaultTools_DelegateAbsentWithoutEdges(t *testing.T) {
+	t.Setenv("ENSEMBLE_RELATIONSHIPS", "")
+	tools := defaultTools()
+	for _, tool := range tools {
+		if tool.Name == ToolDelegateToPersona {
+			t.Error("delegate_to_persona tool should not be registered when ENSEMBLE_RELATIONSHIPS is not set")
+		}
+	}
+}
+
+func TestDefaultTools_DelegateAbsentWithSupervisionEdgeOnly(t *testing.T) {
+	t.Setenv("ENSEMBLE_RELATIONSHIPS", `[{"target":"supervisor","type":"supervision"}]`)
+	tools := defaultTools()
+	for _, tool := range tools {
+		if tool.Name == ToolDelegateToPersona {
+			t.Error("delegate_to_persona tool should not be registered for supervision-only edges")
+		}
+	}
+}
+
+func TestDefaultTools_DelegateRegisteredWithDelegationEdge(t *testing.T) {
+	t.Setenv("ENSEMBLE_RELATIONSHIPS", `[{"target":"writer","type":"delegation"}]`)
+	tools := defaultTools()
+	var found bool
+	for _, tool := range tools {
+		if tool.Name == ToolDelegateToPersona {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("delegate_to_persona tool should be registered when a delegation edge is present")
+	}
+}
+
+func TestDefaultTools_DelegateRegisteredWithSequentialEdge(t *testing.T) {
+	t.Setenv("ENSEMBLE_RELATIONSHIPS", `[{"target":"reviewer","type":"sequential"}]`)
+	tools := defaultTools()
+	var found bool
+	for _, tool := range tools {
+		if tool.Name == ToolDelegateToPersona {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("delegate_to_persona tool should be registered when a sequential edge is present")
+	}
+}
+
+func TestDefaultTools_DelegateEnumeratesValidTargets(t *testing.T) {
+	t.Setenv("ENSEMBLE_RELATIONSHIPS", `[{"target":"writer","type":"delegation"},{"target":"reviewer","type":"sequential"}]`)
+	tools := defaultTools()
+	var delegateTool *ToolDef
+	for i := range tools {
+		if tools[i].Name == ToolDelegateToPersona {
+			delegateTool = &tools[i]
+			break
+		}
+	}
+	if delegateTool == nil {
+		t.Fatal("delegate_to_persona tool not registered")
+	}
+	props, _ := delegateTool.Parameters["properties"].(map[string]any)
+	targetParam, _ := props["targetPersona"].(map[string]any)
+	enum, _ := targetParam["enum"].([]string)
+	if len(enum) != 2 {
+		t.Fatalf("expected 2 enum values, got %d: %v", len(enum), enum)
+	}
+	wantTargets := map[string]bool{"writer": true, "reviewer": true}
+	for _, v := range enum {
+		if !wantTargets[v] {
+			t.Errorf("unexpected enum value %q", v)
+		}
 	}
 }
 

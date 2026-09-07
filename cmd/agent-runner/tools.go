@@ -302,19 +302,24 @@ func defaultTools() []ToolDef {
 				"required": []string{"name", "action"},
 			},
 		},
-		{
+	}
+
+	// Conditionally add delegate_to_persona tool when outgoing delegation/sequential edges exist.
+	if targets := delegationTargets(); len(targets) > 0 {
+		targetList := strings.Join(targets, ", ")
+		tools = append(tools, ToolDef{
 			Name: ToolDelegateToPersona,
 			Description: "Delegate a task to another persona in your team (Ensemble). " +
 				"Use this when your task requires expertise from another team member. " +
 				"The target persona will receive the task, execute it, and the result will be " +
-				"delivered back to you. Only personas defined in the same Ensemble with a " +
-				"delegation or sequential relationship can be targeted.",
+				"delivered back to you. Valid targets for this Ensemble: " + targetList + ".",
 			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
 					"targetPersona": map[string]any{
 						"type":        "string",
-						"description": "The name of the persona to delegate to (e.g. 'writer', 'reviewer'). Must be a persona in the same Ensemble.",
+						"description": "The name of the persona to delegate to. Must be one of: " + targetList + ".",
+						"enum":        targets,
 					},
 					"task": map[string]any{
 						"type":        "string",
@@ -323,7 +328,7 @@ func defaultTools() []ToolDef {
 				},
 				"required": []string{"targetPersona", "task"},
 			},
-		},
+		})
 	}
 
 	// Conditionally add spawn_subagents tool when subagents are enabled.
@@ -387,6 +392,31 @@ func defaultTools() []ToolDef {
 	}
 
 	return tools
+}
+
+
+// delegationTargets parses ENSEMBLE_RELATIONSHIPS and returns the persona names
+// reachable via delegation or sequential edges. Returns nil when no outgoing
+// delegation edges are defined — callers use len(targets) > 0 to gate registration.
+func delegationTargets() []string {
+	relJSON := os.Getenv("ENSEMBLE_RELATIONSHIPS")
+	if relJSON == "" {
+		return nil
+	}
+	var rels []struct {
+		Target string `json:"target"`
+		Type   string `json:"type"`
+	}
+	if err := json.Unmarshal([]byte(relJSON), &rels); err != nil {
+		return nil
+	}
+	var targets []string
+	for _, r := range rels {
+		if r.Type == "delegation" || r.Type == "sequential" {
+			targets = append(targets, r.Target)
+		}
+	}
+	return targets
 }
 
 // executeToolCall dispatches a tool call and returns the result string.
