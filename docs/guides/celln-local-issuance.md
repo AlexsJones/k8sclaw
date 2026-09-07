@@ -103,6 +103,32 @@ startup/dispatch must be gated on recovery. Do not expose this local operator
 primitive as an unattended production service until controller reconciliation,
 ongoing approval withdrawal/expiry and startup recovery gates are integrated.
 
+### One-pass current-approval reconciliation
+
+`cellnreview.ReconcileIssued` is the controller integration primitive for checking
+one committed issuance. Its caller supplies the trusted, uncached Kubernetes
+reader and independent approval-source configuration; the saved journal cannot
+choose its own authority sources. Under the issuer lock it first recovers pending
+records, then revalidates the frozen run, selection and model approval with a
+five-second context deadline (or the caller's earlier deadline). The reader must
+honor context cancellation. Missing/changed approvals, API errors or timeout,
+and a removed/retargeted host credential mapping trigger durable withdrawal of
+the exact profile. Token contents at the same approved host path are not read.
+
+An unchanged observation does not rewrite or expand authority. Reconciliation
+never reissues, dispatches, or restores a withdrawn profile when the API returns.
+It preserves grant/audit records and refuses to delete different profile bytes.
+Filesystem failures are returned; they must not be reported as successful
+withdrawal. This API is not yet registered as a controller or autonomous watcher.
+
+An `issued` result is only a point-in-time observation, not a readiness result or
+permission lease. A watcher dying between checks would leave profiles usable.
+Before unattended dispatch, add host-enforced expiry (or an equivalent enforced
+gate), startup recovery and continuous reconciliation. Existing v3 grants pin
+the profile's exact bytes, so changing an expiry field in that profile cannot be
+treated as transparent lease renewal. This also does not cancel an active cell
+or establish fleet-wide revocation.
+
 A successful issuance does not prove that the serving process has a warm mote,
 that the requested Harness/tool behavior conforms functionally, or that a model
 can complete the task. The remaining controller path must persist issuance

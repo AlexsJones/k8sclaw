@@ -1,0 +1,41 @@
+{
+  "date": "2026-09-07",
+  "scope": "one-pass local issued-profile approval reconciliation",
+  "base": "49a3e2315df5291f07a2a5b55e84b56b9bb30e96",
+  "regressions": {
+    "fullGoRaceSuite": "passed; real NATS binary available on PATH",
+    "goBuildAll": "passed",
+    "goVetAll": "passed"
+  },
+  "portable": {
+    "command": "go test -race ./internal/cellnreview ./internal/cellnauthority ./cmd/sympozium -count=1",
+    "result": "passed",
+    "cases": [
+      "unchanged approval preserves exact profile bytes",
+      "deleted tool or model policy withdraws profile",
+      "API error or context deadline withdraws profile",
+      "API restoration does not recreate withdrawn authority",
+      "missing or retargeted host credential mapping withdraws profile",
+      "missing profile reconciliation is durable and idempotent",
+      "changed unrelated profile bytes are not deleted",
+      "grant/audit sentinel remains intact"
+    ]
+  },
+  "realKVM": {
+    "test": "TestComposeRealCellnArtifacts with CELLN_ISSUANCE_KVM=1",
+    "result": "passed",
+    "sequence": "signed catalogue composition -> KVM sealed member verification -> identical v3 issuance retry -> model approval deletion -> reconciliation -> host issuance refusal",
+    "grant": "blake3:423abeb9ceaf65bd20198fb4660342baaaf378254b82c9bfc8721d7b60f09e24",
+    "closure": "blake3:999a5f7a279b1eccb1c7989e751852319d00bbdb512db7e81289d405ea0cdf64",
+    "toolfs": "blake3:2fe57dcd56594c0b4e26077b093851080ae0138ba3bd6f3868f4ad412614301f",
+    "kubernetes": "fake client",
+    "grantBytesRetained": true,
+    "modelCalls": 0
+  },
+  "notProven": [
+    "autonomous watcher or controller dispatch integration",
+    "host-enforced lease or expiry while reconciler is stopped",
+    "active-cell cancellation or fleet-wide withdrawal",
+    "final UI/YAML, conversational or real-model user journey"
+  ]
+}
