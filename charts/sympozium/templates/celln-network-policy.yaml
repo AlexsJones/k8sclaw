@@ -1,0 +1,31 @@
+{{- if .Values.celln.enabled }}
+# Mandatory for this privileged execution ingress, independently of the
+# optional policies for ordinary agent pods. Requires an enforcing CNI.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: celln-router-ingress
+  namespace: celln-system
+  labels:
+    app.kubernetes.io/part-of: sympozium
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: celln-router
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        # Namespace AND pod selector must remain in the same peer. Separate
+        # peers would allow every pod in the control-plane namespace, or a
+        # tenant pod that merely copied the controller label.
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ include "sympozium.namespace" . | quote }}
+          podSelector:
+            matchLabels:
+              control-plane: controller-manager
+      ports:
+        - protocol: TCP
+          port: 8788
+{{- end }}

@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/go-logr/logr"
 	"go.opentelemetry.io/otel"
@@ -22,6 +21,7 @@ import (
 	channelpkg "github.com/sympozium-ai/sympozium/internal/channel"
 	"github.com/sympozium-ai/sympozium/internal/eventbus"
 	"github.com/sympozium-ai/sympozium/internal/ipc"
+	"github.com/sympozium-ai/sympozium/internal/sessionkey"
 )
 
 var routerTracer = otel.Tracer("sympozium.ai/channel-router")
@@ -288,7 +288,7 @@ func (cr *ChannelRouter) handleInbound(ctx context.Context, event *eventbus.Even
 		Spec: sympoziumv1alpha1.AgentRunSpec{
 			AgentRef:   msg.InstanceName,
 			AgentID:    "primary",
-			SessionKey: fmt.Sprintf("channel-%s-%s-%d", msg.Channel, msg.ChatID, time.Now().UnixNano()),
+			SessionKey: sessionkey.ForChannel(msg.Channel, msg.ChatID, msg.ThreadID),
 			Task:       sympoziumv1alpha1.NewStringTask(msg.Text),
 			Model: sympoziumv1alpha1.ModelSpec{
 				Provider:                 provider,
