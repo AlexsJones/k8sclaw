@@ -63,8 +63,51 @@ window and periodic host reconciliation remain in force.
 This command is an explicit operator provisioning invocation and resolves the
 current plan each time. Do not blindly rerun it after an ambiguous outcome if
 approval or run state may have changed. Durable controller retry must instead
-reuse its saved `frozen`/`approval`/`artifacts` through the client API. Persisting
-that state and wiring the AgentRun reconciler remain the next integration gate.
+reuse its saved `frozen`/`approval`/`artifacts` through the client API. The
+`IssueForRun` helper below persists that state; wiring the AgentRun reconciler
+remains the next integration gate.
+
+## Durable AgentRun provisioning
+
+`IssueForRun(ctx, writer, uncachedReader, runKey, loader, seed)` saves
+`status.cellnIssuance` before contacting the host. The first call requires an
+`IssuerRequest` seed. A retry may pass nil to resume the saved request; supplying
+a changed seed refuses. The operation has a 110-second ceiling.
+
+The saved `Prepared` record pins the operator issuer endpoint, frozen selection,
+model approval, artifacts, independently derived candidate and payload SHA-256.
+After verified issuance, a status update commits `Issued` and the returned result.
+The CRD enforces immutable payload/target/hash/result and a monotonic phase,
+including refusal to remove issuance or the entire status. These schema rules
+protect transitions, not payload authenticity: the helper independently derives
+and validates the candidate and live run/approval again on resume.
+
+A failed preparation write makes no remote call. A lost preparation acknowledgement
+resumes the stored payload. A lost remote outcome or failed result commit retries
+the identical issuance, subject to host journal/expiry rules. A lost acknowledgement
+after result commit resumes the validated stored outcome without another issuance
+POST. API conflicts never authorize replacing a concurrent plan. A changed run
+identity/spec, terminal/deleting run, existing dispatch identity, changed target
+or changed approval refuses. No retry extends the host profile expiry.
+
+The endpoint string is not a cryptographic host-instance identity. Operators must
+use a stable per-host issuer endpoint; DNS/load-balancer failover and fleet
+ownership are not established by this helper. A stored result is not a readiness
+or continuing authorization claim: serving-side checks and expiry still apply.
+Status contains task/policy metadata, but no provider credential contents;
+namespace read permissions must reflect that sensitivity.
+
+This helper does not set `cellnRequest`, `cellnActionID`, run phase or readiness.
+Until the catalogue dispatch bridge is connected, the legacy reconciler explicitly
+refuses any run with issuance state instead of silently forging its task.
+
+Failure-injection tests cover both sides of each status commit, immutable retry
+identity and the no-legacy-dispatch guard. The opt-in
+`test/integration/test-celln-issuance-status.sh` checks transitions against the
+isolated Kind API server without Jobs or model calls. The separate KVM composition
+test exercises durable preparation, actual TLS/host issuance, saved-result resume
+and managed approval withdrawal with fake Kubernetes metadata. Neither test proves
+the final deployed catalogue-backed execution journey.
 
 ## Evidence
 

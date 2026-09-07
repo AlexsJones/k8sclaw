@@ -53,14 +53,15 @@ func proveCatalogueIssuance(t *testing.T, ctx context.Context, l cellnauthority.
 	}
 	url, _, tokenPath := serveTestIssuer(t, managed)
 	issuerClient := testIssuerClient(t, url, tokenPath, filepath.Join(filepath.Dir(tokenPath), "cert.pem"))
-	remoteIssue := func() *IssuedSelection {
-		issued, err := issuerClient.Issue(ctx, ml, frozen, *approval, artifacts)
+	seed := &IssuerRequest{APIVersion: "sympozium.ai/celln-issuer-request-v1", Frozen: frozen, Approval: *approval, Artifacts: artifacts}
+	remoteIssue := func(seed *IssuerRequest) *IssuedSelection {
+		issued, err := issuerClient.IssueForRun(ctx, c, c, types.NamespacedName{Namespace: frozen.Run.Namespace, Name: frozen.Run.Name}, ml, seed)
 		if err != nil {
 			t.Fatalf("verified remote client refused real issuance: %v", err)
 		}
 		return issued
 	}
-	issued, again := remoteIssue(), remoteIssue()
+	issued, again := remoteIssue(seed), remoteIssue(nil)
 	if again.Grant != issued.Grant || again.Profile != issued.Profile {
 		t.Fatal("actual issuance retry changed identity")
 	}
@@ -88,5 +89,5 @@ func proveCatalogueIssuance(t *testing.T, ctx context.Context, l cellnauthority.
 		t.Fatal("withdrawal changed retained grant bytes")
 	}
 	assertNoProfiles(t, o.PolicyRoot)
-	t.Logf("PASS real catalogue composition -> verified issuer client -> authenticated TLS issuer service -> managed startup recovery gate -> durable boot-bound expiring profile -> real-KVM sealed verification -> identical v3 issuance without renewal -> approval deletion -> periodic managed withdrawal -> host refusal; grant=%s; Kubernetes=fake, modelCalls=0", issued.Grant)
+	t.Logf("PASS real catalogue composition -> durable AgentRun preparation -> verified issuer client -> authenticated TLS issuer service -> managed startup recovery gate -> durable boot-bound expiring profile -> real-KVM sealed verification -> committed AgentRun outcome -> saved outcome resume without renewal -> approval deletion -> periodic managed withdrawal -> host refusal; grant=%s; Kubernetes=fake, modelCalls=0", issued.Grant)
 }
