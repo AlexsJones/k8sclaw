@@ -8,6 +8,8 @@ metadata:
     sympozium.ai/catalog: "true"
 spec:
   transportType: stdio
+  # DATABASE_URI is operator-provided; do not start the server until it is configured.
+  suspended: true
   toolsPrefix: pg
   timeout: 60
   toolsDeny:
