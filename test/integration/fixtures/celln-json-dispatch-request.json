@@ -1,0 +1,82 @@
+{
+  "apiVersion": "celln.dev/v1alpha3",
+  "capabilities": {
+    "egress": [
+      "https://api.deepseek.com"
+    ],
+    "memoryBytes": 268435456,
+    "outputBytes": 65536,
+    "timeoutMs": 180000,
+    "workspace": "none"
+  },
+  "execution": {
+    "lane": "agent",
+    "requireHardwareIsolation": true
+  },
+  "forge": null,
+  "harness": {
+    "borrowedTools": [
+      {
+        "description": "Uppercase text",
+        "hash": "blake3:2696e782ed2d35ec85cb07057b27a4ed1068862edb5ce8b40510d87e8dd58d0c",
+        "jsonStdio": {
+          "abi": "celln.json-stdio/v1",
+          "inputBytes": 1024,
+          "inputSchema": "blake3:0dfab6d82264eae8236cdfe7e66e7dd9d99f7afe6fe80cc01ddaef3791e54ab6",
+          "outputBytes": 1024,
+          "outputSchema": "blake3:0dfab6d82264eae8236cdfe7e66e7dd9d99f7afe6fe80cc01ddaef3791e54ab6",
+          "timeoutMs": 1000
+        },
+        "name": "uppercase",
+        "path": "/uppercase"
+      },
+      {
+        "description": "Measure text length",
+        "hash": "blake3:8da2133cbe208448e3aa8fe6b8e91d6cd6b66ae3bc93fb81e18916f6488bd245",
+        "jsonStdio": {
+          "abi": "celln.json-stdio/v1",
+          "inputBytes": 1024,
+          "inputSchema": "blake3:0dfab6d82264eae8236cdfe7e66e7dd9d99f7afe6fe80cc01ddaef3791e54ab6",
+          "outputBytes": 1024,
+          "outputSchema": "blake3:334d8ed405e3789cc513dc297a2137ee175e9f2b91743deb1e73e15517cf72d5",
+          "timeoutMs": 1000
+        },
+        "name": "length",
+        "path": "/length"
+      }
+    ],
+    "contractVersion": "celln.json-tools/v1",
+    "json": {
+      "maxCalls": 2,
+      "maxTurns": 3,
+      "system": "Use the explicitly lent tools."
+    },
+    "model": "deepseek-chat",
+    "modelGrant": {
+      "hash": "blake3:990a55bee6a36cf8b52aeda83e8c376f0f130238321ec02b72c7071e1f099ec3"
+    },
+    "task": "Call uppercase with text celln, wait for its result, then call length with the uppercase result. Wait for both tool results. Finally answer exactly: CELLN has length 5"
+  },
+  "id": "harness-dispatch-proof",
+  "inputs": [],
+  "invocation": {
+    "alias": "/harness",
+    "args": []
+  },
+  "mote": {
+    "hash": "blake3:eee24b8031b33534417dafb4097c4d7947694afec717078286a0e3c8acbe9534"
+  },
+  "tools": [
+    {
+      "alias": "/harness",
+      "closure": {
+        "hash": "blake3:181806441f4de12d61b5989e6bb932dd6ca799d5ffe083e28837630b46a96abe"
+      },
+      "hash": "blake3:e0b47f4d4473dabec0a759f5915bf7b85f3c146a08d504ab6104f9b95ff8fa47"
+    }
+  ],
+  "workload": {
+    "caller": "test:controller",
+    "id": "test-run"
+  }
+}

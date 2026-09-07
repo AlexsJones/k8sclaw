@@ -11,6 +11,10 @@ digest covers publisher, executable/closure/schema hashes, lane, entry point,
 provenance and declared limits. It is metadata identity, **not** a Celln artifact
 BLAKE3 hash or a signature-verification result. Recreated resources, changed
 schemas and stale grants refuse, even when the display name is unchanged.
+Both `celln.argv/v1` and `celln.json-stdio/v1` are identified explicitly; changing
+the ABI changes the full-spec identity and invalidates previous grants. JSON
+catalogue descriptions and tool deadlines must fit the adapter's 512-byte and
+30-second ceilings. This does not replace content/schema conformance checks.
 
 The resolver requires four explicit inputs: operator grants, runtime ceilings,
 Agent grants and per-run selections. For every tool, all must name the exact

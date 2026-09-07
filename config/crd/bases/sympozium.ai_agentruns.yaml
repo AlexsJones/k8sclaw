@@ -104,8 +104,9 @@ spec:
                   "job" (default, implicit): standard Kubernetes Job backend.
                   "celln": hardware-isolated Celln dispatcher (hermetic; no ensembles, no
                     delegation, no shared memory, no IPC, no streaming; the agent receives
-                    the task string and produces a bounded output). Tasks that require
-                    multiple tools, sub-agents, or workflow state must use "job".
+                    the task string and produces a bounded output). Explicit native Harness
+                    bindings support bounded lent tools; sub-agents and retained workflow
+                    state still require "job".
 
                   Celln is selected for individual high-risk or bounded computations;
                   ensembles and workflows always use the Job backend.
@@ -123,7 +124,9 @@ spec:
               celln:
                 description: |-
                   Celln names an immutable program and bounded data for backend=celln.
-                  When present, task text is not sent to a model and cannot select code.
+                  A direct program invocation does not send task text to a model. An explicit
+                  Harness binding sends bounded task/persona data through its host model grant.
+                  Task text never supplies executable authority.
                   The Celln operator must independently approve every referenced artifact.
                 properties:
                   capabilities:
@@ -158,7 +161,7 @@ spec:
                     type: object
                   harness:
                     description: |-
-                      Harness opts into the experimental sealed reference runtime contract.
+                      Harness opts into an explicitly versioned sealed native runtime contract.
                       This is not the container-replacing task.mode=harness adapter.
                     properties:
                       borrowedTools:
@@ -171,6 +174,45 @@ spec:
                             hash:
                               pattern: ^blake3:[0-9a-f]{64}$
                               type: string
+                            jsonStdio:
+                              description: CellnJSONToolIO names immutable schema
+                                data and the separate JSON stdio ABI.
+                              properties:
+                                abi:
+                                  enum:
+                                  - celln.json-stdio/v1
+                                  type: string
+                                inputBytes:
+                                  format: int64
+                                  maximum: 65536
+                                  minimum: 1
+                                  type: integer
+                                inputSchema:
+                                  maxLength: 71
+                                  pattern: ^blake3:[0-9a-f]{64}$
+                                  type: string
+                                outputBytes:
+                                  format: int64
+                                  maximum: 65536
+                                  minimum: 1
+                                  type: integer
+                                outputSchema:
+                                  maxLength: 71
+                                  pattern: ^blake3:[0-9a-f]{64}$
+                                  type: string
+                                timeoutMs:
+                                  format: int64
+                                  maximum: 30000
+                                  minimum: 1
+                                  type: integer
+                              required:
+                              - abi
+                              - inputBytes
+                              - inputSchema
+                              - outputBytes
+                              - outputSchema
+                              - timeoutMs
+                              type: object
                             name:
                               pattern: ^[a-zA-Z0-9_-]{1,64}$
                               type: string
@@ -184,13 +226,32 @@ spec:
                           - name
                           - path
                           type: object
-                        maxItems: 2
-                        minItems: 2
+                        maxItems: 16
+                        minItems: 0
                         type: array
                       contractVersion:
                         enum:
                         - celln.reference-functions/v1
+                        - celln.json-tools/v1
                         type: string
+                      json:
+                        description: CellnHarnessJSONLimits are explicit bounded loop
+                          ceilings, not model grants.
+                        properties:
+                          maxCalls:
+                            format: int64
+                            maximum: 16
+                            minimum: 0
+                            type: integer
+                          maxTurns:
+                            format: int64
+                            maximum: 6
+                            minimum: 1
+                            type: integer
+                        required:
+                        - maxCalls
+                        - maxTurns
+                        type: object
                       modelGrant:
                         properties:
                           hash:
@@ -205,6 +266,13 @@ spec:
                     - contractVersion
                     - modelGrant
                     type: object
+                    x-kubernetes-validations:
+                    - message: JSON and reference Harness fields must match the selected
+                        contract
+                      rule: 'self.contractVersion == ''celln.json-tools/v1'' ? has(self.json)
+                        && self.borrowedTools.all(t, has(t.jsonStdio)) : !has(self.json)
+                        && size(self.borrowedTools) == 2 && self.borrowedTools.all(t,
+                        !has(t.jsonStdio))'
                   inputs:
                     items:
                       properties:

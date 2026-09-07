@@ -86,6 +86,7 @@ spec:
                   contractVersion:
                     enum:
                     - celln.reference-functions/v1
+                    - celln.json-tools/v1
                     type: string
                   entryPoint:
                     maxLength: 256
@@ -100,6 +101,24 @@ spec:
                     required:
                     - hash
                     type: object
+                  json:
+                    description: CellnHarnessJSONLimits are explicit bounded loop
+                      ceilings, not model grants.
+                    properties:
+                      maxCalls:
+                        format: int64
+                        maximum: 16
+                        minimum: 0
+                        type: integer
+                      maxTurns:
+                        format: int64
+                        maximum: 6
+                        minimum: 1
+                        type: integer
+                    required:
+                    - maxCalls
+                    - maxTurns
+                    type: object
                   lane:
                     enum:
                     - agent
@@ -111,8 +130,8 @@ spec:
                   limits:
                     description: |-
                       AgentRuntimeCellnLimits are ceilings, never Agent grants or provider policy.
-                      Model mediation and the two reference functions retain their existing
-                      dispatch contract; this profile cannot add protocols, tools or destinations.
+                      Model mediation and tools retain their selected adapter's dispatch contract;
+                      this profile cannot add protocols, tools or destinations.
                     properties:
                       memoryBytes:
                         format: int64
@@ -193,6 +212,10 @@ spec:
                 - publisherKey
                 - revision
                 type: object
+                x-kubernetes-validations:
+                - message: JSON loop ceilings must match the selected adapter contract
+                  rule: 'self.contractVersion == ''celln.json-tools/v1'' ? has(self.json)
+                    : !has(self.json)'
               conformance:
                 description: |-
                   Conformance records this runtime's conformance status against the

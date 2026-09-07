@@ -82,6 +82,7 @@ spec:
               invocationABI:
                 enum:
                 - celln.argv/v1
+                - celln.json-stdio/v1
                 type: string
               lane:
                 enum:
@@ -198,6 +199,10 @@ spec:
             x-kubernetes-validations:
             - message: tool revisions are immutable; publish a new revision
               rule: self == oldSelf
+            - message: JSON adapter descriptions and tool deadlines must fit its bounded
+                contract
+              rule: self.invocationABI != 'celln.json-stdio/v1' || (size(self.description)
+                <= 512 && self.limits.timeoutMillis <= 30000)
           status:
             properties:
               conditions:

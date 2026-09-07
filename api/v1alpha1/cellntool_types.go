@@ -6,6 +6,7 @@ import metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 // not proof of admission, distribution, prewarming, or authority to execute.
 // Schema references name immutable JSON-schema artifacts, not executable code.
 // +kubebuilder:validation:XValidation:rule="self == oldSelf",message="tool revisions are immutable; publish a new revision"
+// +kubebuilder:validation:XValidation:rule="self.invocationABI != 'celln.json-stdio/v1' || (size(self.description) <= 512 && self.limits.timeoutMillis <= 30000)",message="JSON adapter descriptions and tool deadlines must fit its bounded contract"
 type CellnToolSpec struct {
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=64
@@ -24,7 +25,7 @@ type CellnToolSpec struct {
 	// +kubebuilder:validation:Pattern="^/([A-Za-z0-9_-][A-Za-z0-9_.+-]*/)*[A-Za-z0-9_-][A-Za-z0-9_.+-]*$"
 	// +kubebuilder:validation:MaxLength=256
 	EntryPoint string `json:"entryPoint"`
-	// +kubebuilder:validation:Enum=celln.argv/v1
+	// +kubebuilder:validation:Enum=celln.argv/v1;celln.json-stdio/v1
 	InvocationABI   string            `json:"invocationABI"`
 	ArgumentsSchema CellnImmutableRef `json:"argumentsSchema"`
 	ResultSchema    CellnImmutableRef `json:"resultSchema"`

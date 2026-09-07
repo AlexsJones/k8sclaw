@@ -1,5 +1,9 @@
 # Experimental in-cell reference Harness binding
 
+This page records the legacy v1alpha2 reference contract. The separately
+versioned [native JSON Harness binding](celln-json-harness.md) supports bounded
+schema-bound tools and has its own actual-controller proof.
+
 Tracks [epic #426](https://github.com/sympozium-ai/sympozium/issues/426).
 This advanced AgentRun API is **disabled by default**. It is a narrow one-shot
 prototype, not the existing container-replacing `task.mode: harness`, a Pi/Hermes

@@ -7,11 +7,15 @@ their `Ready` semantics are unchanged. Celln-only objects are not supported.
 
 The optional profile records revision, executable/closure/mote BLAKE3 hashes,
 publisher key, canonical entry point, platform, lane, lifecycle and resource
-ceilings. Only the existing experimental `celln.reference-functions/v1`
-contract, `linux/amd64`, agent lane, disposable one-shot lifecycle, no runtime
+ceilings. The experimental `celln.reference-functions/v1` and native
+`celln.json-tools/v1` contracts are representable, with `linux/amd64`, agent lane,
+disposable one-shot lifecycle, no runtime
 data and no workspace are representable. Task input is capped at 2048 bytes.
 These limits are declarations, not execution grants. They do not expand the
-reference adapter's model mediation or its two-function protocol.
+selected adapter's model mediation or tool protocol. JSON profiles require
+explicit `json.maxTurns` (1–6) and `json.maxCalls` (0–16); reference profiles
+must omit `json`. The [advanced JSON AgentRun binding](celln-json-harness.md)
+is independently tested, but does not yet select this runtime profile.
 
 The runtime controller maintains a separate `CellnReady=False` condition:
 

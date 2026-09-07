@@ -106,8 +106,9 @@ type AgentRunSpec struct {
 	// "job" (default, implicit): standard Kubernetes Job backend.
 	// "celln": hardware-isolated Celln dispatcher (hermetic; no ensembles, no
 	//   delegation, no shared memory, no IPC, no streaming; the agent receives
-	//   the task string and produces a bounded output). Tasks that require
-	//   multiple tools, sub-agents, or workflow state must use "job".
+	//   the task string and produces a bounded output). Explicit native Harness
+	//   bindings support bounded lent tools; sub-agents and retained workflow
+	//   state still require "job".
 	//
 	// Celln is selected for individual high-risk or bounded computations;
 	// ensembles and workflows always use the Job backend.
@@ -116,7 +117,9 @@ type AgentRunSpec struct {
 	Backend string `json:"backend,omitempty"`
 
 	// Celln names an immutable program and bounded data for backend=celln.
-	// When present, task text is not sent to a model and cannot select code.
+	// A direct program invocation does not send task text to a model. An explicit
+	// Harness binding sends bounded task/persona data through its host model grant.
+	// Task text never supplies executable authority.
 	// The Celln operator must independently approve every referenced artifact.
 	// +optional
 	Celln *CellnExecutionSpec `json:"celln,omitempty"`

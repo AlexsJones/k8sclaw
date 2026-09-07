@@ -63,8 +63,11 @@ func Identify(tool api.CellnTool) (ToolIdentity, error) {
 	if tool.Namespace == "" || tool.Name == "" || tool.UID == "" || tool.Generation < 1 || tool.DeletionTimestamp != nil {
 		return ToolIdentity{}, fmt.Errorf("tool must have live namespace/name/UID/generation")
 	}
-	if len(s.Revision) < 1 || len(s.Revision) > 64 || len(s.Description) < 1 || len(s.Description) > 1024 || len(s.SupportOwner) < 1 || len(s.SupportOwner) > 256 || !publisherPattern.MatchString(s.PublisherKey) || len(s.EntryPoint) > 256 || !pathPattern.MatchString(s.EntryPoint) || s.InvocationABI != "celln.argv/v1" || s.Platform != "linux/amd64" || (s.Lane != "tool" && s.Lane != "agent") || (s.SourceImage != "" && (len(s.SourceImage) > 512 || !imagePattern.MatchString(s.SourceImage))) {
+	if len(s.Revision) < 1 || len(s.Revision) > 64 || len(s.Description) < 1 || len(s.Description) > 1024 || len(s.SupportOwner) < 1 || len(s.SupportOwner) > 256 || !publisherPattern.MatchString(s.PublisherKey) || len(s.EntryPoint) > 256 || !pathPattern.MatchString(s.EntryPoint) || (s.InvocationABI != "celln.argv/v1" && s.InvocationABI != "celln.json-stdio/v1") || s.Platform != "linux/amd64" || (s.Lane != "tool" && s.Lane != "agent") || (s.SourceImage != "" && (len(s.SourceImage) > 512 || !imagePattern.MatchString(s.SourceImage))) {
 		return ToolIdentity{}, fmt.Errorf("invalid or unsupported tool metadata")
+	}
+	if s.InvocationABI == "celln.json-stdio/v1" && (len(s.Description) > 512 || s.Limits.TimeoutMillis > 30000) {
+		return ToolIdentity{}, fmt.Errorf("tool metadata exceeds JSON adapter ceilings")
 	}
 	for _, ref := range []api.CellnImmutableRef{s.Executable, s.Closure, s.ArgumentsSchema, s.ResultSchema} {
 		if !hashPattern.MatchString(ref.Hash) {
