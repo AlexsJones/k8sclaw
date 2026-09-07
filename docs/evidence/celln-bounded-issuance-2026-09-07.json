@@ -1,0 +1,38 @@
+{
+  "date": "2026-09-07",
+  "scope": "local catalogue provisioning with durable nonrenewing admission expiry",
+  "base": "3f660c3e262da5681337b994152d05135e8d2cb3",
+  "cellnDependency": "064b56814247f6d13997ad2d82c4e6129dd52312 (#93)",
+  "regressions": {
+    "fullGoRace": "passed with real NATS binary on PATH",
+    "goBuildAll": "passed",
+    "goVetAll": "passed",
+    "targetedRace": "passed",
+    "cases": [
+      "later retries preserve profile bytes and grant identity",
+      "expiry, changed host boot and changed configured lifetime refuse renewal",
+      "withdrawal or direct profile removal cannot be undone by retry",
+      "pending recovery retains window and refuses authority restoration",
+      "corrupt window, invalid clock, overflow and invalid lifetime refuse",
+      "expiry during host issuance withdraws exact profile",
+      "abrupt child-process exits preserve original expiry window through recovery",
+      "CLI defaults to five-minute expiry; zero requires explicit legacy opt-out"
+    ]
+  },
+  "realKVM": {
+    "test": "TestComposeRealCellnArtifacts with CELLN_ISSUANCE_KVM=1",
+    "result": "passed",
+    "sequence": "real signed composition -> durable boot-bound expiring profile -> real sealed member verification -> identical issuance retry without renewal -> approval deletion -> reconciliation -> host refusal",
+    "grant": "blake3:180a554921e4877b8a9439bd0e2eab3650a6e3d09361b37dd5e6ad04e2cb9d81",
+    "closure": "blake3:db3c206d66ef4f1773cfa81faa7f701105672bcd0cd3e08f071b53a74ac4cd33",
+    "toolfs": "blake3:c0ac4c600a93de37e0577209341cf092ce1998fd02e0fdbca4cdf77f5a4db86f",
+    "kubernetes": "fake client",
+    "modelCalls": 0
+  },
+  "notProven": [
+    "unattended controller startup/watch/dispatch integration",
+    "active-cell expiry cancellation or fleet revocation",
+    "safe automatic retention or expiry window compaction",
+    "UI/YAML selection, conversations or final real-model user journey"
+  ]
+}
