@@ -593,6 +593,7 @@ func (r *EnsembleReconciler) buildAgent(
 					ProviderHeadersSecretRef: providerHeadersSecretRef,
 					AgentSandbox:             pack.Spec.AgentSandbox,
 					Lifecycle:                persona.Lifecycle,
+					Tolerations:              persona.Tolerations,
 					Subagents:                persona.Subagents,
 					Env:                      persona.Env,
 					RunTimeout:               persona.RunTimeout,

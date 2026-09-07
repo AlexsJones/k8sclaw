@@ -1222,6 +1222,7 @@ func (s *Server) createRun(w http.ResponseWriter, r *http.Request) {
 			Skills:           inst.Spec.Skills,
 			ImagePullSecrets: inst.Spec.ImagePullSecrets,
 			Lifecycle:        inst.Spec.Agents.Default.Lifecycle,
+			Tolerations:      inst.Spec.Agents.Default.Tolerations,
 			Env:              inst.Spec.Agents.Default.Env,
 			Timeout:          timeout,
 		},

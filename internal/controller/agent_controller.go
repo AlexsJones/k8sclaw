@@ -1004,6 +1004,9 @@ func (r *AgentReconciler) ensureWebEndpointAgentRun(ctx context.Context, instanc
 	if len(instance.Spec.Agents.Default.NodeSelector) > 0 {
 		agentRun.Spec.Model.NodeSelector = instance.Spec.Agents.Default.NodeSelector
 	}
+	if len(instance.Spec.Agents.Default.Tolerations) > 0 {
+		agentRun.Spec.Tolerations = instance.Spec.Agents.Default.Tolerations
+	}
 
 	if err := controllerutil.SetControllerReference(instance, agentRun, r.Scheme); err != nil {
 		return fmt.Errorf("set owner reference: %w", err)

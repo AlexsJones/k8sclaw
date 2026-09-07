@@ -308,6 +308,9 @@ func (r *SympoziumScheduleReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	if len(instance.Spec.Agents.Default.NodeSelector) > 0 {
 		agentRun.Spec.Model.NodeSelector = instance.Spec.Agents.Default.NodeSelector
 	}
+	if len(instance.Spec.Agents.Default.Tolerations) > 0 {
+		agentRun.Spec.Tolerations = instance.Spec.Agents.Default.Tolerations
+	}
 	if len(instance.Spec.Agents.Default.ProviderHeaders) > 0 {
 		agentRun.Spec.Model.ProviderHeaders = instance.Spec.Agents.Default.ProviderHeaders
 	}

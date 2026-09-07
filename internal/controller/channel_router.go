@@ -303,6 +303,7 @@ func (cr *ChannelRouter) handleInbound(ctx context.Context, event *eventbus.Even
 			Timeout:          inst.Spec.Agents.Default.ParseRunTimeout(),
 			ImagePullSecrets: inst.Spec.ImagePullSecrets,
 			Lifecycle:        inst.Spec.Agents.Default.Lifecycle,
+			Tolerations:      inst.Spec.Agents.Default.Tolerations,
 			SystemPrompt:     memorySystemPrompt(inst),
 			Volumes:          inst.Spec.Volumes,
 			VolumeMounts:     inst.Spec.VolumeMounts,
