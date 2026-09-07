@@ -276,6 +276,8 @@ export interface AgentRunStatus {
   harnessRuntimeSource?: "agent-default" | "run";
   postRunJobName?: string;
   gateVerdict?: string;
+  attempt?: number;
+  retryOf?: string;
   delegates?: DelegateStatus[];
   conditions?: Condition[];
 }

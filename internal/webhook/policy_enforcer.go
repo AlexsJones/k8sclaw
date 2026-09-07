@@ -253,6 +253,11 @@ func (pe *PolicyEnforcer) Handle(ctx context.Context, req admission.Request) adm
 		return admission.Denied(err.Error())
 	}
 
+	// Validate the gate retry ceiling
+	if err := pe.validateRetryPolicy(run, &policy); err != nil {
+		return admission.Denied(err.Error())
+	}
+
 	return admission.Allowed("policy validated")
 }
 
@@ -815,6 +820,25 @@ func (pe *PolicyEnforcer) validateLifecycleRBAC(run *sympoziumv1alpha1.AgentRun,
 				return fmt.Errorf("lifecycle RBAC requests access to denied resource %q", res)
 			}
 		}
+	}
+	return nil
+}
+
+// validateRetryPolicy bounds how many gate-driven attempts a run may request.
+// A gate that keeps returning "retry" burns tokens silently, so the operator's
+// ceiling is enforced here rather than trusted to the run's own spec.
+func (pe *PolicyEnforcer) validateRetryPolicy(run *sympoziumv1alpha1.AgentRun, policy *sympoziumv1alpha1.SympoziumPolicy) error {
+	if run.Spec.Lifecycle == nil || run.Spec.Lifecycle.Retry == nil {
+		return nil
+	}
+	if policy.Spec.LifecyclePolicy == nil || policy.Spec.LifecyclePolicy.MaxRetryAttempts <= 0 {
+		return nil
+	}
+
+	requested := run.Spec.Lifecycle.Retry.MaxAttempts
+	if requested > policy.Spec.LifecyclePolicy.MaxRetryAttempts {
+		return fmt.Errorf("lifecycle retry maxAttempts %d exceeds maximum %d",
+			requested, policy.Spec.LifecyclePolicy.MaxRetryAttempts)
 	}
 	return nil
 }

@@ -22,10 +22,56 @@ import {
   ShieldAlert,
   Check,
   X,
+  RotateCcw,
 } from "lucide-react";
 import { Breadcrumbs } from "@/components/breadcrumbs";
 import { useRunsSeen } from "@/hooks/use-runs-seen";
 import { costTooltip, effectiveCost, formatAge, formatUsd, taskText } from "@/lib/utils";
+
+// Presentation for each gate verdict. "retried" is amber rather than red: the
+// attempt was superseded by another one, which is not a failure — the chain may
+// still succeed. Unknown verdicts fall back to the red "something went wrong"
+// treatment.
+const GATE_VERDICT_STYLES: Record<
+  string,
+  { border: string; text: string; icon: typeof ShieldCheck }
+> = {
+  approved: {
+    border: "border-green-500/30 bg-green-500/5",
+    text: "text-green-400",
+    icon: ShieldCheck,
+  },
+  "allowed-by-default": {
+    border: "border-green-500/30 bg-green-500/5",
+    text: "text-green-400",
+    icon: ShieldCheck,
+  },
+  rewritten: {
+    border: "border-blue-500/30 bg-blue-500/5",
+    text: "text-blue-400",
+    icon: Pencil,
+  },
+  retried: {
+    border: "border-amber-500/30 bg-amber-500/5",
+    text: "text-amber-400",
+    icon: RotateCcw,
+  },
+  rejected: {
+    border: "border-red-500/30 bg-red-500/5",
+    text: "text-red-400",
+    icon: ShieldX,
+  },
+};
+
+const GATE_VERDICT_FALLBACK = {
+  border: "border-red-500/30 bg-red-500/5",
+  text: "text-red-400",
+  icon: ShieldAlert,
+};
+
+function gateVerdictStyle(verdict: string) {
+  return GATE_VERDICT_STYLES[verdict] ?? GATE_VERDICT_FALLBACK;
+}
 
 export function RunDetailPage() {
   const { name } = useParams<{ name: string }>();
@@ -247,42 +293,23 @@ export function RunDetailPage() {
       )}
 
       {/* Gate verdict banner */}
-      {run.status?.gateVerdict && (
-        <div
-          data-testid="gate-verdict-banner"
-          className={`flex items-center gap-2 rounded-lg border p-3 ${
-            run.status.gateVerdict === "approved" ||
-            run.status.gateVerdict === "allowed-by-default"
-              ? "border-green-500/30 bg-green-500/5"
-              : run.status.gateVerdict === "rewritten"
-                ? "border-blue-500/30 bg-blue-500/5"
-                : "border-red-500/30 bg-red-500/5"
-          }`}
-        >
-          {run.status.gateVerdict === "approved" ||
-          run.status.gateVerdict === "allowed-by-default" ? (
-            <ShieldCheck className="h-4 w-4 text-green-400" />
-          ) : run.status.gateVerdict === "rewritten" ? (
-            <Pencil className="h-4 w-4 text-blue-400" />
-          ) : run.status.gateVerdict === "rejected" ? (
-            <ShieldX className="h-4 w-4 text-red-400" />
-          ) : (
-            <ShieldAlert className="h-4 w-4 text-red-400" />
-          )}
-          <span
-            className={`text-sm ${
-              run.status.gateVerdict === "approved" ||
-              run.status.gateVerdict === "allowed-by-default"
-                ? "text-green-400"
-                : run.status.gateVerdict === "rewritten"
-                  ? "text-blue-400"
-                  : "text-red-400"
-            }`}
-          >
-            Response gate: {run.status.gateVerdict}
-          </span>
-        </div>
-      )}
+      {run.status?.gateVerdict &&
+        (() => {
+          const style = gateVerdictStyle(run.status.gateVerdict);
+          const Icon = style.icon;
+          return (
+            <div
+              data-testid="gate-verdict-banner"
+              className={`flex items-center gap-2 rounded-lg border p-3 ${style.border}`}
+            >
+              <Icon className={`h-4 w-4 ${style.text}`} />
+              <span className={`text-sm ${style.text}`}>
+                Response gate: {run.status.gateVerdict}
+                {run.status.retryOf && ` (retry of ${run.status.retryOf})`}
+              </span>
+            </div>
+          );
+        })()}
 
       {isHarnessRun && (
         <Card>

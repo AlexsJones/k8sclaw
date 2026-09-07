@@ -429,10 +429,21 @@ type AgentRunStatus struct {
 	PostRunJobName string `json:"postRunJobName,omitempty"`
 
 	// GateVerdict records the outcome of the response gate hook, if configured.
-	// One of: approved, rejected, rewritten, timeout, error, allowed-by-default.
+	// One of: approved, rejected, rewritten, timeout, error, allowed-by-default,
+	// retried (superseded by a successor attempt), retries-exhausted.
 	// Empty when no gate hook is configured.
 	// +optional
 	GateVerdict string `json:"gateVerdict,omitempty"`
+
+	// Attempt is this run's 1-based position in its retry chain. 0 or 1 both
+	// mean "first attempt"; only retry successors carry an explicit value.
+	// +optional
+	Attempt int `json:"attempt,omitempty"`
+
+	// RetryOf is the name of the predecessor AgentRun this attempt retries.
+	// Empty on a first attempt. Walk it backwards to reconstruct the chain.
+	// +optional
+	RetryOf string `json:"retryOf,omitempty"`
 
 	// Delegates tracks in-flight persona delegations for this run.
 	// Populated when the run enters AwaitingDelegate phase.
@@ -573,8 +584,16 @@ type LifecycleHookContainer struct {
 	// +optional
 	Env []EnvVar `json:"env,omitempty"`
 
-	// Timeout is the maximum duration for this hook container.
-	// Defaults to 5 minutes.
+	// Timeout is the budget for this hook container. Defaults to 5 minutes.
+	//
+	// PostRun hooks run sequentially in one Job, so their timeouts are summed
+	// into that Job's deadline; the total is never less than 10 minutes. Because
+	// Kubernetes has no per-init-container timeout, this bounds the Job as a
+	// whole rather than each container — use it to give a slow hook (or a
+	// human-in-the-loop gate) the room it needs, not to police a fast one.
+	//
+	// Not yet honoured on preRun hooks, which are bounded by the agent run's
+	// own spec.timeout.
 	// +optional
 	Timeout *metav1.Duration `json:"timeout,omitempty"`
 
@@ -616,6 +635,46 @@ type LifecycleHooks struct {
 	// +kubebuilder:default="block"
 	// +optional
 	GateDefault string `json:"gateDefault,omitempty"`
+
+	// Retry lets a response gate hand its rejection back to the agent for
+	// another attempt instead of ending the run. Absent means a gate verdict
+	// is terminal, which is the historical behaviour.
+	// +optional
+	Retry *RetrySpec `json:"retry,omitempty"`
+}
+
+// RetrySpec configures gate-driven attempt retry. When a gate hook returns
+// {"action":"retry"}, the controller creates a successor AgentRun carrying the
+// original task plus the gate's reason and output, and retires the current
+// attempt without publishing its result.
+//
+// The retry decision is not agent-controlled: the gate hook is an
+// operator-declared image in lifecycle.postRun, and the agent cannot patch the
+// gate-verdict annotation for its own run.
+type RetrySpec struct {
+	// MaxAttempts is the total number of attempts including the first, so
+	// maxAttempts: 3 permits two retries. A bound SympoziumPolicy may cap this
+	// further via lifecyclePolicy.maxRetryAttempts.
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:default=2
+	MaxAttempts int `json:"maxAttempts,omitempty"`
+
+	// Backoff delays the successor attempt. Absent means start immediately.
+	// +optional
+	Backoff *metav1.Duration `json:"backoff,omitempty"`
+
+	// MaxChainTokens caps the cumulative status.tokenUsage.totalTokens of every
+	// attempt in the chain. When the sum reaches it, the chain stops and the
+	// gate verdict resolves as retries-exhausted. 0 means unlimited.
+	// +optional
+	MaxChainTokens int64 `json:"maxChainTokens,omitempty"`
+
+	// On selects which outcomes may trigger a retry. Only "gate" is wired
+	// today; "failure" is accepted by the schema but ignored by the controller.
+	// Empty means ["gate"].
+	// +kubebuilder:validation:items:Enum=gate;failure
+	// +optional
+	On []string `json:"on,omitempty"`
 }
 
 // +kubebuilder:object:root=true
@@ -624,6 +683,9 @@ type LifecycleHooks struct {
 // +kubebuilder:printcolumn:name="Phase",type="string",JSONPath=".status.phase"
 // +kubebuilder:printcolumn:name="Pod",type="string",JSONPath=".status.podName"
 // +kubebuilder:printcolumn:name="Age",type="date",JSONPath=".metadata.creationTimestamp"
+// +kubebuilder:printcolumn:name="Gate",type="string",JSONPath=".status.gateVerdict",priority=1
+// +kubebuilder:printcolumn:name="Attempt",type="integer",JSONPath=".status.attempt",priority=1
+// +kubebuilder:printcolumn:name="Retry Of",type="string",JSONPath=".status.retryOf",priority=1
 
 // AgentRun is the Schema for the agentruns API.
 // Each agent invocation produces an AgentRun CR that the orchestrator

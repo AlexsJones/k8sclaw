@@ -15,6 +15,7 @@
 | `CONTEXT_HISTORY_BUDGET_BYTES` | Agent Runner | Total tool-result bytes that triggers elision of older results (default: 0 = off). |
 | `CONTEXT_HISTORY_BUDGET_LOW_BYTES` | Agent Runner | Target to drain down to when elision fires (default: half the budget). |
 | `CONTEXT_KEEP_RECENT_RESULTS` | Agent Runner | Newest tool results never eligible for elision (default: 3). |
+| `SYMPOZIUM_RETRY_GATE_OUTPUT_MAX_CHARS` | Controller | Cap on gate output fed back to the agent on a retry (default: 4000). See [Response Gate retries](../concepts/lifecycle-hooks.md#retrying-a-rejected-response). |
 | `TELEGRAM_BOT_TOKEN` | Telegram | Bot API token |
 | `SLACK_BOT_TOKEN` | Slack | Bot OAuth token |
 | `SLACK_APP_TOKEN` | Slack | App-level token for Socket Mode |

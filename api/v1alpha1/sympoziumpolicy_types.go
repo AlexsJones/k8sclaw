@@ -202,6 +202,13 @@ type LifecyclePolicySpec struct {
 	// hooks may not request RBAC access to (e.g. "secrets", "clusterroles").
 	// +optional
 	DeniedResources []string `json:"deniedResources,omitempty"`
+
+	// MaxRetryAttempts caps lifecycle.retry.maxAttempts for any AgentRun bound
+	// to this policy. A gate that keeps asking for another attempt burns tokens
+	// silently, so this is the operator's ceiling on what a run may request.
+	// 0 means no ceiling.
+	// +optional
+	MaxRetryAttempts int `json:"maxRetryAttempts,omitempty"`
 }
 
 // SympoziumPolicyStatus defines the observed state of SympoziumPolicy.

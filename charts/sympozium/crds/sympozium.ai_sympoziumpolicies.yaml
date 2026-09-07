@@ -103,6 +103,13 @@ spec:
                     items:
                       type: string
                     type: array
+                  maxRetryAttempts:
+                    description: |-
+                      MaxRetryAttempts caps lifecycle.retry.maxAttempts for any AgentRun bound
+                      to this policy. A gate that keeps asking for another attempt burns tokens
+                      silently, so this is the operator's ceiling on what a run may request.
+                      0 means no ceiling.
+                    type: integer
                 type: object
               modelPolicy:
                 description: ModelPolicy defines model access restrictions for bound

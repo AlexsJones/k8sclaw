@@ -10,6 +10,8 @@ import (
 
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	sympoziumv1alpha1 "github.com/sympozium-ai/sympozium/api/v1alpha1"
@@ -160,5 +162,151 @@ func TestRunJobShape(t *testing.T) {
 	assertExists(t, &inputCM, ns, fmt.Sprintf("%s-input", runName))
 	if inputCM.Data["task"] != "Verify job shape" {
 		t.Errorf("input ConfigMap task = %q, want %q", inputCM.Data["task"], "Verify job shape")
+	}
+}
+
+// TestRunRetryFieldsRoundTrip proves the retry spec and its status lineage
+// survive a real apiserver. Unit tests run against a fake client that never
+// applies the CRD schema, so a missing or misspelled field would be silently
+// pruned there and only show up in a cluster.
+func TestRunRetryFieldsRoundTrip(t *testing.T) {
+	ns := createTestNamespace(t)
+
+	run := &sympoziumv1alpha1.AgentRun{
+		ObjectMeta: metav1.ObjectMeta{Name: "sys-run-retry", Namespace: ns},
+		Spec: sympoziumv1alpha1.AgentRunSpec{
+			AgentRef: "sys-retry-agent",
+			Task:     sympoziumv1alpha1.NewStringTask("Verify retry round-trip"),
+			Lifecycle: &sympoziumv1alpha1.LifecycleHooks{
+				GateDefault: "block",
+				Retry: &sympoziumv1alpha1.RetrySpec{
+					MaxAttempts:    3,
+					Backoff:        &metav1.Duration{Duration: 30 * time.Second},
+					MaxChainTokens: 200000,
+					On:             []string{"gate"},
+				},
+				PostRun: []sympoziumv1alpha1.LifecycleHookContainer{
+					{Name: "check", Image: "check:latest", Gate: true},
+				},
+			},
+		},
+	}
+	if err := k8sClient.Create(testCtx, run); err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	t.Cleanup(func() { _ = k8sClient.Delete(testCtx, run) })
+
+	// k8sClient reads through the manager's informer cache, so a Get straight
+	// after Create can miss.
+	var got sympoziumv1alpha1.AgentRun
+	pollUntil(t, 15*time.Second, 100*time.Millisecond, func() bool {
+		return k8sClient.Get(testCtx, client.ObjectKeyFromObject(run), &got) == nil
+	})
+
+	if got.Spec.Lifecycle == nil {
+		t.Fatal("lifecycle was pruned by the apiserver")
+	}
+	retry := got.Spec.Lifecycle.Retry
+	if retry == nil {
+		t.Fatal("lifecycle.retry was pruned by the apiserver")
+	}
+	if retry.MaxAttempts != 3 {
+		t.Errorf("maxAttempts = %d, want 3", retry.MaxAttempts)
+	}
+	if retry.Backoff == nil || retry.Backoff.Duration != 30*time.Second {
+		t.Errorf("backoff = %v, want 30s", retry.Backoff)
+	}
+	if retry.MaxChainTokens != 200000 {
+		t.Errorf("maxChainTokens = %d, want 200000", retry.MaxChainTokens)
+	}
+	if len(retry.On) != 1 || retry.On[0] != "gate" {
+		t.Errorf("on = %v, want [gate]", retry.On)
+	}
+
+	// Assert on the object the apiserver returns from the status write rather
+	// than on a later Get: the live controller reconciles this run and will
+	// overwrite status at any moment, and what is under test here is whether
+	// the schema accepts the fields, not who wrote them last. For the same
+	// reason the write itself retries — a concurrent reconcile makes it
+	// conflict, which is not a schema failure.
+	pollUntil(t, 15*time.Second, 100*time.Millisecond, func() bool {
+		if err := k8sClient.Get(testCtx, client.ObjectKeyFromObject(run), &got); err != nil {
+			return false
+		}
+		got.Status.Attempt = 2
+		got.Status.RetryOf = "sys-run-retry-predecessor"
+		got.Status.GateVerdict = "retried"
+		return k8sClient.Status().Update(testCtx, &got) == nil
+	})
+	if got.Status.Attempt != 2 {
+		t.Errorf("status.attempt = %d, want 2 (pruned by the apiserver?)", got.Status.Attempt)
+	}
+	if got.Status.RetryOf != "sys-run-retry-predecessor" {
+		t.Errorf("status.retryOf = %q, want %q (pruned by the apiserver?)", got.Status.RetryOf, "sys-run-retry-predecessor")
+	}
+	if got.Status.GateVerdict != "retried" {
+		t.Errorf("status.gateVerdict = %q, want %q", got.Status.GateVerdict, "retried")
+	}
+}
+
+// TestRetryPrintColumnsAreServed proves the apiserver actually serves the
+// retry columns. They are how a chain is discovered from the command line, and
+// a typo in a JSONPath marker fails silently — the column just renders empty.
+func TestRetryPrintColumnsAreServed(t *testing.T) {
+	crd := &apiextensionsv1.CustomResourceDefinition{}
+	key := client.ObjectKey{Name: "agentruns.sympozium.ai"}
+	pollUntil(t, 15*time.Second, 100*time.Millisecond, func() bool {
+		return k8sClient.Get(testCtx, key, crd) == nil
+	})
+
+	served := map[string]string{}
+	for _, v := range crd.Spec.Versions {
+		if v.Name != "v1alpha1" {
+			continue
+		}
+		for _, col := range v.AdditionalPrinterColumns {
+			served[col.Name] = col.JSONPath
+		}
+	}
+
+	for name, wantPath := range map[string]string{
+		"Gate":     ".status.gateVerdict",
+		"Attempt":  ".status.attempt",
+		"Retry Of": ".status.retryOf",
+	} {
+		got, ok := served[name]
+		if !ok {
+			t.Errorf("column %q is not served; got %v", name, served)
+			continue
+		}
+		if got != wantPath {
+			t.Errorf("column %q JSONPath = %q, want %q", name, got, wantPath)
+		}
+	}
+}
+
+// TestPolicyRetryCeilingRoundTrips proves the operator-side ceiling survives the
+// apiserver too — the webhook that enforces it is not registered in envtest, so
+// only the schema is under test here.
+func TestPolicyRetryCeilingRoundTrips(t *testing.T) {
+	ns := createTestNamespace(t)
+
+	policy := &sympoziumv1alpha1.SympoziumPolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: "sys-retry-policy", Namespace: ns},
+		Spec: sympoziumv1alpha1.SympoziumPolicySpec{
+			LifecyclePolicy: &sympoziumv1alpha1.LifecyclePolicySpec{MaxRetryAttempts: 3},
+		},
+	}
+	if err := k8sClient.Create(testCtx, policy); err != nil {
+		t.Fatalf("create policy: %v", err)
+	}
+	t.Cleanup(func() { _ = k8sClient.Delete(testCtx, policy) })
+
+	var got sympoziumv1alpha1.SympoziumPolicy
+	pollUntil(t, 15*time.Second, 100*time.Millisecond, func() bool {
+		return k8sClient.Get(testCtx, client.ObjectKeyFromObject(policy), &got) == nil
+	})
+	if got.Spec.LifecyclePolicy == nil || got.Spec.LifecyclePolicy.MaxRetryAttempts != 3 {
+		t.Errorf("lifecyclePolicy = %+v, want maxRetryAttempts 3", got.Spec.LifecyclePolicy)
 	}
 }
