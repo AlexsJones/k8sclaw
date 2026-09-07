@@ -126,6 +126,23 @@ responses to check exact arguments, source binding, policy changes, withdrawal
 and cleanup. These tests do not replace the Celln compositor's real-image/KVM
 tests or establish a complete real catalogue-to-cell execution proof.
 
+The opt-in `TestComposeRealCellnArtifacts` additionally passed against the
+actual Celln binary and signed native Harness/uppercase/length bytes. It built
+and verified a 32 MiB composition, then refused its descriptor after source
+withdrawal. [Recorded evidence](../evidence/celln-catalogue-composition-2026-09-07.json)
+explicitly distinguishes real artifacts from fake Kubernetes metadata: no
+model request or cell ran in this test.
+
+Prepare the fixture in the Celln checkout with the public-seed
+`prepare_composition_fixture` example, giving it a new directory and an existing
+native JSON proof package. Then run in the Sympozium checkout:
+
+```sh
+CELLN_COMPOSITION_FIXTURE=/absolute/path/to/generated/fixture \
+CELLN_COMPOSITION_BINARY=/absolute/path/to/celln \
+  go test -race ./internal/cellnreview -run TestComposeRealCellnArtifacts -count=1 -v
+```
+
 Race-enabled tests use a Kubernetes fake client to exercise actual loader
 lookups, stale subjects, withdrawn grants, untrusted tenant lookalikes,
 source mutation, malformed documents and restrictive selections. They do not
