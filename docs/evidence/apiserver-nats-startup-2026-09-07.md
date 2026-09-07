@@ -34,8 +34,43 @@ token; no authentication bypass or provider credential was introduced.
 Race-enabled tests passed for `cmd/apiserver`, `internal/eventbus`,
 `internal/apiserver`, and `internal/controller`, including cancellation,
 non-responsive NATS handshake, unreachable provisioning and chart UI flags.
-Helm lint passed. Existing live-connection reconnect settings remain in code,
-but a real NATS disconnect/reconnect test is still required before the entire
-#431 acceptance is considered proven. Initial connection failure intentionally
+Helm lint passed. Initial connection failure intentionally
 requires API restart after NATS is restored; this is not automatic recovery of
 an initially absent streaming service.
+
+## Established connection restart regression
+
+The opt-in `TestNATSRealServerReconnectAfterStartupContextExpires` uses a real
+local `nats-server` 2.11.4, bound only to a dynamically selected loopback port,
+with test-owned temporary JetStream storage. It calls the production
+`NewNATSEventBusWithContext`, cancels that startup context immediately after
+successful initialization, and then:
+
+1. Publishes and receives an identified event on a live subscription.
+2. SIGKILLs the owned server process and observes the original connection
+   becoming disconnected.
+3. Starts a new server process on the same port and retained store.
+4. Requires the same connection object to reconnect, then publishes and receives
+   another identified event on the original subscription channel.
+
+This passed once, then three consecutive repetitions, then once in the full
+race-enabled API/event-bus/controller suite: five actual server restart cycles.
+The first test completed in 6.04 seconds; the three-repetition package run took
+19.121 seconds including race-runtime overhead. No race reports occurred.
+Server executable SHA256:
+`4d3cd9e94ef7c6e811eda283df8b011cd43c1c093024c3af981f4c57f68dd6f7`.
+
+Reproduction (does not modify repository dependency versions):
+
+```sh
+GOBIN="$PWD/target/nats-proof/bin" go install github.com/nats-io/nats-server/v2@v2.11.4
+SYMPOZIUM_NATS_SERVER="$PWD/target/nats-proof/bin/nats-server" \
+  go test -race ./internal/eventbus -run TestNATSRealServerReconnect -count=3
+```
+
+Without the explicit executable path this integration test skips; that skip is
+not a reconnect pass. The test kills only its own server processes and Go removes
+its temporary storage. It neither contacts a cluster NATS service nor needs
+credentials. This proves retained-store process restart, not broker data loss,
+replicated-cluster failover, zero event loss during a deleted consumer, or a new
+end-to-end API streaming/browser test. #431 remains open until review and merge.

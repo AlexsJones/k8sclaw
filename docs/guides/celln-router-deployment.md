@@ -127,8 +127,9 @@ by the running API: restore NATS and restart the API to enable streaming. An
 already initialized bus retains its unlimited background reconnect policy.
 The UI flag is explicitly set false when `apiserver.webUI.enabled=false`.
 
-These changes address the startup finding in #431; default-chart actual-process
-startup and reconnection evidence must still be checked before closing it.
+These changes address the startup finding in #431. See the
+[actual-process startup and reconnect evidence](../evidence/apiserver-nats-startup-2026-09-07.md)
+for tested cases and limits; review and merge remain required before closing it.
 
 Chart render tests cover flags, credential/storage mounts, image pinning,
 explicit host opt-in and ingress selectors. They do not prove runtime storage,
