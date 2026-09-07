@@ -1,7 +1,8 @@
 # Experimental Celln executable-tool catalogue metadata
 
 Implements the first schema/RBAC slice of #335 and epic #426. This is **not an
-executable catalogue yet**: no review/verifier/distribution controller, lending
+executable catalogue yet**: an [operator review CLI](celln-tool-review.md) can
+publish locally verified metadata, but no verifier/distribution controller, lending
 resolver, API-server submission endpoint or selection UI is connected. Neither
 resource creation nor status metadata grants Celln execution authority.
 
@@ -67,4 +68,5 @@ catalogue entries, submissions, service accounts, bindings and test roles were
 removed. CRDs remain installed; no tools, cells, Jobs or model calls were created.
 Fixture hashes are intentionally dummy metadata, not admitted executable bytes.
 This is Kubernetes schema/RBAC evidence, not guest-isolation or BYO execution
-evidence. The operator workflow and frozen authority resolver remain next steps.
+evidence. Operator review and pure authority resolution are now available;
+conformance, trusted dispatch integration and distribution remain next steps.
