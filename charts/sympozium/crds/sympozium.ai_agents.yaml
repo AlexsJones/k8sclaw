@@ -4873,6 +4873,41 @@ spec:
                 required:
                 - enabled
                 type: object
+              workspace:
+                description: |-
+                  Workspace configures the /workspace volume for agent pods spawned
+                  by this Agent. When PerSessionPVC is enabled, each unique
+                  SessionKey gets a dedicated PVC that persists across AgentRuns —
+                  required for harnesses (codex, claude-code) whose session state
+                  lives under $HOME, and useful for long-lived conversations that
+                  need filesystem continuity. When nil or PerSessionPVC is false,
+                  /workspace remains an ephemeral emptyDir as before.
+                properties:
+                  idleTTL:
+                    description: |-
+                      IdleTTL is the duration a WorkspaceSession (and its PVC) may sit
+                      idle without any AgentRun referencing it before the sweeper
+                      reclaims it. Defaults to "720h" (30 days). Set to "0s" to disable
+                      idle reclamation entirely.
+                    type: string
+                  perSessionPVC:
+                    description: |-
+                      PerSessionPVC enables a dedicated PVC per (agent, sessionKey).
+                      When false or nil, /workspace remains an ephemeral emptyDir.
+                    type: boolean
+                  size:
+                    description: |-
+                      Size requests storage capacity for the per-session PVC
+                      (e.g. "1Gi"). Defaults to "1Gi" (matching the emptyDir size limit
+                      used for ephemeral workspaces).
+                    pattern: ^[0-9]+([.][0-9]+)?(([KMGTPE]i?)|[a-zA-Z]*)?$
+                    type: string
+                  storageClassName:
+                    description: |-
+                      StorageClassName selects the StorageClass for the per-session
+                      PVC. When empty, the cluster's default StorageClass is used.
+                    type: string
+                type: object
             required:
             - agents
             type: object
