@@ -193,6 +193,11 @@ func (r *AgentRunReconciler) reconcilePendingCelln(
 	log logr.Logger,
 	agentRun *sympoziumv1alpha1.AgentRun,
 ) (ctrl.Result, error) {
+	// Catalogue issuance cannot fall through to the legacy task-forge path.
+	// Its separately verified dispatch bridge must consume the saved outcome.
+	if agentRun.Status.CellnIssuance != nil {
+		return ctrl.Result{}, fmt.Errorf("Celln catalogue issuance dispatch is not yet connected")
+	}
 	log.Info("Dispatching AgentRun to Celln backend")
 
 	task := agentRun.Spec.Task.GetPrompt()

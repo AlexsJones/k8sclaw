@@ -335,6 +335,7 @@ const (
 )
 
 // AgentRunStatus defines the observed state of AgentRun.
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.cellnIssuance) || has(self.cellnIssuance)",message="saved Celln issuance cannot be removed"
 type AgentRunStatus struct {
 	// Phase is the current phase (Pending, Running, Succeeded, Failed, Skipped).
 	// +optional
@@ -457,6 +458,10 @@ type AgentRunStatus struct {
 	// +kubebuilder:validation:MaxLength=131072
 	// +optional
 	CellnRequest string `json:"cellnRequest,omitempty"`
+	// CellnIssuance persists the exact approved payload before remote provisioning.
+	// It is history, not dispatch permission or artifact readiness.
+	// +optional
+	CellnIssuance *CellnIssuanceStatus `json:"cellnIssuance,omitempty"`
 	// CellnReceipt retains the validated versioned terminal receipt as JSON.
 	// +kubebuilder:validation:MaxLength=131072
 	// +optional
@@ -631,6 +636,7 @@ type LifecycleHooks struct {
 // AgentRun is the Schema for the agentruns API.
 // Each agent invocation produces an AgentRun CR that the orchestrator
 // reconciles into a Kubernetes Job.
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.status) || !has(oldSelf.status.cellnIssuance) || (has(self.status) && has(self.status.cellnIssuance))",message="saved Celln issuance status cannot be removed"
 type AgentRun struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`

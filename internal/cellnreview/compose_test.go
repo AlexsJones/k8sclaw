@@ -39,7 +39,7 @@ func compositionFixture(t *testing.T) (cellnauthority.Loader, *cellnauthority.Fr
 	scheme := runtime.NewScheme()
 	_ = api.AddToScheme(scheme)
 	_ = corev1.AddToScheme(scheme)
-	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objects...).Build()
+	c := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(&api.AgentRun{}).WithObjects(objects...).Build()
 	loader := cellnauthority.Loader{Reader: c, OperatorSource: types.NamespacedName{Namespace: "operators", Name: "operator"}, RuntimeSource: types.NamespacedName{Namespace: "operators", Name: "runtime"}, AgentSource: types.NamespacedName{Namespace: "operators", Name: "agent"}}
 	frozen, err := loader.FreezeRun(ctx, client.ObjectKeyFromObject(&run), nil, 33554432)
 	if err != nil {

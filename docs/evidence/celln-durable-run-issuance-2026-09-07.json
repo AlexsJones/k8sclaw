@@ -1,0 +1,29 @@
+{
+  "date": "2026-09-07",
+  "scope": "Durable AgentRun provisioning helper, not catalogue-backed controller dispatch",
+  "base": "cc3de76 (Sympozium PR #449)",
+  "checks": {
+    "goRaceAllPackages": "passed; NATS binary on PATH",
+    "goBuild": "passed",
+    "goVet": "passed",
+    "generatedCRDs": "regenerated and synchronized to both charts",
+    "helmLintBothCharts": "passed",
+    "statusFailureInjection": "passed before/after Prepared and Issued commits",
+    "savedStateRefusals": "passed target, seed, spec, hash, candidate and terminal mutations",
+    "legacyDispatchGuard": "Prepared and Issued refuse without router requests",
+    "isolatedKindAPI": "Prepared -> Issued and 10 invalid-transition refusals; zero Jobs/model calls",
+    "realKVM": "composition -> durable preparation -> verified TLS issuance -> saved outcome resume -> managed approval withdrawal -> host refusal"
+  },
+  "realKVMIdentities": {
+    "grant": "blake3:0bec87922b471c1c91b6ec9b7a635a1e3415a953e34db33ceaf19f1b073f88fc",
+    "closure": "blake3:d05889cc8410c69728b6e2e92ac0314a585bf7d845effc462f2ed6397d218d49",
+    "toolfs": "blake3:113f20ad84f6ef30b1676af66cdcebccb6f80fe988b83a32c4950a1455bd3771"
+  },
+  "limitations": [
+    "Real KVM test uses fake Kubernetes metadata; API-server schema test is separate",
+    "No model calls and no deployed catalogue-backed execution",
+    "Endpoint pinning is not cryptographic host identity or fleet ownership",
+    "Saved issuance does not establish readiness, renew expiry or bypass live host checks",
+    "Controller dispatch, UI/YAML selection, conversations and full release qualification remain open"
+  ]
+}

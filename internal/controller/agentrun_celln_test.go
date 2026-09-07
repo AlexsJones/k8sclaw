@@ -39,6 +39,28 @@ func newTestCellnRun(t *testing.T, name string, uid types.UID) *sympoziumv1alpha
 
 // ── Fix 1: action IDs must be unique per object identity, not just per name ──
 
+func TestReconcilePendingCelln_IssuanceCannotFallThrough(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("catalogue issuance reached legacy router dispatch")
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	defer srv.Close()
+	t.Setenv("CELLN_ROUTER_URL", srv.URL)
+	for _, phase := range []string{"Prepared", "Issued"} {
+		t.Run(phase, func(t *testing.T) {
+			run := newTestCellnRun(t, "catalogue", types.UID("catalogue-uid"))
+			run.Status.CellnIssuance = &sympoziumv1alpha1.CellnIssuanceStatus{Phase: phase}
+			r := newAgentRunTestReconciler(t, run)
+			if _, err := r.reconcilePendingCelln(context.Background(), logr.Discard(), run); err == nil {
+				t.Fatal("unconnected catalogue dispatch did not refuse")
+			}
+			if run.Status.CellnRequest != "" || run.Status.CellnActionID != "" {
+				t.Fatal("refusal created legacy execution identity")
+			}
+		})
+	}
+}
+
 func TestReconcilePendingCelln_ActionIDUniquePerUID(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusAccepted)

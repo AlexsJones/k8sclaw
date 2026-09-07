@@ -2873,6 +2873,66 @@ spec:
                   non-Celln backends. The controller polls /v1/executions/<id> on the
                   router to track progress.
                 type: string
+              cellnIssuance:
+                description: |-
+                  CellnIssuance persists the exact approved payload before remote provisioning.
+                  It is history, not dispatch permission or artifact readiness.
+                properties:
+                  payload:
+                    description: Payload contains the frozen observation and expected
+                      execution candidate.
+                    maxLength: 393216
+                    minLength: 1
+                    type: string
+                    x-kubernetes-validations:
+                    - message: issuance payload is immutable
+                      rule: self == oldSelf
+                  payloadSHA256:
+                    maxLength: 71
+                    pattern: ^sha256:[0-9a-f]{64}$
+                    type: string
+                    x-kubernetes-validations:
+                    - message: issuance payload hash is immutable
+                      rule: self == oldSelf
+                  phase:
+                    enum:
+                    - Prepared
+                    - Issued
+                    maxLength: 8
+                    type: string
+                  result:
+                    description: Result contains the validated remote outcome, never
+                      provider credentials.
+                    maxLength: 196608
+                    type: string
+                    x-kubernetes-validations:
+                    - message: issued result is immutable
+                      rule: self == oldSelf
+                  target:
+                    description: Target pins the operator-configured issuer endpoint,
+                      not a tenant URL.
+                    maxLength: 2048
+                    minLength: 1
+                    type: string
+                    x-kubernetes-validations:
+                    - message: issuer target is immutable
+                      rule: self == oldSelf
+                required:
+                - payload
+                - payloadSHA256
+                - phase
+                - target
+                type: object
+                x-kubernetes-validations:
+                - message: Celln issuance phase cannot regress
+                  rule: self.phase == oldSelf.phase || (oldSelf.phase == 'Prepared'
+                    && self.phase == 'Issued')
+                - message: issued outcome requires a durable result
+                  rule: self.phase != 'Issued' || (has(self.result) && size(self.result)
+                    > 0)
+                - message: prepared issuance cannot contain an outcome
+                  rule: self.phase != 'Prepared' || !has(self.result) || size(self.result)
+                    == 0
               cellnReceipt:
                 description: CellnReceipt retains the validated versioned terminal
                   receipt as JSON.
@@ -3146,7 +3206,14 @@ spec:
                   Set by the controller when creating the Job.
                 type: string
             type: object
+            x-kubernetes-validations:
+            - message: saved Celln issuance cannot be removed
+              rule: '!has(oldSelf.cellnIssuance) || has(self.cellnIssuance)'
         type: object
+        x-kubernetes-validations:
+        - message: saved Celln issuance status cannot be removed
+          rule: '!has(oldSelf.status) || !has(oldSelf.status.cellnIssuance) || (has(self.status)
+            && has(self.status.cellnIssuance))'
     served: true
     storage: true
     subresources:
