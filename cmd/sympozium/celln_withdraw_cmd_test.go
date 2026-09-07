@@ -60,3 +60,18 @@ func TestWithdrawGrantWorksWithoutKubernetesAndRetainsUnrelatedFiles(t *testing.
 		t.Fatal("audit changed")
 	}
 }
+
+func TestRecoverGrantsDoesNotInitializeKubernetes(t *testing.T) {
+	parent := &cobra.Command{Use: "root", PersistentPreRunE: func(*cobra.Command, []string) error { return fmt.Errorf("Kubernetes unavailable") }}
+	parent.AddCommand(newCellnRecoverGrantsCmd())
+	parent.SetArgs([]string{"recover-grants", "--policy-root", t.TempDir()})
+	var output bytes.Buffer
+	parent.SetOut(&output)
+	parent.SetErr(&output)
+	if err := parent.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(output.Bytes(), []byte(`"complete":true`)) || !bytes.Contains(output.Bytes(), []byte(`"executionAuthorized":false`)) {
+		t.Fatalf("unexpected recovery: %s", output.Bytes())
+	}
+}

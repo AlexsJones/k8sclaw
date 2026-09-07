@@ -1,0 +1,27 @@
+{
+  "date": "2026-09-07",
+  "status": "passed",
+  "crashProof": {
+    "method": "child process exits with code 47, bypassing all Go defers",
+    "stages": ["before-host-issuance", "after-host-issuance", "after-durable-commit", "during-withdrawal"],
+    "incompleteProfilesWithdrawn": true,
+    "committedOutcomeRetained": true,
+    "grantAuditBytesRetained": true,
+    "recoveryIdempotent": true,
+    "changedProfilesAndCorruptRecordsRefused": true,
+    "kubernetes": "fake",
+    "hostIssuer": "mocked-command-runner",
+    "powerLossTested": false
+  },
+  "separateRealKVMRegression": {
+    "scope": "catalogue composition and local host issuance, not a crash during guest execution",
+    "grant": "blake3:1b07694f7a92564d6ab3e1c7b31cd7fa284170da7533e3f3da49021bd43d4460",
+    "closure": "blake3:d4812de20561f11107eafea2b0f76981899abbb26d17135a81d56b7059e758f1",
+    "toolfs": "blake3:6d119482d74f32e718b91d71dafb314f4fcdf19d1bc1770b21da3bc724f32ffb",
+    "idempotentIssuanceAndWithdrawalPassed": true,
+    "kubernetes": "fake",
+    "modelCalls": 0
+  },
+  "deployedStartupGateProven": false,
+  "ongoingApprovalWatcherImplemented": false
+}

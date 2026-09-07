@@ -51,6 +51,9 @@ func issue(ctx context.Context, l cellnauthority.ModelLoader, frozen cellnauthor
 		return nil, err
 	}
 	defer unlock()
+	if _, err := recoverPending(o.PolicyRoot); err != nil {
+		return nil, err
+	}
 	candidate, err := l.BuildExecution(ctx, frozen, approval, artifacts)
 	if err != nil {
 		return nil, err
@@ -94,6 +97,7 @@ func issue(ctx context.Context, l cellnauthority.ModelLoader, frozen cellnauthor
 		return nil, err
 	}
 	profilePath := filepath.Join(directory, name+".json")
+	record := IssuerRecord{APIVersion: "sympozium.ai/celln-issuer-record-v1", State: "pending", Profile: name, ProfileSHA256: "sha256:" + hex.EncodeToString(profileDigest[:]), Frozen: frozen, Candidate: *candidate}
 	if err := l.Revalidate(ctx, frozen, approval); err != nil {
 		return nil, err
 	}
@@ -101,9 +105,17 @@ func issue(ctx context.Context, l cellnauthority.ModelLoader, frozen cellnauthor
 	// identical retry created it. Existing grant bytes remain inert under v3.
 	defer func() {
 		if err != nil {
-			err = errors.Join(err, removeProfile(profilePath, profileBytes))
+			cleanupErr := removeProfile(profilePath, profileBytes)
+			if cleanupErr == nil {
+				record.State = "withdrawn"
+				cleanupErr = writeIssuerRecord(o.PolicyRoot, record)
+			}
+			err = errors.Join(err, cleanupErr)
 		}
 	}()
+	if err := writeIssuerRecord(o.PolicyRoot, record); err != nil {
+		return nil, err
+	}
 	if err := publishProfile(profilePath, profileBytes); err != nil {
 		return nil, err
 	}
@@ -162,7 +174,12 @@ func issue(ctx context.Context, l cellnauthority.ModelLoader, frozen cellnauthor
 	if err = verifyComposition(ctx, execute, o, frozen, artifacts.Closure.Hash); err != nil {
 		return nil, err
 	}
-	return &IssuedSelection{APIVersion: "sympozium.ai/celln-issued-selection-v1", Candidate: *candidate, Request: issued.Request, Grant: issued.Grant, Profile: name, ProfileSHA256: "sha256:" + hex.EncodeToString(profileDigest[:])}, nil
+	result = &IssuedSelection{APIVersion: "sympozium.ai/celln-issued-selection-v1", Candidate: *candidate, Request: issued.Request, Grant: issued.Grant, Profile: name, ProfileSHA256: record.ProfileSHA256}
+	record.State, record.Issued = "issued", result
+	if err := writeIssuerRecord(o.PolicyRoot, record); err != nil {
+		return nil, err
+	}
+	return result, nil
 }
 
 func readCredentialMapping(root, name string) (string, [32]byte, error) {
@@ -320,10 +337,10 @@ func syncDirectory(path string) error {
 // Withdraw removes only the exact profile named by a persisted issuer result.
 // Serialize with issuance and never delete grant/audit records or credentials.
 func Withdraw(root string, issued IssuedSelection) error {
-	if !filepath.IsAbs(root) || !strings.HasPrefix(issued.Profile, "symp-") || len(issued.Profile) != 63 || len(issued.ProfileSHA256) != 71 || !strings.HasPrefix(issued.ProfileSHA256, "sha256:") {
-		return fmt.Errorf("invalid issued profile identity")
+	if !filepath.IsAbs(root) {
+		return fmt.Errorf("absolute operator root required")
 	}
-	if _, err := hex.DecodeString(issued.Profile[5:]); err != nil {
+	if err := validProfileIdentity(issued.Profile, issued.ProfileSHA256); err != nil {
 		return err
 	}
 	unlock, err := lockIssuer(root)
@@ -331,6 +348,40 @@ func Withdraw(root string, issued IssuedSelection) error {
 		return err
 	}
 	defer unlock()
+	r, err := readIssuerRecord(filepath.Join(root, "sympozium-issuer-journal", issued.Profile+".json"))
+	if os.IsNotExist(err) {
+		r = IssuerRecord{APIVersion: "sympozium.ai/celln-issuer-record-v1", Profile: issued.Profile, ProfileSHA256: issued.ProfileSHA256, Candidate: issued.Candidate, Issued: &issued}
+	} else if err != nil {
+		return err
+	}
+	if r.ProfileSHA256 != issued.ProfileSHA256 {
+		return fmt.Errorf("issuer journal identity mismatch")
+	}
+	r.State = "withdrawing"
+	if err := writeIssuerRecord(root, r); err != nil {
+		return err
+	}
+	if err := withdrawProfile(root, issued); err != nil {
+		return err
+	}
+	r.State = "withdrawn"
+	return writeIssuerRecord(root, r)
+}
+
+func validProfileIdentity(profile, digest string) error {
+	if !strings.HasPrefix(profile, "symp-") || len(profile) != 63 || !strings.HasPrefix(digest, "sha256:") || len(digest) != 71 || profile[5:] != digest[7:65] {
+		return fmt.Errorf("invalid issued profile identity")
+	}
+	if _, err := hex.DecodeString(digest[7:]); err != nil {
+		return fmt.Errorf("invalid profile digest")
+	}
+	return nil
+}
+
+func withdrawProfile(root string, issued IssuedSelection) error {
+	if err := validProfileIdentity(issued.Profile, issued.ProfileSHA256); err != nil {
+		return err
+	}
 	path := filepath.Join(root, "trusted-model-profiles", issued.Profile+".json")
 	data, err := readLimit(path, 65536)
 	if os.IsNotExist(err) {

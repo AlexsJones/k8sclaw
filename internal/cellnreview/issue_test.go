@@ -30,9 +30,17 @@ type issuerFixture struct {
 }
 
 func provisionFixture(t *testing.T) issuerFixture {
+	return provisionFixtureAt(t, "")
+}
+
+func provisionFixtureAt(t *testing.T, root string) issuerFixture {
 	t.Helper()
 	ctx := context.Background()
 	l, old, o, _ := compositionFixture(t)
+	if root != "" {
+		o.PolicyRoot = root
+		o.Binary = filepath.Join(root, "celln")
+	}
 	c := l.Reader.(client.Client)
 	key := types.NamespacedName{Namespace: old.Run.Namespace, Name: old.Run.Name}
 	var run api.AgentRun
