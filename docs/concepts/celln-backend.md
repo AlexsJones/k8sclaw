@@ -2,12 +2,14 @@
 
 Sympozium optionally integrates with [Celln](https://github.com/sympozium-ai/celln) to run a single bounded, high-risk, or sensitive computation in a hardware-isolated microVM instead of a Kubernetes Job. It is selected per run with `spec.backend: "celln"` on an `AgentRun`.
 
-Celln is enabled by default: `celln.enabled=true` installs the router and
-controller configuration with Sympozium. Its installer DaemonSet runs
-privileged, with `hostPID`, and a read-write mount of the host root filesystem
-to set up KVM; it and the router schedule only on nodes explicitly labelled
-`celln.dev/kvm=true`. That label is the deliberate host-setup boundary. Disable
-Celln entirely with `helm upgrade --set celln.enabled=false`. This page covers
+Celln is disabled by default. Enabling it requires explicit router credentials,
+backend endpoints, an image digest and shared ownership storage; see
+[router deployment](../guides/celln-router-deployment.md). Host installation is
+a separate `celln.installer.enabled=true` opt-in. That legacy DaemonSet runs
+privileged, with `hostPID` and a writable host root, only on nodes labelled
+`celln.dev/kvm=true`. Routers are unprivileged Deployment replicas, not per-node
+DaemonSets. Disable Celln with `helm upgrade --set celln.enabled=false`; this
+does not undo changes already made to hosts. This page also covers
 the one requirement that's easy to miss: Celln needs its own AI provider access
 on the host, separate from whatever provider your `Agent`/`AgentRun` is configured with.
 
@@ -105,6 +107,33 @@ distributed failover or recovery of a lost registry after a dispatcher crash.
 
 ## Enabling / Disabling Celln
 
+### M0 rollout warning and network boundary
+
+The chart's `celln-router-ingress` NetworkPolicy selects router pods in
+`celln-system` and permits only TCP 8788 from controller pods **in the configured
+control-plane namespace**. The namespace and pod selectors are intersected;
+copying a controller label in another namespace does not grant access. This
+policy remains enabled with Celln even if the general `networkPolicies.enabled`
+option is false. It requires a NetworkPolicy-enforcing CNI and is not an
+authentication mechanism. Host-network traffic and administrator-added additive
+policies require separate operator review.
+
+The API server is intentionally not granted execution access. Its current
+TCP-only capability probe may report unavailable under this restriction;
+authenticated, least-privilege readiness is tracked in M0 rather than granting
+the API server access to an otherwise unauthenticated execution endpoint.
+
+This policy alone does not resolve [#331](https://github.com/sympozium-ai/sympozium/issues/331).
+The companion Celln router change requires `--client-token-file` for inbound
+authentication, separate from the outbound dispatcher's `--token-file`, and
+adds cancellation forwarding. The chart requires an image implementing that
+change and durable ownership (Celln PRs #70 and #75); v0.4.13 is incompatible.
+TLS, host provisioning and deployed storage qualification remain M0 work.
+Do not treat the chart configuration as a proven
+multi-tenant execution path or work around missing TLS by silently enabling
+insecure HTTP. See [epic #426](https://github.com/sympozium-ai/sympozium/issues/426)
+for remaining deployment, replica ownership and two-node acceptance work.
+
 ```bash
 sympozium install --enable-hermetic-workloads
 # or: make install ENABLE_HERMETIC_WORKLOADS=true
@@ -112,7 +141,7 @@ sympozium install --enable-hermetic-workloads
 ```
 
 ```yaml
-# values.yaml — explicitly disable the chart's default-enabled integration
+# values.yaml — the safe default
 celln:
   enabled: false
 ```
@@ -148,7 +177,8 @@ If none of the above is true on a given KVM node, that node's dispatcher is stil
 | Scenario | Behavior |
 |----------|----------|
 | `celln.enabled=false` | No `celln-system` namespace or resources. Runs with `backend: celln` fail at dispatch with a router-unreachable error, not at admission. |
-| `celln.enabled=true`, no node labeled `celln.dev/kvm=true` | Installer/router DaemonSets deploy with zero pods scheduled. Runs fail the same way as above — nothing is listening at the router URL. |
+| `celln.enabled=true`, missing required router configuration | Helm render fails; no partially configured router is installed. |
+| `celln.enabled=true`, no eligible dispatcher reachable | Router replicas can run without KVM themselves, but cannot execute a request. The optional installer only schedules on labelled nodes. |
 | `celln.enabled=true`, KVM node(s) present, no AI provider reachable on the host | Router and dispatcher report healthy. The run reaches `Running`, then fails once the dispatcher's own provider check fails — see above. |
 | Everything configured | Run dispatches, executes in a real sealed cell, and returns a bounded result. |
 

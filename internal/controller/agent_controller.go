@@ -24,6 +24,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	sympoziumv1alpha1 "github.com/sympozium-ai/sympozium/api/v1alpha1"
+	"github.com/sympozium-ai/sympozium/internal/sessionkey"
 )
 
 const sympoziumInstanceFinalizer = "sympozium.ai/finalizer"
@@ -978,7 +979,7 @@ func (r *AgentReconciler) ensureWebEndpointAgentRun(ctx context.Context, instanc
 		Spec: sympoziumv1alpha1.AgentRunSpec{
 			AgentRef:   instance.Name,
 			AgentID:    "web-endpoint",
-			SessionKey: "web-endpoint",
+			SessionKey: sessionkey.ForWebEndpoint(instance.Name),
 			Task:       sympoziumv1alpha1.NewStringTask("Serve HTTP requests for this instance"),
 			Mode:       "server",
 			Model: sympoziumv1alpha1.ModelSpec{

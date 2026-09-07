@@ -19,6 +19,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	sympoziumv1alpha1 "github.com/sympozium-ai/sympozium/api/v1alpha1"
+	"github.com/sympozium-ai/sympozium/internal/sessionkey"
 	"github.com/sympozium-ai/sympozium/internal/toolpolicy"
 )
 
@@ -268,9 +269,10 @@ func (r *SympoziumScheduleReconciler) Reconcile(ctx context.Context, req ctrl.Re
 			},
 		},
 		Spec: sympoziumv1alpha1.AgentRunSpec{
-			AgentRef: schedule.Spec.AgentRef,
-			Task:     sympoziumv1alpha1.NewStringTask(task),
-			AgentID:  fmt.Sprintf("schedule-%s", schedule.Name),
+			AgentRef:   schedule.Spec.AgentRef,
+			Task:       sympoziumv1alpha1.NewStringTask(task),
+			AgentID:    fmt.Sprintf("schedule-%s", schedule.Name),
+			SessionKey: sessionkey.ForSchedule(schedule.Name),
 			Model: sympoziumv1alpha1.ModelSpec{
 				Provider: resolveProvider(instance),
 				Model:    instance.Spec.Agents.Default.Model,
