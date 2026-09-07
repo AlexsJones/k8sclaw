@@ -26,11 +26,15 @@ func newCellnSelectionCmd(compose bool) *cobra.Command {
 	var selected []string
 	var imageBytes int64
 	var runName string
+	var modelPolicy string
 	var options cellnreview.ComposeOptions
 	cmd := &cobra.Command{Use: "plan AGENT", Args: cobra.ExactArgs(1), SilenceUsage: true,
 		Short: "Resolve live grants and emit a Celln composition plan without executing",
 		Long:  "Operator-only planning input. Read three independently configured grant ConfigMaps and live Agent/runtime/tool identities. Prints the resolved authority snapshot and exact compositor input; does not grant authority, certify readiness, write resources, compose images or execute. Tenant-facing callers must not accept these source flags from run requests.",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if modelPolicy != "" && runName == "" {
+				return fmt.Errorf("model policy review requires --run")
+			}
 			selection := make([]cellnauthority.Selection, 0, len(selected))
 			for _, ref := range selected {
 				name, revision, ok := strings.Cut(ref, "@")
@@ -54,14 +58,27 @@ func newCellnSelectionCmd(compose bool) *cobra.Command {
 				if err := loader.Revalidate(cmd.Context(), *frozen); err != nil {
 					return err
 				}
+				var modelApproval *cellnauthority.ModelApproval
+				modelLoader := cellnauthority.ModelLoader{Selection: loader, Source: types.NamespacedName{Namespace: sourceNamespace, Name: modelPolicy}}
+				if modelPolicy != "" {
+					modelApproval, err = modelLoader.Resolve(cmd.Context(), *frozen)
+					if err != nil {
+						return err
+					}
+				}
 				if compose {
 					report, err := cellnreview.Compose(cmd.Context(), loader, *frozen, options)
 					if err != nil {
 						return err
 					}
-					return json.NewEncoder(cmd.OutOrStdout()).Encode(map[string]any{"apiVersion": "sympozium.ai/celln-composed-selection-v1", "frozen": frozen, "composition": report, "executionAuthorized": false})
+					if modelApproval != nil {
+						if err := modelLoader.Revalidate(cmd.Context(), *frozen, *modelApproval); err != nil {
+							return err
+						}
+					}
+					return json.NewEncoder(cmd.OutOrStdout()).Encode(map[string]any{"apiVersion": "sympozium.ai/celln-composed-selection-v1", "frozen": frozen, "composition": report, "modelApproval": modelApproval, "executionAuthorized": false})
 				}
-				return json.NewEncoder(cmd.OutOrStdout()).Encode(map[string]any{"apiVersion": "sympozium.ai/celln-selection-report-v1", "frozen": frozen, "artifactReadiness": "not_checked", "conformance": "not_checked", "executionAuthorized": false})
+				return json.NewEncoder(cmd.OutOrStdout()).Encode(map[string]any{"apiVersion": "sympozium.ai/celln-selection-report-v1", "frozen": frozen, "modelApproval": modelApproval, "artifactReadiness": "not_checked", "conformance": "not_checked", "executionAuthorized": false})
 			}
 			snapshot, err := loader.Resolve(cmd.Context(), types.NamespacedName{Namespace: namespace, Name: args[0]}, selection)
 			if err != nil {
@@ -80,6 +97,7 @@ func newCellnSelectionCmd(compose bool) *cobra.Command {
 	cmd.Flags().StringArrayVar(&selected, "tool", nil, "Explicit NAME@REVISION; repeat in desired order; omission selects no tools")
 	cmd.Flags().Int64Var(&imageBytes, "image-bytes", 33554432, "Composed image size, 32..512 MiB and 2 MiB aligned")
 	cmd.Flags().StringVar(&runName, "run", "", "Bind and revalidate the plan against an existing same-namespace AgentRun (no dispatch)")
+	cmd.Flags().StringVar(&modelPolicy, "model-policy", "", "Independent operator model-policy ConfigMap in grant namespace; requires --run; does not issue a host grant")
 	for _, name := range []string{"grant-namespace", "operator-grants", "runtime-grants", "agent-grants"} {
 		_ = cmd.MarkFlagRequired(name)
 	}
