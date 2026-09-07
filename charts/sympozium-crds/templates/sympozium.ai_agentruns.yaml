@@ -156,6 +156,54 @@ spec:
                     - outputBytes
                     - workspace
                     type: object
+                  harness:
+                    description: |-
+                      Harness opts into the experimental sealed reference runtime contract.
+                      This is not the container-replacing task.mode=harness adapter.
+                    properties:
+                      borrowedTools:
+                        items:
+                          properties:
+                            description:
+                              maxLength: 512
+                              minLength: 1
+                              type: string
+                            hash:
+                              pattern: ^blake3:[0-9a-f]{64}$
+                              type: string
+                            name:
+                              pattern: ^[a-zA-Z0-9_-]{1,64}$
+                              type: string
+                            path:
+                              maxLength: 256
+                              pattern: ^/
+                              type: string
+                          required:
+                          - description
+                          - hash
+                          - name
+                          - path
+                          type: object
+                        maxItems: 2
+                        minItems: 2
+                        type: array
+                      contractVersion:
+                        enum:
+                        - celln.reference-functions/v1
+                        type: string
+                      modelGrant:
+                        properties:
+                          hash:
+                            pattern: ^blake3:[0-9a-f]{64}$
+                            type: string
+                        required:
+                        - hash
+                        type: object
+                    required:
+                    - borrowedTools
+                    - contractVersion
+                    - modelGrant
+                    type: object
                   inputs:
                     items:
                       properties:

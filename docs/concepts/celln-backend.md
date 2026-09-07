@@ -165,3 +165,10 @@ real Kubernetes API, not nested hardware isolation.
 
 - [Celln repository](https://github.com/sympozium-ai/celln) — the execution runtime itself: the cell/tool-lending model, hardware isolation guarantees, and `scripts/setup-host.sh` (what the installer DaemonSet runs on each node).
 - [Custom Resources](custom-resources.md) — the `AgentRun.spec.backend` field.
+
+## Experimental Harness integration
+
+The [reference Harness binding](../guides/celln-reference-harness.md) adds a
+disabled-by-default, versioned AgentRun path for an in-cell model loop with two
+explicitly lent static tools. It is distinct from container Harness mode and
+does not establish general OCI compatibility or the completed selection UX.

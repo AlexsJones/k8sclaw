@@ -96,6 +96,7 @@ func cellnActionID(agentRun *sympoziumv1alpha1.AgentRun) string {
 // executionRequest mirrors celln.dev/v1alpha1's ExecutionRequest, forge
 // variant only. Field names/JSON tags must match crates/celln-spec exactly.
 type executionRequest struct {
+	Harness      *executionHarness                    `json:"harness,omitempty"`
 	APIVersion   string                               `json:"apiVersion"`
 	ID           string                               `json:"id"`
 	Workload     executionWorkload                    `json:"workload"`
@@ -106,6 +107,14 @@ type executionRequest struct {
 	Invocation   *sympoziumv1alpha1.CellnInvocation   `json:"invocation,omitempty"`
 	Capabilities executionCapability                  `json:"capabilities"`
 	Execution    executionPolicy                      `json:"execution"`
+}
+
+type executionHarness struct {
+	ContractVersion string                                `json:"contractVersion"`
+	ModelGrant      sympoziumv1alpha1.CellnImmutableRef   `json:"modelGrant"`
+	Model           string                                `json:"model"`
+	Task            string                                `json:"task"`
+	BorrowedTools   []sympoziumv1alpha1.CellnBorrowedTool `json:"borrowedTools"`
 }
 
 type executionWorkload struct {
@@ -218,6 +227,15 @@ func (r *AgentRunReconciler) reconcilePendingCelln(
 		}
 		request.Capabilities.MemoryBytes = uint64(pinned.Capabilities.MemoryBytes)
 		request.Capabilities.OutputBytes = uint64(pinned.Capabilities.OutputBytes)
+		if pinned.Harness != nil {
+			// The initial bridge uses the explicit operator grant, not ambient
+			// provider discovery or an ignored Kubernetes credential selection.
+			if !cellnHarnessModelSupported(agentRun.Spec.Model) {
+				return ctrl.Result{}, r.failRun(ctx, agentRun, "Celln: reference Harness requires deepseek with operator-grant credentials (empty authSecretRef)")
+			}
+			request.APIVersion = "celln.dev/v1alpha2"
+			request.Harness = &executionHarness{ContractVersion: pinned.Harness.ContractVersion, ModelGrant: pinned.Harness.ModelGrant, Model: agentRun.Spec.Model.Model, Task: task, BorrowedTools: pinned.Harness.BorrowedTools}
+		}
 	}
 	if agentRun.Status.CellnRequest != "" {
 		request = executionRequest{}
@@ -227,6 +245,9 @@ func (r *AgentRunReconciler) reconcilePendingCelln(
 	}
 	if err := validateCellnRequest(request); err != nil {
 		return ctrl.Result{}, r.failRun(ctx, agentRun, err.Error())
+	}
+	if request.Harness != nil && os.Getenv("CELLN_HARNESS_ENABLED") != "true" {
+		return ctrl.Result{}, r.failRun(ctx, agentRun, "Celln: experimental Harness binding is disabled")
 	}
 
 	body, err := json.Marshal(request)
