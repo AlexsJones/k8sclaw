@@ -1,0 +1,277 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.17.2
+  name: cellntools.sympozium.ai
+spec:
+  group: sympozium.ai
+  names:
+    kind: CellnTool
+    listKind: CellnToolList
+    plural: cellntools
+    singular: cellntool
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.revision
+      name: Revision
+      type: string
+    - jsonPath: .spec.lane
+      name: Lane
+      type: string
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          CellnTool is operator-managed catalogue metadata. There is intentionally no
+          default approval/Ready condition and no execution integration in this slice.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: |-
+              CellnToolSpec describes one immutable executable-tool revision. Metadata is
+              not proof of admission, distribution, prewarming, or authority to execute.
+              Schema references name immutable JSON-schema artifacts, not executable code.
+            properties:
+              argumentsSchema:
+                properties:
+                  hash:
+                    maxLength: 71
+                    pattern: ^blake3:[0-9a-f]{64}$
+                    type: string
+                required:
+                - hash
+                type: object
+              closure:
+                properties:
+                  hash:
+                    maxLength: 71
+                    pattern: ^blake3:[0-9a-f]{64}$
+                    type: string
+                required:
+                - hash
+                type: object
+              description:
+                maxLength: 1024
+                minLength: 1
+                type: string
+              entryPoint:
+                maxLength: 256
+                pattern: ^/([A-Za-z0-9_-][A-Za-z0-9_.+-]*/)*[A-Za-z0-9_-][A-Za-z0-9_.+-]*$
+                type: string
+              executable:
+                properties:
+                  hash:
+                    maxLength: 71
+                    pattern: ^blake3:[0-9a-f]{64}$
+                    type: string
+                required:
+                - hash
+                type: object
+              invocationABI:
+                enum:
+                - celln.argv/v1
+                type: string
+              lane:
+                enum:
+                - tool
+                - agent
+                type: string
+              limits:
+                description: CellnToolLimits are maximum requested/admitted ceilings,
+                  not grants.
+                properties:
+                  argumentBytes:
+                    format: int64
+                    maximum: 65536
+                    minimum: 1
+                    type: integer
+                  effects:
+                    enum:
+                    - none
+                    - external-side-effects
+                    type: string
+                  egress:
+                    items:
+                      type: string
+                    maxItems: 0
+                    type: array
+                  inputs:
+                    items:
+                      properties:
+                        hash:
+                          maxLength: 71
+                          pattern: ^blake3:[0-9a-f]{64}$
+                          type: string
+                      required:
+                      - hash
+                      type: object
+                    maxItems: 0
+                    type: array
+                  memoryBytes:
+                    format: int64
+                    maximum: 268435456
+                    minimum: 1
+                    type: integer
+                  outputBytes:
+                    format: int64
+                    maximum: 65536
+                    minimum: 1
+                    type: integer
+                  timeoutMillis:
+                    format: int64
+                    maximum: 300000
+                    minimum: 1
+                    type: integer
+                  workspace:
+                    description: |-
+                      Workspaces/immutable inputs and remote operations require a separately
+                      implemented tool-delivery contract; this schema cannot silently grant them.
+                    enum:
+                    - none
+                    type: string
+                required:
+                - argumentBytes
+                - effects
+                - memoryBytes
+                - outputBytes
+                - timeoutMillis
+                - workspace
+                type: object
+              platform:
+                enum:
+                - linux/amd64
+                type: string
+              publisherKey:
+                maxLength: 64
+                pattern: ^[0-9a-f]{64}$
+                type: string
+              resultSchema:
+                properties:
+                  hash:
+                    maxLength: 71
+                    pattern: ^blake3:[0-9a-f]{64}$
+                    type: string
+                required:
+                - hash
+                type: object
+              revision:
+                maxLength: 64
+                minLength: 1
+                type: string
+              sourceImage:
+                description: A source image is provenance only. Dispatch never pulls
+                  this reference.
+                maxLength: 512
+                pattern: ^[A-Za-z0-9][A-Za-z0-9._:/-]*@sha256:[0-9a-f]{64}$
+                type: string
+              supportOwner:
+                maxLength: 256
+                minLength: 1
+                type: string
+            required:
+            - argumentsSchema
+            - closure
+            - description
+            - entryPoint
+            - executable
+            - invocationABI
+            - lane
+            - limits
+            - platform
+            - publisherKey
+            - resultSchema
+            - revision
+            - supportOwner
+            type: object
+            x-kubernetes-validations:
+            - message: tool revisions are immutable; publish a new revision
+              rule: self == oldSelf
+          status:
+            properties:
+              conditions:
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                maxItems: 8
+                type: array
+              observedGeneration:
+                format: int64
+                type: integer
+            type: object
+        required:
+        - spec
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

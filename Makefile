@@ -63,6 +63,11 @@ test-short: ## Run short tests
 	$(GOTEST) -short ./...
 
 test-integration: ## Run integration tests (requires Kind cluster + API keys)
+	@if [ -n "$$CELLN_CATALOGUE_KUBECONFIG" ]; then \
+		bash ./test/integration/test-celln-tool-catalogue.sh; \
+	else \
+		echo "SKIP Celln catalogue metadata proof: explicit isolated CELLN_CATALOGUE_KUBECONFIG required"; \
+	fi
 	./test/integration/test-write-file.sh
 	./test/integration/test-anthropic-write-file.sh
 	./test/integration/test-k8s-ops-nodes.sh

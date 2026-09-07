@@ -1,0 +1,36 @@
+{{- if .Values.rbac.create }}
+# Unbound roles: administrators opt in with namespace-scoped RoleBindings.
+# No existing API server, agent, runtime or controller receives these grants.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "sympozium.fullname" . }}-celln-tool-submitter
+rules:
+  - apiGroups: ["sympozium.ai"]
+    resources: ["cellntoolsubmissions"]
+    verbs: ["create", "get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "sympozium.fullname" . }}-celln-tool-reviewer
+rules:
+  - apiGroups: ["sympozium.ai"]
+    resources: ["cellntoolsubmissions"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["sympozium.ai"]
+    resources: ["cellntools"]
+    verbs: ["create", "get", "list", "watch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "sympozium.fullname" . }}-celln-tool-verifier
+rules:
+  - apiGroups: ["sympozium.ai"]
+    resources: ["cellntools", "cellntoolsubmissions"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["sympozium.ai"]
+    resources: ["cellntools/status", "cellntoolsubmissions/status"]
+    verbs: ["get", "update", "patch"]
+{{- end }}

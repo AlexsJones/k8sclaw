@@ -1,0 +1,20 @@
+{
+  "apiVersion": "sympozium.ai/v1alpha1",
+  "kind": "CellnTool",
+  "metadata": {"name": "fixture-v1"},
+  "spec": {
+    "revision": "v1",
+    "description": "Metadata-only admission fixture; no executable is provided.",
+    "supportOwner": "integration-test",
+    "publisherKey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "executable": {"hash": "blake3:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+    "closure": {"hash": "blake3:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},
+    "entryPoint": "/tools/example",
+    "invocationABI": "celln.argv/v1",
+    "argumentsSchema": {"hash": "blake3:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"},
+    "resultSchema": {"hash": "blake3:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"},
+    "platform": "linux/amd64",
+    "lane": "tool",
+    "limits": {"timeoutMillis": 1000, "memoryBytes": 268435456, "argumentBytes": 4096, "outputBytes": 4096, "workspace": "none", "effects": "none"}
+  }
+}
