@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/sympozium-ai/sympozium/internal/cellnauthority"
 	corev1 "k8s.io/api/core/v1"
@@ -44,7 +45,7 @@ func proveCatalogueIssuance(t *testing.T, ctx context.Context, l cellnauthority.
 	if err := os.WriteFile(filepath.Join(o.PolicyRoot, "model-credentials.json"), []byte(`{"apiVersion":"sympozium.ai/celln-host-credentials-v1","profiles":{"public-test-only":"/never-read-catalogue-issuance-credential"}}`), 0600); err != nil {
 		t.Fatal(err)
 	}
-	options := IssueOptions{Binary: o.Binary, PolicyRoot: o.PolicyRoot, ComposerPublisher: publisher}
+	options := IssueOptions{Binary: o.Binary, PolicyRoot: o.PolicyRoot, ComposerPublisher: publisher, ProfileLifetime: 5 * time.Minute}
 	issued, err := Issue(ctx, ml, frozen, *approval, artifacts, options)
 	if err != nil {
 		t.Fatal(err)
@@ -84,5 +85,5 @@ func proveCatalogueIssuance(t *testing.T, ctx context.Context, l cellnauthority.
 		t.Fatal("withdrawal changed retained grant bytes")
 	}
 	assertNoProfiles(t, o.PolicyRoot)
-	t.Logf("PASS real catalogue composition -> independently approved host profile -> real-KVM sealed verification -> identical v3 issuance -> approval deletion -> reconciliation -> host withdrawal refusal; grant=%s; Kubernetes=fake, modelCalls=0", issued.Grant)
+	t.Logf("PASS real catalogue composition -> durable boot-bound expiring profile -> real-KVM sealed verification -> identical v3 issuance without renewal -> approval deletion -> reconciliation -> host withdrawal refusal; grant=%s; Kubernetes=fake, modelCalls=0", issued.Grant)
 }

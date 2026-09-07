@@ -19,7 +19,12 @@ import (
 )
 
 // IssueOptions are operator/deployment configuration, never tenant fields.
-type IssueOptions struct{ Binary, PolicyRoot, ComposerPublisher string }
+type IssueOptions struct {
+	Binary, PolicyRoot, ComposerPublisher string
+	// Zero retains legacy explicit-operator issuance. Unattended callers must
+	// select a positive bounded lifetime; retries never refresh its start time.
+	ProfileLifetime time.Duration
+}
 
 type IssuedSelection struct {
 	APIVersion    string                            `json:"apiVersion"`
@@ -90,6 +95,12 @@ func issue(ctx context.Context, l cellnauthority.ModelLoader, frozen cellnauthor
 	if err != nil {
 		return nil, err
 	}
+	if o.ProfileLifetime != 0 {
+		profileBytes, err = boundedProfile(ctx, execute, o, *candidate, profileBytes)
+		if err != nil {
+			return nil, err
+		}
+	}
 	profileDigest := sha256.Sum256(profileBytes)
 	name := "symp-" + hex.EncodeToString(profileDigest[:])[:58]
 	directory := filepath.Join(o.PolicyRoot, "trusted-model-profiles")
@@ -98,6 +109,21 @@ func issue(ctx context.Context, l cellnauthority.ModelLoader, frozen cellnauthor
 	}
 	profilePath := filepath.Join(directory, name+".json")
 	record := IssuerRecord{APIVersion: "sympozium.ai/celln-issuer-record-v1", State: "pending", Profile: name, ProfileSHA256: "sha256:" + hex.EncodeToString(profileDigest[:]), Frozen: frozen, Candidate: *candidate}
+	if o.ProfileLifetime != 0 {
+		previous, readErr := readIssuerRecord(filepath.Join(o.PolicyRoot, "sympozium-issuer-journal", name+".json"))
+		if readErr == nil && previous.State == "withdrawn" {
+			return nil, fmt.Errorf("bounded issuance was withdrawn; retry cannot restore authority")
+		}
+		if readErr == nil && previous.State == "issued" {
+			current, profileErr := readLimit(profilePath, 65536)
+			if profileErr != nil || !bytes.Equal(current, profileBytes) {
+				return nil, fmt.Errorf("bounded issued profile removed or changed; retry cannot restore authority")
+			}
+		}
+		if readErr != nil && !os.IsNotExist(readErr) {
+			return nil, readErr
+		}
+	}
 	if err := l.Revalidate(ctx, frozen, approval); err != nil {
 		return nil, err
 	}
@@ -173,6 +199,11 @@ func issue(ctx context.Context, l cellnauthority.ModelLoader, frozen cellnauthor
 	}
 	if err = verifyComposition(ctx, execute, o, frozen, artifacts.Closure.Hash); err != nil {
 		return nil, err
+	}
+	if o.ProfileLifetime != 0 {
+		if err = checkBoundedProfile(ctx, execute, o, profileBytes); err != nil {
+			return nil, err
+		}
 	}
 	result = &IssuedSelection{APIVersion: "sympozium.ai/celln-issued-selection-v1", Candidate: *candidate, Request: issued.Request, Grant: issued.Grant, Profile: name, ProfileSHA256: record.ProfileSHA256}
 	record.State, record.Issued = "issued", result

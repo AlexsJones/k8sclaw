@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/sympozium-ai/sympozium/internal/cellnauthority"
@@ -154,6 +155,7 @@ func newCellnSelectionCmd(mode string) *cobra.Command {
 		cmd.Flags().StringVar(&issueOptions.Binary, "celln-binary", "", "Absolute operator-selected Celln binary")
 		cmd.Flags().StringVar(&issueOptions.PolicyRoot, "policy-root", "", "Absolute trusted local host policy/store root")
 		cmd.Flags().StringVar(&issueOptions.ComposerPublisher, "composer-publisher", "", "Exact operator-approved composition publisher key")
+		cmd.Flags().DurationVar(&issueOptions.ProfileLifetime, "profile-lifetime", 5*time.Minute, "Host admission lifetime (1ms..5m); retries reuse original expiry; 0 is legacy explicit-operator mode only")
 		for _, name := range []string{"run", "model-policy", "execution-mote", "execution-closure", "celln-binary", "policy-root", "composer-publisher"} {
 			_ = cmd.MarkFlagRequired(name)
 		}

@@ -11,6 +11,14 @@ plus operator-configured `--celln-binary`, `--policy-root` and
 `--composer-publisher`. Runtime/tool members and schemas must already exist in
 the host stores, and the mote must already be independently admitted.
 
+Issuance now defaults to `--profile-lifetime 5m`, requiring Celln's
+`harness-profile-clock` and `model-issuer-profile-v2` support (Celln #93).
+Lifetimes must be whole milliseconds in `1ms..5m`. Missing support refuses;
+there is no automatic fallback. `--profile-lifetime 0` explicitly retains the
+legacy non-expiring operator path and must not be used for unattended issuance.
+Library callers select `IssueOptions.ProfileLifetime`; its zero value remains
+legacy-compatible, so future automated callers must explicitly require it.
+
 The operator maintains `POLICY_ROOT/model-credentials.json`:
 
 ```json
@@ -97,11 +105,44 @@ Changed profile bytes are not removed, and any recovery error blocks new bridge
 issuance. Legacy profiles without journal records still require an explicit
 saved-report withdrawal or operator audit.
 
-While the bridge is down, an unfinished profile can remain effective until
-recovery runs; the host dispatcher does not consult this journal. Deployment
+While the bridge is down, an unfinished legacy profile can remain effective until
+recovery runs; bounded profiles instead refuse at their original expiry. The
+host dispatcher does not consult this journal. Deployment
 startup/dispatch must be gated on recovery. Do not expose this local operator
 primitive as an unattended production service until controller reconciliation,
 ongoing approval withdrawal/expiry and startup recovery gates are integrated.
+
+### Durable bounded admission windows
+
+Bounded issuance reads Linux boot identity and elapsed boot milliseconds from
+the independently configured local Celln binary. It never trusts tenant or wall
+clock timestamps. Before publishing any model profile it persists an immutable,
+private window under `POLICY_ROOT/sympozium-issuer-windows`. The key binds the
+complete execution candidate and independently mapped base profile; the record
+pins boot identity, issuance time and expiry. Creation is fsynced and does not
+overwrite different bytes. Window access is serialized by the existing issuer
+lock.
+
+An identical retry reuses the original window and hence the same profile and
+grant identity. It cannot renew the window by restarting the bridge, changing
+the configured lifetime, or waiting for expiry. A different boot, expiry,
+malformed window or withdrawn bounded issuance refuses. Recovery of an
+interrupted pending issuance withdraws it and retains its window; retries cannot
+restore it. Independently changed approval creates a different candidate, but
+never bypasses the host execution ownership/replay rules. A final host-clock
+check after issuance catches an observed expiry during provisioning and removes
+the exact profile before returning an error.
+
+Retain windows with issuance history: deleting a window could allow an operator
+to create a new start time. Automatic retention/compaction is not implemented;
+tenant access must never permit modifying this directory. A window is not itself
+host authority or a runnable grant. Host-side checks enforce expiry even while
+the bridge is down. Existing non-expiring profiles are not retroactively migrated.
+
+This closes local admission-window renewal on retry, not the complete unattended
+controller path. Continuous reconciliation, startup gates, selected-node prewarm,
+single dispatch and result correlation still need integration. Expiry gates new
+issuance/resolution, not active-cell cancellation or fleet revocation.
 
 ### One-pass current-approval reconciliation
 
@@ -122,9 +163,10 @@ Filesystem failures are returned; they must not be reported as successful
 withdrawal. This API is not yet registered as a controller or autonomous watcher.
 
 An `issued` result is only a point-in-time observation, not a readiness result or
-permission lease. A watcher dying between checks would leave profiles usable.
-Before unattended dispatch, add host-enforced expiry (or an equivalent enforced
-gate), startup recovery and continuous reconciliation. Existing v3 grants pin
+permission lease. A watcher dying between checks leaves a bounded profile usable
+until its original expiry (and a legacy profile without that time bound).
+Before unattended dispatch, require the bounded profile mode described above,
+startup recovery and continuous reconciliation. Existing v3 grants pin
 the profile's exact bytes, so changing an expiry field in that profile cannot be
 treated as transparent lease renewal. This also does not cancel an active cell
 or establish fleet-wide revocation.

@@ -4,7 +4,23 @@ import (
 	"bytes"
 	"strings"
 	"testing"
+	"time"
 )
+
+func TestIssuanceDefaultsToBoundedProfileWithExplicitLegacyOptOut(t *testing.T) {
+	cmd := newCellnSelectionIssueCmd()
+	lifetime, err := cmd.Flags().GetDuration("profile-lifetime")
+	if err != nil || lifetime != 5*time.Minute {
+		t.Fatalf("unsafe default: %v %v", lifetime, err)
+	}
+	if err := cmd.Flags().Set("profile-lifetime", "0"); err != nil {
+		t.Fatal(err)
+	}
+	lifetime, err = cmd.Flags().GetDuration("profile-lifetime")
+	if err != nil || lifetime != 0 {
+		t.Fatalf("explicit legacy mode unavailable: %v %v", lifetime, err)
+	}
+}
 
 func TestSelectionPlanRequiresExplicitSourcesAndWellFormedSelections(t *testing.T) {
 	for _, args := range [][]string{

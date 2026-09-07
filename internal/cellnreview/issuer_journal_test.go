@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestProvisioningCrashHelper(t *testing.T) {
@@ -15,6 +16,9 @@ func TestProvisioningCrashHelper(t *testing.T) {
 		t.Skip("subprocess helper only")
 	}
 	f := provisionFixtureAt(t, root)
+	f.o.ProfileLifetime = 5 * time.Minute
+	clock, calls := testProfileClock(), 0
+	f.run = clockRunner(f.run, &clock, &calls)
 	stage := os.Getenv("CELLN_TEST_ISSUER_CRASH_STAGE")
 	run := func(ctx context.Context, binary string, args ...string) ([]byte, error) {
 		isIssue := args[0] == "--root" && args[2] == "harness-grant"
@@ -68,6 +72,15 @@ func TestIssuerRecoveryAfterActualProcessExit(t *testing.T) {
 				t.Fatalf("missing durable record: %v", entries)
 			}
 			path := filepath.Join(root, "sympozium-issuer-journal", entries[0].Name())
+			windows, err := os.ReadDir(filepath.Join(root, "sympozium-issuer-windows"))
+			if err != nil || len(windows) != 1 {
+				t.Fatalf("lost durable expiry window on process exit: %v %v", windows, err)
+			}
+			windowPath := filepath.Join(root, "sympozium-issuer-windows", windows[0].Name())
+			windowBefore, err := os.ReadFile(windowPath)
+			if err != nil {
+				t.Fatal(err)
+			}
 			record, err := readIssuerRecord(path)
 			if err != nil {
 				t.Fatal(err)
@@ -103,6 +116,9 @@ func TestIssuerRecoveryAfterActualProcessExit(t *testing.T) {
 			}
 			if again, err := RecoverPending(root); err != nil || len(again) != 0 {
 				t.Fatalf("recovery not idempotent: %v %v", again, err)
+			}
+			if after, err := os.ReadFile(windowPath); err != nil || string(after) != string(windowBefore) {
+				t.Fatal("recovery removed or renewed expiry window")
 			}
 		})
 	}
