@@ -60,8 +60,14 @@ spec:
             - name: SYMPOZIUM_COLLECTOR_METRICS_URL
               value: "http://sympozium-otel-collector.{{ include "sympozium.namespace" . }}.svc.cluster.local:{{ .Values.observability.collector.service.metricsPort }}/metrics"
           {{- if .Values.celln.enabled }}
+            - name: CELLN_ENABLED
+              value: "true"
             - name: CELLN_ROUTER_URL
               value: {{ .Values.celln.routerUrl | quote }}
+            - name: CELLN_ALLOW_INSECURE_HTTP
+              value: {{ .Values.celln.allowInsecureHttp | quote }}
+            - name: CELLN_CAPABILITY_TOKEN_FILE
+              value: /etc/celln/capability/token
           {{- end }}
           {{- if .Values.pricing.enabled }}
             - name: SYMPOZIUM_PRICING_CONFIGMAP
@@ -112,11 +118,18 @@ spec:
           securityContext:
             {{- toYaml .Values.containerSecurityContext | nindent 12 }}
           {{- /* Gate must match apiserver-ui-secret.yaml */}}
-          {{- if and .Values.apiserver.webUI.enabled (not .Values.apiserver.webUI.token) }}
+          {{- if or .Values.celln.enabled (and .Values.apiserver.webUI.enabled (not .Values.apiserver.webUI.token)) }}
           volumeMounts:
+          {{- if .Values.celln.enabled }}
+            - name: celln-capability-token
+              mountPath: /etc/celln/capability
+              readOnly: true
+          {{- end }}
+          {{- if and .Values.apiserver.webUI.enabled (not .Values.apiserver.webUI.token) }}
             - name: sympozium-ui-token
               mountPath: /var/run/secrets/sympozium-ui-token
               readOnly: true
+          {{- end }}
           {{- end }}
       {{- with .Values.apiserver.nodeSelector }}
       nodeSelector:
@@ -134,8 +147,15 @@ spec:
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      {{- if not .Values.apiserver.webUI.token }}
+      {{- if or .Values.celln.enabled (not .Values.apiserver.webUI.token) }}
       volumes:
+      {{- if .Values.celln.enabled }}
+        - name: celln-capability-token
+          secret:
+            secretName: {{ .Values.celln.capabilityTokenSecret | quote }}
+            defaultMode: 0444
+      {{- end }}
+      {{- if not .Values.apiserver.webUI.token }}
         - name: sympozium-ui-token
           secret:
             secretName: {{ include "sympozium.fullname" . }}-ui-token
@@ -144,6 +164,7 @@ spec:
             # volume mounts are owned by root. 0400 would only be readable
             # by root and the apiserver would 401 every request.
             defaultMode: 0444
+      {{- end }}
       {{- end }}
 ---
 apiVersion: v1

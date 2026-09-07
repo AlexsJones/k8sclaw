@@ -18,6 +18,7 @@ import (
 
 	sympoziumv1alpha1 "github.com/sympozium-ai/sympozium/api/v1alpha1"
 	"github.com/sympozium-ai/sympozium/internal/eventbus"
+	"github.com/sympozium-ai/sympozium/internal/sessionkey"
 )
 
 // ChatCompletionRequest is the OpenAI-compatible chat completions request.
@@ -192,7 +193,7 @@ func (p *Proxy) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		Spec: sympoziumv1alpha1.AgentRunSpec{
 			AgentRef:     inst.Name,
 			AgentID:      "primary",
-			SessionKey:   fmt.Sprintf("web-%s-%d", inst.Name, time.Now().UnixNano()),
+			SessionKey:   sessionkey.ForWebProxy(inst.Name, requestHash),
 			Task:         sympoziumv1alpha1.NewStringTask(task),
 			SystemPrompt: systemPrompt,
 			Model: sympoziumv1alpha1.ModelSpec{
