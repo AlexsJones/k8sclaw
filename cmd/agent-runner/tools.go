@@ -73,6 +73,7 @@ type ToolDef struct {
 	Name        string
 	Description string
 	Parameters  map[string]any
+	Strict      bool
 }
 
 // defaultTools returns the set of tools available to the agent.

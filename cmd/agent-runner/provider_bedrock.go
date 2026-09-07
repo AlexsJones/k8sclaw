@@ -91,8 +91,9 @@ func newBedrockProviderWithClient(client bedrockClientAPI, model, systemPrompt, 
 	}, nil
 }
 
-func (p *bedrockProvider) Name() string  { return "bedrock" }
-func (p *bedrockProvider) Model() string { return p.model }
+func (p *bedrockProvider) Name() string               { return "bedrock" }
+func (p *bedrockProvider) Model() string              { return p.model }
+func (p *bedrockProvider) SupportsStrictSchema() bool { return false }
 
 func (p *bedrockProvider) Chat(ctx context.Context) (ChatResult, error) {
 	input := &bedrockruntime.ConverseInput{

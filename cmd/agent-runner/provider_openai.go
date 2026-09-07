@@ -85,13 +85,25 @@ func newOpenAIProvider(provider, apiKey, baseURL, model, systemPrompt, task stri
 		opts = append(opts, openaioption.WithHeader(k, v))
 	}
 
+	supportsStrict := provider != "ollama" && provider != "lm-studio" && provider != "llama-server" && provider != "unsloth"
+	if provider == "azure-openai" {
+		apiVersion := getEnv("AZURE_OPENAI_API_VERSION", "2024-06-01")
+		if apiVersion < "2024-08-01" {
+			supportsStrict = false
+		}
+	}
+
 	var oaiTools []openai.ChatCompletionToolUnionParam
 	for _, t := range tools {
-		oaiTools = append(oaiTools, openai.ChatCompletionFunctionTool(shared.FunctionDefinitionParam{
+		fd := shared.FunctionDefinitionParam{
 			Name:        t.Name,
 			Description: openai.String(t.Description),
 			Parameters:  shared.FunctionParameters(t.Parameters),
-		}))
+		}
+		if t.Strict && supportsStrict {
+			fd.Strict = openai.Bool(true)
+		}
+		oaiTools = append(oaiTools, openai.ChatCompletionFunctionTool(fd))
 	}
 
 	p := &openaiProvider{
@@ -112,6 +124,18 @@ func newOpenAIProvider(provider, apiKey, baseURL, model, systemPrompt, task stri
 
 func (p *openaiProvider) Name() string  { return p.provider }
 func (p *openaiProvider) Model() string { return p.model }
+
+func (p *openaiProvider) SupportsStrictSchema() bool {
+	switch p.provider {
+	case "ollama", "lm-studio", "llama-server", "unsloth":
+		return false
+	case "azure-openai":
+		apiVersion := getEnv("AZURE_OPENAI_API_VERSION", "2024-06-01")
+		return apiVersion >= "2024-08-01"
+	default:
+		return true
+	}
+}
 
 func (p *openaiProvider) Chat(ctx context.Context) (ChatResult, error) {
 	params := openai.ChatCompletionNewParams{

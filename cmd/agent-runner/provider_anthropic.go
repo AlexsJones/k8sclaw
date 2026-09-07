@@ -50,7 +50,17 @@ func newAnthropicProvider(apiKey, baseURL, model, systemPrompt, task string, too
 		}
 		tool := anthropic.ToolUnionParamOfTool(schema, t.Name)
 		tool.OfTool.Description = anthropic.String(t.Description)
+		if t.Strict {
+			tool.OfTool.Strict = anthropic.Bool(true)
+		}
 		anthropicTools = append(anthropicTools, tool)
+	}
+
+	var seed []anthropic.MessageParam
+	if task != "" {
+		seed = []anthropic.MessageParam{
+			anthropic.NewUserMessage(anthropic.NewTextBlock(task)),
+		}
 	}
 
 	return &anthropicProvider{
@@ -58,16 +68,15 @@ func newAnthropicProvider(apiKey, baseURL, model, systemPrompt, task string, too
 		model:       model,
 		system:      systemPrompt,
 		initialTask: task,
-		messages: []anthropic.MessageParam{
-			anthropic.NewUserMessage(anthropic.NewTextBlock(task)),
-		},
-		tools:      anthropicTools,
-		toolsBytes: jsonBytes(anthropicTools),
+		messages:    seed,
+		tools:       anthropicTools,
+		toolsBytes:  jsonBytes(anthropicTools),
 	}
 }
 
-func (p *anthropicProvider) Name() string  { return "anthropic" }
-func (p *anthropicProvider) Model() string { return p.model }
+func (p *anthropicProvider) Name() string               { return "anthropic" }
+func (p *anthropicProvider) Model() string              { return p.model }
+func (p *anthropicProvider) SupportsStrictSchema() bool { return true }
 
 func (p *anthropicProvider) Chat(ctx context.Context) (ChatResult, error) {
 	params := anthropic.MessageNewParams{
@@ -197,19 +206,25 @@ func (p *anthropicProvider) ReplaceToolResults(replacements map[string]string) {
 // ResetContext rebuilds the message slice to the seed state so
 // the next Chat or Prompt call behaves as if the conversation just began.
 func (p *anthropicProvider) ResetContext() {
-	p.messages = []anthropic.MessageParam{
-		anthropic.NewUserMessage(anthropic.NewTextBlock(p.initialTask)),
+	if p.initialTask != "" {
+		p.messages = []anthropic.MessageParam{
+			anthropic.NewUserMessage(anthropic.NewTextBlock(p.initialTask)),
+		}
+	} else {
+		p.messages = nil
 	}
 }
 
-// Prompt issues a single Anthropic Messages call on behalf of a
-// sidecar. With useContext false the message slice is temporarily reset for
-// the call (and restored via defer) so the answer is stateless. With
-// useContext true the prompt is appended and the assistant reply recorded
-// so context grows across Prompt calls within the loop. Tool-use is
-// suppressed via tool_choice=none — the model is expected to answer in text
-// only; structured output (when Schema is set) is parsed by the caller from
-// the assistant's text block.
+// Prompt issues a single Anthropic Messages call on behalf of a sidecar.
+// With useContext false the message slice is temporarily reset for the call
+// (and restored via defer) so the answer is stateless. With useContext true
+// the prompt is appended and the assistant reply recorded so context grows
+// across Prompt calls within the loop.
+//
+// When a schema in json_schema wrapper format is provided, the call uses a
+// synthetic tool with tool_choice forced to that tool so the model returns
+// structured JSON via tool_use.Input. Without a schema, tool-use is
+// suppressed via tool_choice=none and the model answers in text only.
 func (p *anthropicProvider) Prompt(ctx context.Context, prompt string, useContext bool, schema json.RawMessage) (string, []byte, int, int, error) {
 	if strings.TrimSpace(prompt) == "" {
 		return "", nil, 0, 0, fmt.Errorf("prompt is empty")
@@ -224,10 +239,6 @@ func (p *anthropicProvider) Prompt(ctx context.Context, prompt string, useContex
 		}
 		defer func() { p.messages = saved }()
 	} else {
-		// Append the user turn only after the call succeeds; on API failure
-		// we pop it (see below) so a failed Prompt does not leave an orphan
-		// user turn in history. Anthropic rejects back-to-back user turns,
-		// so a single transient error would otherwise poison the run.
 		rollbackUserTurn = true
 		p.messages = append(p.messages, anthropic.NewUserMessage(anthropic.NewTextBlock(prompt)))
 		defer func() {
@@ -237,6 +248,49 @@ func (p *anthropicProvider) Prompt(ctx context.Context, prompt string, useContex
 		}()
 	}
 
+	var parsed []byte
+	var syntheticToolName string
+	var syntheticTools []anthropic.ToolUnionParam
+
+	if len(schema) > 0 {
+		var format struct {
+			Type   string          `json:"type"`
+			Name   string          `json:"name"`
+			Schema json.RawMessage `json:"schema"`
+			Strict *bool           `json:"strict,omitempty"`
+		}
+		if err := json.Unmarshal(schema, &format); err == nil && format.Type == "json_schema" && format.Name != "" {
+			var schemaObj map[string]any
+			if err := json.Unmarshal(format.Schema, &schemaObj); err == nil {
+				syntheticToolName = format.Name
+
+				inputSchema := anthropic.ToolInputSchemaParam{}
+				if props, ok := schemaObj["properties"]; ok {
+					inputSchema.Properties = props
+				}
+				if req, ok := schemaObj["required"].([]any); ok {
+					for _, r := range req {
+						if s, ok := r.(string); ok {
+							inputSchema.Required = append(inputSchema.Required, s)
+						}
+					}
+				}
+				if addl, ok := schemaObj["additionalProperties"]; ok {
+					inputSchema.ExtraFields = map[string]any{
+						"additionalProperties": addl,
+					}
+				}
+
+				tool := anthropic.ToolUnionParamOfTool(inputSchema, format.Name)
+				tool.OfTool.Description = anthropic.String("Structured output tool")
+				if format.Strict == nil || *format.Strict {
+					tool.OfTool.Strict = anthropic.Bool(true)
+				}
+				syntheticTools = append(syntheticTools, tool)
+			}
+		}
+	}
+
 	params := anthropic.MessageNewParams{
 		Model:     anthropic.Model(p.model),
 		MaxTokens: int64(8192),
@@ -244,10 +298,18 @@ func (p *anthropicProvider) Prompt(ctx context.Context, prompt string, useContex
 			{Text: p.system},
 		},
 		Messages: p.messages,
-		// Suppress tool use so a sidecar-driven prompt returns text only.
-		ToolChoice: anthropic.ToolChoiceUnionParam{
+	}
+	if len(syntheticTools) > 0 {
+		params.Tools = syntheticTools
+		params.ToolChoice = anthropic.ToolChoiceUnionParam{
+			OfTool: &anthropic.ToolChoiceToolParam{
+				Name: syntheticToolName,
+			},
+		}
+	} else {
+		params.ToolChoice = anthropic.ToolChoiceUnionParam{
 			OfNone: &anthropic.ToolChoiceNoneParam{},
-		},
+		}
 	}
 
 	msg, err := p.client.Messages.New(ctx, params)
@@ -264,21 +326,27 @@ func (p *anthropicProvider) Prompt(ctx context.Context, prompt string, useContex
 	outTok := int(msg.Usage.OutputTokens)
 	var textContent strings.Builder
 	for _, block := range msg.Content {
-		if tb, ok := block.AsAny().(anthropic.TextBlock); ok {
-			textContent.WriteString(tb.Text)
+		switch v := block.AsAny().(type) {
+		case anthropic.TextBlock:
+			textContent.WriteString(v.Text)
+		case anthropic.ToolUseBlock:
+			if syntheticToolName != "" && v.Name == syntheticToolName {
+				parsed = []byte(v.Input)
+			}
 		}
 	}
 	text := textContent.String()
 
 	if useContext {
-		p.messages = append(p.messages, anthropic.NewAssistantMessage(anthropic.NewTextBlock(text)))
-		// Success: cancel the deferred rollback so the user turn stays in
-		// history.
+		historyText := text
+		if historyText == "" && parsed != nil {
+			historyText = string(parsed)
+		}
+		p.messages = append(p.messages, anthropic.NewAssistantMessage(anthropic.NewTextBlock(historyText)))
 		rollbackUserTurn = false
 	}
 
-	var parsed []byte
-	if len(schema) > 0 {
+	if len(schema) > 0 && parsed == nil {
 		trimmed := strings.TrimSpace(text)
 		if json.Valid([]byte(trimmed)) {
 			parsed = []byte(trimmed)
