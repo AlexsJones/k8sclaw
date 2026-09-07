@@ -1,0 +1,37 @@
+{
+  "date": "2026-09-07",
+  "scope": "in-process managed host-local issuer lifecycle, not deployed controller dispatch",
+  "prerequisite": "#446 bounded issuance, tested parent d00df95c3e3051dd973010620d2fd26d474c7097",
+  "checks": {
+    "fullGoRace": "passed with real NATS available",
+    "goBuildAll": "passed",
+    "goVetAll": "passed",
+    "targetedRace": "passed",
+    "cases": [
+      "issuance refuses before successful startup and after shutdown",
+      "periodic approval deletion withdraws issued profile",
+      "startup recovers pending authority and withdraws legacy, expired, unconfigured and API-unavailable profiles",
+      "clock failure withdraws tracked authority and closes gate",
+      "untracked or changed host authority blocks gate without unrelated deletion",
+      "removing a startup fault permits a later successful sweep",
+      "duplicate lifecycle owner refuses",
+      "shutdown cancels in-flight issuance and removes incomplete profile"
+    ]
+  },
+  "realKVM": {
+    "test": "TestComposeRealCellnArtifacts with CELLN_ISSUANCE_KVM=1",
+    "result": "passed",
+    "sequence": "signed catalogue composition -> managed startup -> bounded issuance -> KVM sealed member verification -> identical retry -> approval deletion -> periodic managed withdrawal -> host refusal",
+    "grant": "blake3:e470457b651f55e72539043edbed3e8207eb83c6b4b9f6c00ff5bd828678cb38",
+    "closure": "blake3:9396a711103e50ed91979d1a5123eac38165a15701904f0adec2223652fc85f0",
+    "toolfs": "blake3:82aeb37a54685cda83f18e540be6ce03c32afb41a54f307de3cb257f7105ef29",
+    "kubernetes": "fake client",
+    "modelCalls": 0
+  },
+  "notProven": [
+    "shipped controller registration, host RPC transport or catalogue-backed dispatch",
+    "selection-specific serving prewarm/readiness",
+    "active-cell cancellation or fleet revocation",
+    "UI/YAML selection, conversations and final real-model release acceptance"
+  ]
+}
