@@ -194,6 +194,7 @@ spec:
                       modelGrant:
                         properties:
                           hash:
+                            maxLength: 71
                             pattern: ^blake3:[0-9a-f]{64}$
                             type: string
                         required:
@@ -251,6 +252,7 @@ spec:
                   mote:
                     properties:
                       hash:
+                        maxLength: 71
                         pattern: ^blake3:[0-9a-f]{64}$
                         type: string
                     required:
@@ -265,6 +267,7 @@ spec:
                         closure:
                           properties:
                             hash:
+                              maxLength: 71
                               pattern: ^blake3:[0-9a-f]{64}$
                               type: string
                           required:

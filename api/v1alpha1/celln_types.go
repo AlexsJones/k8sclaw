@@ -48,6 +48,7 @@ type CellnBorrowedTool struct {
 
 type CellnImmutableRef struct {
 	// +kubebuilder:validation:Pattern="^blake3:[0-9a-f]{64}$"
+	// +kubebuilder:validation:MaxLength=71
 	Hash string `json:"hash"`
 }
 
