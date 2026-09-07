@@ -1,5 +1,47 @@
 # Changelog
 
+## [0.10.57](https://github.com/sympozium-ai/sympozium/compare/v0.10.56...v0.10.57) (2026-09-07)
+
+
+### Features
+
+* catalogue-derived requests and local host grant provisioning ([#443](https://github.com/sympozium-ai/sympozium/issues/443)) ([7f60cb8](https://github.com/sympozium-ai/sympozium/commit/7f60cb808f2534c5dd8ff5b34baa7971755fc87b))
+* **celln:** add immutable tool catalogue and submission metadata ([2362880](https://github.com/sympozium-ai/sympozium/commit/23628806a1c3aada7668daa69e59df1b86fdf213))
+* **celln:** authenticate API capability discovery with read-only credentials ([34f7fe1](https://github.com/sympozium-ai/sympozium/commit/34f7fe1f7a4d41754888aee6625943fa0e1772d9))
+* **celln:** authenticated capability status and scoped discovery credentials ([0b1c927](https://github.com/sympozium-ai/sympozium/commit/0b1c927420915d71950fada605365649cf71013e))
+* **celln:** bind experimental in-cell Harness runs with frozen authority ([5515928](https://github.com/sympozium-ai/sympozium/commit/55159281ea142dca8de2c5c12fcacc4683aeb87b))
+* **celln:** declare runtime profiles with independent fail-closed readiness ([a8a01e6](https://github.com/sympozium-ai/sympozium/commit/a8a01e63aed19a7fbf79f0a52b22829c8d7df7f1))
+* **celln:** freeze experimental in-cell Harness bindings on AgentRun ([b331a29](https://github.com/sympozium-ai/sympozium/commit/b331a2922235bf88491809e19a242a0035da3c4b))
+* **celln:** immutable tool catalogue and unprivileged submissions ([865c4cd](https://github.com/sympozium-ai/sympozium/commit/865c4cdbdd1f1b0f4e5a6814a8569e62e9f2c705))
+* **celln:** native JSON Harness contracts and actual-controller proof ([027682d](https://github.com/sympozium-ai/sympozium/commit/027682d552992c6538bd91c36f4dc4a27241439a))
+* **celln:** operator-reviewed catalogue publication ([f78761a](https://github.com/sympozium-ai/sympozium/commit/f78761ad1e047008c088f47cce3b910dc98a32a4))
+* **celln:** publish exact operator-reviewed catalogue revisions ([fdc2792](https://github.com/sympozium-ai/sympozium/commit/fdc2792f549a96ef9e6801b097353e3d23ccb769))
+* **celln:** resolve revision-bound tool authority intersections ([cea875f](https://github.com/sympozium-ai/sympozium/commit/cea875fbf67f4fbd4df5ad4d2f818dea3a1734b1))
+* **celln:** revision-bound tool authority resolver ([25a2674](https://github.com/sympozium-ai/sympozium/commit/25a2674855a541ae7696ce286eb752ad5b1d52a9))
+* **celln:** runtime profile metadata and independent readiness ([0721533](https://github.com/sympozium-ai/sympozium/commit/0721533c456b6224823d78686469738ab0f0b0d8))
+* **celln:** support native JSON Harness contracts and prove controller execution ([2dd256c](https://github.com/sympozium-ai/sympozium/commit/2dd256cd20bf7cd822d5f108b493fc56febb4758))
+* independently resolve Celln model-policy approval ([#442](https://github.com/sympozium-ai/sympozium/issues/442)) ([74d6673](https://github.com/sympozium-ai/sympozium/commit/74d66736e7984ec20572e7cd451a034c1495f364))
+* journal local issuer authority and recover interrupted profiles ([#444](https://github.com/sympozium-ai/sympozium/issues/444)) ([49a3e23](https://github.com/sympozium-ai/sympozium/commit/49a3e2315df5291f07a2a5b55e84b56b9bb30e96))
+* manage local issuer startup recovery and periodic withdrawal ([#447](https://github.com/sympozium-ai/sympozium/issues/447)) ([e2d9d6a](https://github.com/sympozium-ai/sympozium/commit/e2d9d6a20f381d34160b1d551d250285ce070e10))
+* persist bounded Celln issuance windows without retry renewal ([#446](https://github.com/sympozium-ai/sympozium/issues/446)) ([44787c8](https://github.com/sympozium-ai/sympozium/commit/44787c851c12efb2ee40da4bc96482e666c275e2))
+* persist frozen Celln issuance and resume verified outcomes ([#450](https://github.com/sympozium-ai/sympozium/issues/450)) ([e690186](https://github.com/sympozium-ai/sympozium/commit/e6901864c6789d948df6e0c4bf985bee0a0f6030))
+* reconcile issued Celln profiles against current approvals ([#445](https://github.com/sympozium-ai/sympozium/issues/445)) ([3f660c3](https://github.com/sympozium-ai/sympozium/commit/3f660c3e262da5681337b994152d05135e8d2cb3))
+* serve managed Celln issuance over authenticated TLS ([#448](https://github.com/sympozium-ai/sympozium/issues/448)) ([455cb4c](https://github.com/sympozium-ai/sympozium/commit/455cb4c92a9dc3a788416fbafce4cc1b811a84b1))
+* **sessionkey:** stable per-conversation session keys ([#408](https://github.com/sympozium-ai/sympozium/issues/408)) ([13ce3a3](https://github.com/sympozium-ai/sympozium/commit/13ce3a3bab2f3ace6f9ade6151f46cf29b4353d7))
+* trusted Celln catalogue planning and operator composition ([#441](https://github.com/sympozium-ai/sympozium/issues/441)) ([1edd036](https://github.com/sympozium-ai/sympozium/commit/1edd03680308202eb5e676f715498cc9d7b1f332))
+* verify remote Celln issuance with a bounded TLS client ([#449](https://github.com/sympozium-ai/sympozium/issues/449)) ([cc3de76](https://github.com/sympozium-ai/sympozium/commit/cc3de7688a9b37724d863456d2fed7c8a82c405a))
+* **workspace:** per-session persistent workspaces via WorkspaceSession CRD ([#409](https://github.com/sympozium-ai/sympozium/issues/409)) ([30c8ead](https://github.com/sympozium-ai/sympozium/commit/30c8ead556bfd86792be198b03d0167dd9faa425))
+
+
+### Bug Fixes
+
+* **apiserver:** bound optional NATS initialization and honor UI disable ([b525711](https://github.com/sympozium-ai/sympozium/commit/b5257115cf4affb728df43399e37d54f4a9a3789))
+* **apiserver:** bound optional NATS startup and honor disabled UI ([3d16c84](https://github.com/sympozium-ai/sympozium/commit/3d16c8475ae09d924f62b9b7dda597f1bac9ca8d))
+* **celln:** restrict router ingress to control-plane controller ([9c3fd52](https://github.com/sympozium-ai/sympozium/commit/9c3fd5273a0464850a621c26a23a44a5e47e82fc))
+* **celln:** restrict router ingress to controller namespace and pods (M0) ([0953b01](https://github.com/sympozium-ai/sympozium/commit/0953b017c6538a0fae2dc15b9c2d66f45c8fbd16))
+* **celln:** wire durable router deployment with explicit trust configuration ([d845fa1](https://github.com/sympozium-ai/sympozium/commit/d845fa1f94ac32318b0de6c863e72814701d5fa4))
+* **celln:** wire replicated routers with durable ownership and explicit credentials ([fe09549](https://github.com/sympozium-ai/sympozium/commit/fe09549cc3a8e9d6a3caf85d180749dbf417287a))
+
 ## [0.10.56](https://github.com/sympozium-ai/sympozium/compare/v0.10.55...v0.10.56) (2026-09-03)
 
 
